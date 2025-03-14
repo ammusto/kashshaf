@@ -19,47 +19,27 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
     value.max || range.max
   ]);
   
-  // Memoize value and range to prevent infinite loop with useEffect
-  const prevValueRef = React.useRef({ min: value.min, max: value.max });
-  const prevRangeRef = React.useRef({ min: range.min, max: range.max });
-  
-  // Update slider value when props change - with proper checks
+  // Update slider value when props change
   useEffect(() => {
-    // Only update if the values actually changed
-    const valueChanged = 
-      prevValueRef.current.min !== value.min || 
-      prevValueRef.current.max !== value.max;
-    
-    const rangeChanged = 
-      prevRangeRef.current.min !== range.min || 
-      prevRangeRef.current.max !== range.max;
-    
-    if (valueChanged || rangeChanged) {
-      setSliderValue([
-        value.min || range.min,
-        value.max || range.max
-      ]);
-      
-      // Update refs
-      prevValueRef.current = { min: value.min, max: value.max };
-      prevRangeRef.current = { min: range.min, max: range.max };
-    }
+    setSliderValue([
+      value.min !== undefined ? value.min : range.min,
+      value.max !== undefined ? value.max : range.max
+    ]);
   }, [value.min, value.max, range.min, range.max]);
   
-  // Handle slider change - memoized to maintain stable identity
+  // Handle slider change - called during the dragging process
   const handleSliderChange = useCallback((newValue: number | number[]) => {
-    if (Array.isArray(newValue)) {
+    if (Array.isArray(newValue) && newValue.length === 2) {
       setSliderValue([newValue[0], newValue[1]]);
     }
   }, []);
   
   // Apply changes after slider interaction ends
   const handleAfterChange = useCallback((newValue: number | number[]) => {
-    if (Array.isArray(newValue) && 
-        (newValue[0] !== value.min || newValue[1] !== value.max)) {
+    if (Array.isArray(newValue) && newValue.length === 2) {
       onChange(newValue[0], newValue[1]);
     }
-  }, [onChange, value.min, value.max]);
+  }, [onChange]);
   
   // Handle input change
   const handleInputChange = useCallback((type: 'min' | 'max', e: React.ChangeEvent<HTMLInputElement>) => {
@@ -98,14 +78,15 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
   return (
     <div className="filter-group">
       <div className="flex justify-between items-center mb-2">
-        <h4 className="text-md font-medium">تاريخ الوفاة</h4>
+        <h4 className="text-md font-medium">Death date</h4>
         
         {isFiltered && (
           <button
-            className="text-xs text-indigo-600 hover:underline"
+            className="text-xs text-gray-900 hover:underline"
             onClick={handleReset}
+            type="button"
           >
-            إعادة ضبط
+            Reset
           </button>
         )}
       </div>
@@ -118,17 +99,29 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
           value={sliderValue}
           onChange={handleSliderChange}
           onAfterChange={handleAfterChange}
-          trackStyle={[{ backgroundColor: '#4f46e5' }]}
+          draggableTrack={true}
+          step={1}
+          pushable={1}
+          trackStyle={[{ backgroundColor: '#333333' }]}
           handleStyle={[
-            { borderColor: '#4f46e5', backgroundColor: '#4f46e5' },
-            { borderColor: '#4f46e5', backgroundColor: '#4f46e5' }
+            { 
+              borderColor: '#666666', 
+              backgroundColor: '#666666',
+              opacity: 1,
+              boxShadow: '0 0 0 5px rgba(70, 69, 82, 0.2)'
+            },
+            { 
+              borderColor: '#666666', 
+              backgroundColor: '#666666',
+              opacity: 1,
+              boxShadow: '0 0 0 5px rgba(70, 69, 82, 0.2)'
+            }
           ]}
-          railStyle={{ backgroundColor: '#e5e7eb' }}
         />
         
         <div className="flex justify-between items-center mt-4">
           <div className="w-24">
-            <label className="block text-xs text-gray-500 mb-1">من</label>
+            <label className="block text-xs text-gray-700 mb-1 text-center">From</label>
             <input
               type="number"
               value={sliderValue[0]}
@@ -136,12 +129,12 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
               onBlur={handleInputBlur}
               min={range.min}
               max={sliderValue[1]}
-              className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-gray-500"
             />
           </div>
           
           <div className="w-24">
-            <label className="block text-xs text-gray-500 mb-1">إلى</label>
+            <label className="block text-xs text-gray-700 mb-1 text-center">To</label>
             <input
               type="number"
               value={sliderValue[1]}
@@ -149,7 +142,7 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
               onBlur={handleInputBlur}
               min={sliderValue[0]}
               max={range.max}
-              className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-gray-500"
             />
           </div>
         </div>
@@ -157,7 +150,7 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
       
       {isFiltered && (
         <p className="text-sm text-gray-500 mt-2">
-          يعرض المؤلفون الذين توفوا بين {sliderValue[0]} و {sliderValue[1]} هجري
+          Showing authors who died between {sliderValue[0]} and {sliderValue[1]} AH.
         </p>
       )}
     </div>

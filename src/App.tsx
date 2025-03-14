@@ -12,7 +12,7 @@ const App: React.FC = () => {
     <Router>
       <MetadataProvider>
         <SearchProvider>
-          <div className="min-h-screen  flex flex-col" dir="rtl">
+          <div className="min-h-screen  flex flex-col">
             <Header />
             <MainContent />
             <Footer />

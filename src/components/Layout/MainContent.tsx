@@ -11,12 +11,7 @@ const MainContent: React.FC = () => {
   const { 
     searchQuery, 
     isLoading: searchLoading, 
-    handleSearch, 
-    filters, 
-    setFilters, 
-    applyFilters, 
-    resetFilters,
-    rowsPerPage
+    handleSearch
   } = useSearch();
 
   return (
@@ -48,14 +43,7 @@ const MainContent: React.FC = () => {
               isLoading={searchLoading}
             />
             
-            <FiltersPanel
-              filters={filters}
-              setFilters={setFilters}
-              onApplyFilters={applyFilters}
-              onResetFilters={resetFilters}
-              searchQuery={searchQuery}
-              rowsPerPage={rowsPerPage}
-            />
+            <FiltersPanel />
           </div>
           
           <div className="search-results-table">

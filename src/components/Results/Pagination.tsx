@@ -86,7 +86,7 @@ const Pagination: React.FC<PaginationProps> = ({
               : 'bg-white text-gray-700 hover:bg-gray-50'
           }`}
         >
-          السابق
+          Previous
         </button>
         
         <div className="hidden md:flex">
@@ -108,9 +108,9 @@ const Pagination: React.FC<PaginationProps> = ({
               <button
                 key={`page-${page}`}
                 onClick={() => handlePageChange(page as number)}
-                className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium mx-1 ${
                   isCurrentPage
-                    ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600'
+                    ? 'z-10 bg-gray-50 border-gray-800 text-gray-900'
                     : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
                 }`}
                 aria-current={isCurrentPage ? 'page' : undefined}
@@ -121,11 +121,7 @@ const Pagination: React.FC<PaginationProps> = ({
           })}
         </div>
         
-        <div className="flex md:hidden items-center">
-          <span className="text-sm text-gray-500">
-            صفحة {currentPage} من {totalPages}
-          </span>
-        </div>
+
         
         <button
           onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))}
@@ -136,7 +132,7 @@ const Pagination: React.FC<PaginationProps> = ({
               : 'bg-white text-gray-700 hover:bg-gray-50'
           }`}
         >
-          التالي
+          Next
         </button>
       </div>
     </div>

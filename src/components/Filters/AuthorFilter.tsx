@@ -110,13 +110,13 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
     }
     
     // Fall back to name field
-    return author.name || `المؤلف ${author.id}`;
+    return author.name || `Author ${author.id}`;
   }, []);
   
   return (
     <div className="filter-group">
       <div className="flex justify-between items-center mb-2">
-        <h4 className="text-md font-medium">المؤلفون</h4>
+        <h4 className="text-md font-medium">Authors</h4>
         
         {selectedAuthors.length > 0 && (
           <button
@@ -124,7 +124,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
             onClick={clearAll}
             type="button"
           >
-            إلغاء الكل
+            Remove all
           </button>
         )}
       </div>
@@ -132,9 +132,10 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
       <div className="relative mb-2">
         <input
           type="text"
+          dir="rtl"
           value={searchTerm}
           onChange={handleSearchChange}
-          placeholder="ابحث عن مؤلف..."
+          placeholder="Search for an author..."
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
         
@@ -164,7 +165,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
         )}
         
         {searchTerm.trim() && searchResults.length > 0 && !isLoading && (
-          <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg">
+          <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg" dir="rtl">
             <ul className="py-1 max-h-60 overflow-y-auto">
               {searchResults.map(author => (
                 <li
@@ -175,7 +176,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
                   <div className="font-medium">{getAuthorDisplayName(author)}</div>
                   {author.death_date && (
                     <div className="text-xs text-gray-500">
-                      توفي: {author.death_date} هـ
+                      Died: {author.death_date} هـ
                     </div>
                   )}
                 </li>
@@ -186,12 +187,12 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
         
         {searchTerm.trim() && !isLoading && searchResults.length === 0 && (
           <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg p-3 text-center text-gray-500">
-            لم يتم العثور على نتائج
+          No results found.
           </div>
         )}
       </div>
       
-      <div className="border border-gray-200 rounded bg-white h-60 overflow-y-auto p-2">
+      <div className="border border-gray-200 rounded bg-white h-60 overflow-y-auto p-2" dir="rtl">
         {selectedAuthors.length > 0 ? (
           <ul>
             {selectedAuthors.map(author => (
@@ -203,7 +204,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
                   <div className="font-medium">{getAuthorDisplayName(author)}</div>
                   {author.death_date && (
                     <div className="text-xs text-gray-500">
-                      توفي: {author.death_date} هـ
+                      Died: {author.death_date} هـ
                     </div>
                   )}
                 </div>
@@ -233,14 +234,14 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
           </ul>
         ) : (
           <div className="h-full flex items-center justify-center text-gray-500">
-            <p>لم يتم تحديد أي مؤلف</p>
+            <p>No authors selected</p>
           </div>
         )}
       </div>
       
       {selectedAuthors.length > 0 && (
         <div className="mt-2 text-sm text-gray-500">
-          تم تحديد {selectedAuthors.length} مؤلف
+          {selectedAuthors.length} authors selected
         </div>
       )}
     </div>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FilterState } from '../../types';
 import { getAllResultsForExport } from '../../services/opensearch';
 import { exportResultsAsCsv, exportResultsAsXlsx } from '../../utils/exportData';
+import { useSearch } from '../../contexts/SearchContext';
 
 interface DownloadButtonProps {
   query: string;
@@ -16,13 +17,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
 }) => {
   const [isExporting, setIsExporting] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  
-  // Get filtered text IDs based on filters
-  const getFilteredTextIds = async () => {
-    // This function would normally call the backend to get text IDs based on filters
-    // For now we'll return an empty array as the filtering happens in searchTexts
-    return [];
-  };
+  const { getFilteredTextIds } = useSearch();
   
   // Handle export
   const handleExport = async (format: 'csv' | 'xlsx') => {
@@ -31,7 +26,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
     
     try {
       // Get filtered text IDs
-      const textIds = await getFilteredTextIds();
+      const textIds = getFilteredTextIds();
       
       // Get all results (up to the export limit)
       const allResults = await getAllResultsForExport(query, textIds);
@@ -44,7 +39,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
       }
     } catch (error) {
       console.error('Failed to export results:', error);
-      alert('فشل تنزيل النتائج. يرجى المحاولة مرة أخرى.');
+      alert('Download failed');
     } finally {
       setIsExporting(false);
     }
@@ -65,7 +60,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
           ${
             isExporting || totalResults === 0
               ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-indigo-600 text-white hover:bg-indigo-700'
+              : 'bg-gray-600 text-white hover:bg-gray-400'
           }
         `}
       >
@@ -91,7 +86,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
                 d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
               ></path>
             </svg>
-            جارٍ التنزيل...
+            Downloading...
           </>
         ) : (
           <>
@@ -109,7 +104,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
                 d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4 4m0 0l-4-4m4 4V4"
               />
             </svg>
-            تنزيل النتائج
+            Download Results
           </>
         )}
       </button>
@@ -122,14 +117,14 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
               className="w-full text-right px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
               role="menuitem"
             >
-              تنزيل بصيغة CSV
+              CSV
             </button>
             <button
               onClick={() => handleExport('xlsx')}
               className="w-full text-right px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
               role="menuitem"
             >
-              تنزيل بصيغة Excel
+              Excel
             </button>
           </div>
         </div>

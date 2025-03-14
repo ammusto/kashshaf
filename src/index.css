@@ -9,11 +9,11 @@
 @tailwind components;
 @tailwind utilities;
 
+
 /* Base styles */
 body {
   /* Change to Noto Naskh Arabic which has better shadda positioning */
   font-family: 'Noto Naskh Arabic', 'Scheherazade New', 'Amiri', serif;
-  direction: rtl;
   line-height: 1.6; /* Adjusted line height for better spacing */
 }
 

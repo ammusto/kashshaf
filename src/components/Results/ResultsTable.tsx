@@ -9,7 +9,7 @@ interface ResultsTableProps {
 
 const ResultsTable: React.FC<ResultsTableProps> = ({ results, isLoading }) => {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" dir="rtl">
       {/* Remove divide-y class to eliminate borders */}
       <table className="min-w-full text-xl">
         <thead className="">

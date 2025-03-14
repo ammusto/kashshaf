@@ -22,7 +22,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ query, onSearch, isLoading }) => 
   };
 
   return (
-    <div className="mb-6">
+    <div className="mb-6" >
       <form onSubmit={handleSubmit} className="relative">
         <div className="flex">
           <input
@@ -41,12 +41,12 @@ const SearchBar: React.FC<SearchBarProps> = ({ query, onSearch, isLoading }) => 
     ml-2 px-6 h-12 rounded-lg text-white font-medium mr-2 w-[150px]
               ${isLoading || !inputValue.trim()
                 ? 'bg-gray-400 cursor-not-allowed'
-                : 'bg-indigo-600 hover:bg-indigo-700'
+                : 'bg-gray-600 hover:bg-gray-400'
               }
             `}
           >
             {isLoading ? (
-              <div className="flex items-center">
+              <div className="flex items-center justify-center">
                 <svg
                   className="animate-spin -ml-1 mr-2 h-5 w-5 text-white"
                   xmlns="http://www.w3.org/2000/svg"
@@ -67,15 +67,13 @@ const SearchBar: React.FC<SearchBarProps> = ({ query, onSearch, isLoading }) => 
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                   ></path>
                 </svg>
-                
+                <span>Searching</span>
               </div>
             ) : (
               'Search'
             )}
           </button>
         </div>
-
-
       </form>
     </div>
   );
