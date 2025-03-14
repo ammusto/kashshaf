@@ -8,19 +8,19 @@ interface SearchBarProps {
 
 const SearchBar: React.FC<SearchBarProps> = ({ query, onSearch, isLoading }) => {
   const [inputValue, setInputValue] = useState(query);
-  
+
   // Update input when query changes
   useEffect(() => {
     setInputValue(query);
   }, [query]);
-  
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (inputValue.trim()) {
       onSearch(inputValue.trim());
     }
   };
-  
+
   return (
     <div className="mb-6">
       <form onSubmit={handleSubmit} className="relative">
@@ -33,16 +33,15 @@ const SearchBar: React.FC<SearchBarProps> = ({ query, onSearch, isLoading }) => 
             className="w-full border-2 border-gray-300 bg-white h-12 px-5 pr-10 rounded-lg text-lg focus:outline-none focus:border-indigo-500"
             dir="rtl"
           />
-          
+
           <button
             type="submit"
             disabled={isLoading || !inputValue.trim()}
             className={`
-              ml-2 px-6 h-12 rounded-lg text-white font-medium mr-2
-              ${
-                isLoading || !inputValue.trim() 
-                  ? 'bg-gray-400 cursor-not-allowed' 
-                  : 'bg-indigo-600 hover:bg-indigo-700'
+    ml-2 px-6 h-12 rounded-lg text-white font-medium mr-2 w-[150px]
+              ${isLoading || !inputValue.trim()
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-indigo-600 hover:bg-indigo-700'
               }
             `}
           >
@@ -75,7 +74,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ query, onSearch, isLoading }) => 
             )}
           </button>
         </div>
-        
+
 
       </form>
     </div>

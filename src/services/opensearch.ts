@@ -82,6 +82,10 @@ export const searchTexts = async (
           filter: filters.length > 0 ? filters : undefined
         }
       },
+      // Add sort by uri in ascending order
+      sort: [
+        { "uri": { "order": "asc" } }
+      ],
       highlight: {
         type: 'fvh',
         fields: {
@@ -155,7 +159,8 @@ export const searchTexts = async (
         page_num: source.page_num,
         page_id: source.page_id,
         highlights: processedHighlights,
-        score: hit._score
+        score: hit._score,
+        uri: source.uri // Make sure uri is included in the result
       });
     });
 

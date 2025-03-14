@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Author } from '../../types';
 
 interface AuthorFilterProps {
@@ -18,7 +18,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
   const timeoutRef = useRef<number | null>(null);
   
   // Handle search input change
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newSearchTerm = e.target.value;
     setSearchTerm(newSearchTerm);
     
@@ -39,7 +39,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
     timeoutRef.current = window.setTimeout(() => {
       performSearch(newSearchTerm);
     }, 500);
-  };
+  }, []);
   
   // Clean up the timeout on unmount
   useEffect(() => {
@@ -51,7 +51,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
   }, []);
   
   // Perform author search - search both au_ar and au_sh_ar fields
-  const performSearch = (query: string) => {
+  const performSearch = useCallback((query: string) => {
     if (!query.trim()) {
       setSearchResults([]);
       setIsLoading(false);
@@ -78,10 +78,11 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
     
     setSearchResults(results);
     setIsLoading(false);
-  };
+  }, [authorsMetadata]);
   
   // Add an author to the selection
-  const addAuthor = (author: Author) => {
+  const addAuthor = useCallback((author: Author) => {
+    // Check if author is already selected to prevent duplicates
     if (!selectedAuthors.some(a => a.id === author.id)) {
       onAuthorChange([...selectedAuthors.map(a => a.id), author.id]);
     }
@@ -89,20 +90,20 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
     // Clear search
     setSearchTerm('');
     setSearchResults([]);
-  };
+  }, [selectedAuthors, onAuthorChange]);
   
   // Remove an author from the selection
-  const removeAuthor = (authorId: number) => {
+  const removeAuthor = useCallback((authorId: number) => {
     onAuthorChange(selectedAuthors.filter(a => a.id !== authorId).map(a => a.id));
-  };
+  }, [selectedAuthors, onAuthorChange]);
   
   // Clear all selected authors
-  const clearAll = () => {
+  const clearAll = useCallback(() => {
     onAuthorChange([]);
-  };
+  }, [onAuthorChange]);
 
   // Helper to get display name - prefer au_sh_ar if available
-  const getAuthorDisplayName = (author: Author): string => {
+  const getAuthorDisplayName = useCallback((author: Author): string => {
     // Check for Arabic short name
     if ((author as any).au_sh_ar) {
       return (author as any).au_sh_ar;
@@ -110,7 +111,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
     
     // Fall back to name field
     return author.name || `المؤلف ${author.id}`;
-  };
+  }, []);
   
   return (
     <div className="filter-group">
@@ -121,6 +122,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
           <button
             className="text-xs text-indigo-600 hover:underline"
             onClick={clearAll}
+            type="button"
           >
             إلغاء الكل
           </button>
@@ -209,6 +211,7 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
                 <button
                   onClick={() => removeAuthor(author.id)}
                   className="text-gray-500 hover:text-red-500"
+                  type="button"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -244,4 +247,4 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
   );
 };
 
-export default AuthorFilter;
+export default React.memo(AuthorFilter);

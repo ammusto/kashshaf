@@ -28,6 +28,7 @@ export interface TextDocument {
 }
 
 // Search result with highlighting
+// Search result with highlighting
 export interface SearchResult {
   id: string;
   text_id: number;
@@ -41,6 +42,8 @@ export interface SearchResult {
   // Optional additional fields
   title_lat?: string | null;
   author_lat?: string | null;
+  // Add uri field
+  uri?: string;
   highlights: {
     pre: string;
     match: string;
@@ -48,7 +51,6 @@ export interface SearchResult {
   }[];
   score: number;
 }
-
 // Filter state
 export interface FilterState {
   genres: string[];

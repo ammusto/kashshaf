@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 
 interface GenreFilterProps {
   allGenres: string[];
@@ -13,30 +13,48 @@ const GenreFilter: React.FC<GenreFilterProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Filter genres by search term
-  const filteredGenres = allGenres.filter(genre => 
-    genre.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Filter genres by search term - memoized
+  const filteredGenres = useMemo(() => {
+    return allGenres.filter(genre => 
+      genre.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [allGenres, searchTerm]);
   
   // Toggle a genre in the selection
-  const toggleGenre = (genre: string) => {
+  const toggleGenre = useCallback((genre: string) => {
     if (selectedGenres.includes(genre)) {
       onChange(selectedGenres.filter(g => g !== genre));
     } else {
       onChange([...selectedGenres, genre]);
     }
-  };
+  }, [selectedGenres, onChange]);
   
   // Select all filtered genres
-  const selectAll = () => {
-    const uniqueGenres = Array.from(new Set([...selectedGenres, ...filteredGenres]));
+  const selectAll = useCallback(() => {
+    // Create a set to deduplicate
+    const uniqueGenres = [...selectedGenres];
+    
+    // Add all filtered genres that aren't already selected
+    filteredGenres.forEach(genre => {
+      if (!selectedGenres.includes(genre)) {
+        uniqueGenres.push(genre);
+      }
+    });
+    
     onChange(uniqueGenres);
-  };
+  }, [filteredGenres, selectedGenres, onChange]);
   
   // Clear all filtered genres
-  const clearAll = () => {
-    onChange(selectedGenres.filter(genre => !filteredGenres.includes(genre)));
-  };
+  const clearAll = useCallback(() => {
+    // Keep only genres that aren't in the filtered list
+    const remainingGenres = selectedGenres.filter(genre => !filteredGenres.includes(genre));
+    onChange(remainingGenres);
+  }, [filteredGenres, selectedGenres, onChange]);
+  
+  // Handle search input change
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  }, []);
   
   return (
     <div className="filter-group">
@@ -46,7 +64,7 @@ const GenreFilter: React.FC<GenreFilterProps> = ({
         <input
           type="text"
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={handleSearchChange}
           placeholder="ابحث عن نوع..."
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
@@ -56,12 +74,14 @@ const GenreFilter: React.FC<GenreFilterProps> = ({
         <button
           className="text-xs text-indigo-600 hover:underline"
           onClick={selectAll}
+          type="button"
         >
           تحديد الكل
         </button>
         <button
           className="text-xs text-indigo-600 hover:underline"
           onClick={clearAll}
+          type="button"
         >
           إلغاء الكل
         </button>
@@ -99,4 +119,4 @@ const GenreFilter: React.FC<GenreFilterProps> = ({
   );
 }
 
-export default GenreFilter;
+export default React.memo(GenreFilter);

@@ -50,7 +50,7 @@ const ResultRow: React.FC<ResultRowProps> = ({ result }) => {
           
           {/* Tooltip with detailed information - fixed sizing */}
           {showTooltip && (
-            <div className="absolute z-10 left-0 mt-1 min-w-[300px] max-w-[400px] px-4 py-3 bg-white rounded-lg shadow-lg border border-gray-200">
+            <div className="absolute z-10  mt-1 min-w-[300px] max-w-[600px] px-4 py-3 bg-white rounded-lg shadow-lg border border-gray-200">
               {/* Display all available text/author information with improved text wrapping */}
               {result.text_title && (
                 <div className="mb-1">

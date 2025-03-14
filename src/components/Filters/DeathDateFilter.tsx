@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 
@@ -19,30 +19,50 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
     value.max || range.max
   ]);
   
-  // Update slider value when props change
-  useEffect(() => {
-    setSliderValue([
-      value.min || range.min,
-      value.max || range.max
-    ]);
-  }, [value, range]);
+  // Memoize value and range to prevent infinite loop with useEffect
+  const prevValueRef = React.useRef({ min: value.min, max: value.max });
+  const prevRangeRef = React.useRef({ min: range.min, max: range.max });
   
-  // Handle slider change
-  const handleSliderChange = (newValue: number | number[]) => {
+  // Update slider value when props change - with proper checks
+  useEffect(() => {
+    // Only update if the values actually changed
+    const valueChanged = 
+      prevValueRef.current.min !== value.min || 
+      prevValueRef.current.max !== value.max;
+    
+    const rangeChanged = 
+      prevRangeRef.current.min !== range.min || 
+      prevRangeRef.current.max !== range.max;
+    
+    if (valueChanged || rangeChanged) {
+      setSliderValue([
+        value.min || range.min,
+        value.max || range.max
+      ]);
+      
+      // Update refs
+      prevValueRef.current = { min: value.min, max: value.max };
+      prevRangeRef.current = { min: range.min, max: range.max };
+    }
+  }, [value.min, value.max, range.min, range.max]);
+  
+  // Handle slider change - memoized to maintain stable identity
+  const handleSliderChange = useCallback((newValue: number | number[]) => {
     if (Array.isArray(newValue)) {
       setSliderValue([newValue[0], newValue[1]]);
     }
-  };
+  }, []);
   
   // Apply changes after slider interaction ends
-  const handleAfterChange = (newValue: number | number[]) => {
-    if (Array.isArray(newValue)) {
+  const handleAfterChange = useCallback((newValue: number | number[]) => {
+    if (Array.isArray(newValue) && 
+        (newValue[0] !== value.min || newValue[1] !== value.max)) {
       onChange(newValue[0], newValue[1]);
     }
-  };
+  }, [onChange, value.min, value.max]);
   
   // Handle input change
-  const handleInputChange = (type: 'min' | 'max', e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = useCallback((type: 'min' | 'max', e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = parseInt(e.target.value, 10);
     
     if (isNaN(newValue)) {
@@ -56,17 +76,21 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
       const clampedValue = Math.min(range.max, Math.max(sliderValue[0], newValue));
       setSliderValue([sliderValue[0], clampedValue]);
     }
-  };
+  }, [range.min, range.max, sliderValue]);
   
-  // Apply input value on blur
-  const handleInputBlur = () => {
-    onChange(sliderValue[0], sliderValue[1]);
-  };
+  // Apply input value on blur - only if values have changed
+  const handleInputBlur = useCallback(() => {
+    if (sliderValue[0] !== value.min || sliderValue[1] !== value.max) {
+      onChange(sliderValue[0], sliderValue[1]);
+    }
+  }, [onChange, sliderValue, value.min, value.max]);
   
   // Reset to full range
-  const handleReset = () => {
-    onChange(range.min, range.max);
-  };
+  const handleReset = useCallback(() => {
+    if (range.min !== value.min || range.max !== value.max) {
+      onChange(range.min, range.max);
+    }
+  }, [onChange, range.min, range.max, value.min, value.max]);
   
   // Is the current range different from the full range?
   const isFiltered = sliderValue[0] > range.min || sliderValue[1] < range.max;
@@ -140,4 +164,4 @@ const DeathDateFilter: React.FC<DeathDateFilterProps> = ({
   );
 };
 
-export default DeathDateFilter;
+export default React.memo(DeathDateFilter);

@@ -1,29 +1,40 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import GenreFilter from './GenreFilter';
 import DeathDateFilter from './DeathDateFilter';
 import AuthorFilter from './AuthorFilter';
 import { FilterState, Author } from '../../types';
 import { useMetadata } from '../../contexts/MetadataContext';
 
-// Updated props interface - removed textsMetadata and authorsMetadata as they'll come from context
 interface FiltersPanelProps {
   filters: FilterState;
   setFilters: (filters: FilterState) => void;
   onApplyFilters: () => void;
   onResetFilters: () => void;
+  searchQuery: string;
+  rowsPerPage: number;
 }
 
 const FiltersPanel: React.FC<FiltersPanelProps> = ({
   filters,
   setFilters,
   onApplyFilters,
-  onResetFilters
+  onResetFilters,
+  searchQuery,
+  rowsPerPage
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  // Use metadata from context instead of props
   const { textsMetadata, authorsMetadata } = useMetadata();
   
-  // Extract unique genres from texts metadata
+  // Create a draft state for filters that only gets applied when the button is clicked
+  const [draftFilters, setDraftFilters] = useState<FilterState>(filters);
+  
+  // Update draft filters when props filters change (from URL or parent)
+  useEffect(() => {
+    console.log('FiltersPanel: props filters changed', JSON.stringify(filters));
+    setDraftFilters(filters);
+  }, [filters]);
+  
+  // Extract unique genres from texts metadata - memoized
   const allGenres = useMemo(() => {
     const genres = new Set<string>();
     textsMetadata.forEach(text => {
@@ -34,7 +45,7 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({
     return Array.from(genres).sort();
   }, [textsMetadata]);
   
-  // Get min and max death dates from authors metadata
+  // Get min and max death dates from authors metadata - memoized
   const deathDateRange = useMemo(() => {
     let min = 3000;
     let max = 0;
@@ -46,49 +57,143 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({
       }
     });
     
+    if (min === 3000) min = 0;
+    if (max === 0) max = 2000;
+    
     return { min, max };
   }, [authorsMetadata]);
   
-  // Selected authors data - explicitly cast as Author[] after filtering out undefined values
+  // Selected authors data - memoized
   const selectedAuthors = useMemo(() => {
-    return filters.authors
+    return draftFilters.authors
       .map(authorId => authorsMetadata.get(authorId))
       .filter((author): author is Author => author !== undefined);
-  }, [filters.authors, authorsMetadata]);
+  }, [draftFilters.authors, authorsMetadata]);
   
-  // Update genre filters
-  const handleGenreChange = (genres: string[]) => {
-    const updatedFilters: FilterState = {
-      ...filters,
+  // Update genre filters in draft - memoized callback
+  const handleGenreChange = useCallback((genres: string[]) => {
+    console.log('FiltersPanel: genre change', genres);
+    setDraftFilters(prev => ({
+      ...prev,
       genres
-    };
-    setFilters(updatedFilters);
-  };
+    }));
+  }, []);
   
-  // Update author filters
-  const handleAuthorChange = (authors: number[]) => {
-    const updatedFilters: FilterState = {
-      ...filters,
+  // Update author filters in draft - memoized callback
+  const handleAuthorChange = useCallback((authors: number[]) => {
+    console.log('FiltersPanel: author change', authors);
+    setDraftFilters(prev => ({
+      ...prev,
       authors
-    };
-    setFilters(updatedFilters);
-  };
+    }));
+  }, []);
   
-  // Update death date range
-  const handleDeathDateChange = (min: number, max: number) => {
-    const updatedFilters: FilterState = {
-      ...filters,
+  // Update death date range in draft - memoized callback
+  const handleDeathDateChange = useCallback((min: number, max: number) => {
+    console.log(`FiltersPanel: death date change min=${min}, max=${max}`);
+    setDraftFilters(prev => ({
+      ...prev,
       deathDateRange: { min, max }
-    };
-    setFilters(updatedFilters);
-  };
+    }));
+  }, []);
   
-  // Are there any active filters?
+  // Very direct approach to update URL manually
+  const handleApplyFilters = useCallback(() => {
+    console.log('FiltersPanel: applying filters DIRECTLY', JSON.stringify(draftFilters));
+    
+    // Update parent's filters first
+    setFilters(draftFilters);
+    
+    // Build URL parameters
+    let url = window.location.pathname + '?';
+    
+    // Add search query
+    if (searchQuery) {
+      url += `q=${encodeURIComponent(searchQuery)}`;
+    }
+    
+    // Add page
+    url += `&page=1`;
+    
+    // Add rows per page
+    url += `&rows=${rowsPerPage}`;
+    
+    // Add genres if any
+    if (draftFilters.genres.length > 0) {
+      url += `&genres=${draftFilters.genres.map(genre => encodeURIComponent(genre)).join(',')}`;
+    }
+    
+    // Add authors if any
+    if (draftFilters.authors.length > 0) {
+      url += `&authors=${draftFilters.authors.join(',')}`;
+    }
+    
+    // Add death date range if different from default
+    if (draftFilters.deathDateRange.min > 0) {
+      url += `&death_min=${draftFilters.deathDateRange.min}`;
+    }
+    
+    if (draftFilters.deathDateRange.max < 2000) {
+      url += `&death_max=${draftFilters.deathDateRange.max}`;
+    }
+    
+    console.log('DIRECT URL UPDATE to:', url);
+    
+    // Update URL directly (will cause page reload)
+    window.location.href = url;
+    
+  }, [draftFilters, setFilters, searchQuery, rowsPerPage]);
+  
+  // Handle reset with direct URL update
+  const handleResetFilters = useCallback(() => {
+    console.log('FiltersPanel: resetting filters DIRECTLY');
+    
+    // Update state
+    const defaultFilters: FilterState = {
+      genres: [],
+      authors: [],
+      deathDateRange: { min: 0, max: 2000 }
+    };
+    
+    setDraftFilters(defaultFilters);
+    setFilters(defaultFilters);
+    
+    // Build URL without filters
+    let url = window.location.pathname + '?';
+    
+    // Add search query
+    if (searchQuery) {
+      url += `q=${encodeURIComponent(searchQuery)}`;
+    }
+    
+    // Add page and rows
+    url += `&page=1&rows=${rowsPerPage}`;
+    
+    console.log('DIRECT URL UPDATE to:', url);
+    
+    // Update URL directly (will cause page reload)
+    window.location.href = url;
+    
+  }, [setFilters, searchQuery, rowsPerPage]);
+  
+  // Are there any active filters in the draft?
   const hasActiveFilters = 
-    filters.genres.length > 0 || 
-    filters.authors.length > 0 || 
-    (filters.deathDateRange.min > deathDateRange.min || 
-     filters.deathDateRange.max < deathDateRange.max);
+    draftFilters.genres.length > 0 || 
+    draftFilters.authors.length > 0 || 
+    (draftFilters.deathDateRange.min > deathDateRange.min || 
+     draftFilters.deathDateRange.max < deathDateRange.max);
+  
+  // Are draft filters different from current filters?
+  const hasUnappliedChanges = useMemo(() => {
+    const isDifferent = (
+      JSON.stringify(draftFilters.genres) !== JSON.stringify(filters.genres) ||
+      JSON.stringify(draftFilters.authors) !== JSON.stringify(filters.authors) ||
+      draftFilters.deathDateRange.min !== filters.deathDateRange.min ||
+      draftFilters.deathDateRange.max !== filters.deathDateRange.max
+    );
+    console.log(`FiltersPanel: hasUnappliedChanges = ${isDifferent}`);
+    return isDifferent;
+  }, [draftFilters, filters]);
   
   return (
     <div className="mt-4 border rounded-lg p-4">
@@ -96,6 +201,7 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({
         <button
           className="flex items-center font-medium text-gray-700 focus:outline-none"
           onClick={() => setIsExpanded(!isExpanded)}
+          type="button"
         >
           <span className="ml-2">
             {isExpanded ? (
@@ -135,13 +241,24 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({
                 فلاتر نشطة
               </span>
             )}
+            {hasUnappliedChanges && (
+              <span className="mr-2 bg-yellow-100 text-yellow-800 text-xs font-semibold px-2.5 py-0.5 rounded">
+                تغييرات غير مطبقة
+              </span>
+            )}
           </h3>
         </button>
         
         <div className="flex gap-2">
           <button
-            className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-            onClick={onApplyFilters}
+            className={`px-4 py-2 rounded ${
+              hasUnappliedChanges
+                ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                : 'bg-gray-300 text-gray-600'
+            }`}
+            onClick={handleApplyFilters}
+            disabled={!hasUnappliedChanges}
+            type="button"
           >
             تطبيق الفلاتر
           </button>
@@ -149,7 +266,8 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({
           {hasActiveFilters && (
             <button
               className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-              onClick={onResetFilters}
+              onClick={handleResetFilters}
+              type="button"
             >
               إعادة ضبط
             </button>
@@ -161,13 +279,13 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <GenreFilter
             allGenres={allGenres}
-            selectedGenres={filters.genres}
+            selectedGenres={draftFilters.genres}
             onChange={handleGenreChange}
           />
           
           <DeathDateFilter
             range={deathDateRange}
-            value={filters.deathDateRange}
+            value={draftFilters.deathDateRange}
             onChange={handleDeathDateChange}
           />
           
@@ -182,4 +300,4 @@ const FiltersPanel: React.FC<FiltersPanelProps> = ({
   );
 };
 
-export default FiltersPanel;
+export default React.memo(FiltersPanel);

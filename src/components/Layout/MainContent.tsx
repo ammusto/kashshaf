@@ -15,7 +15,8 @@ const MainContent: React.FC = () => {
     filters, 
     setFilters, 
     applyFilters, 
-    resetFilters 
+    resetFilters,
+    rowsPerPage
   } = useSearch();
 
   return (
@@ -52,6 +53,8 @@ const MainContent: React.FC = () => {
               setFilters={setFilters}
               onApplyFilters={applyFilters}
               onResetFilters={resetFilters}
+              searchQuery={searchQuery}
+              rowsPerPage={rowsPerPage}
             />
           </div>
           
