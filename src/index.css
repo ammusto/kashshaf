@@ -1,0 +1,115 @@
+/* Import Amiri font (already in your CSS) but we'll add more weights and styles */
+@import url('https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400;1,700&display=swap');
+
+/* Import additional Arabic-optimized fonts */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Scheherazade+New:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base styles */
+body {
+  /* Change to Noto Naskh Arabic which has better shadda positioning */
+  font-family: 'Noto Naskh Arabic', 'Scheherazade New', 'Amiri', serif;
+  direction: rtl;
+  line-height: 1.6; /* Adjusted line height for better spacing */
+}
+
+/* Custom class for text with diacritics */
+.arabic-text-with-diacritics {
+  /* Additional space for diacritics to prevent line height issues */
+  line-height: 2;
+}
+
+/* Specific class for search result text to handle diacritics better */
+.search-result-text {
+  font-family: 'Noto Naskh Arabic', serif;
+  line-height: 1.8;
+}
+
+/* Custom scrollbar for the filter checkboxes */
+.filter-group .overflow-y-auto {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db #f3f4f6;
+}
+
+.filter-group .overflow-y-auto::-webkit-scrollbar {
+  width: 6px;
+}
+
+.filter-group .overflow-y-auto::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 8px;
+}
+
+.filter-group .overflow-y-auto::-webkit-scrollbar-thumb {
+  background-color: #d1d5db;
+  border-radius: 8px;
+}
+
+/* Override default slider styles */
+.rc-slider-rail {
+  height: 8px;
+  background-color: #e5e7eb;
+}
+
+.rc-slider-track {
+  height: 8px;
+  background-color: #4f46e5;
+}
+
+.rc-slider-handle {
+  width: 16px;
+  height: 16px;
+  margin-top: -4px;
+  border-color: #4f46e5;
+  background-color: #4f46e5;
+}
+
+.rc-slider-handle:hover,
+.rc-slider-handle:active,
+.rc-slider-handle:focus {
+  border-color: #4338ca;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.3);
+}
+
+/* Highlight styling */
+.search-result-highlight {
+  color: #dc2626;
+  font-weight: bold;
+}
+
+/* Responsive table styles */
+@media (max-width: 768px) {
+  .results-table-container {
+    margin: 0 -1rem;
+  }
+  
+  .results-table th,
+  .results-table td {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+}
+
+/* Enhance Arabic text readability */
+.arabic-text {
+  line-height: 1.8;
+  letter-spacing: 0.3px;
+}
+
+/* Animation for loading state */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.animate-pulse {
+  animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

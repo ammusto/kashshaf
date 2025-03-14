@@ -1,0 +1,151 @@
+header {
+  width: 100%;
+  direction: ltr !important;
+  font-family: Geist, -apple-system, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif;
+}
+
+.header-text {
+  margin-top: 50px;
+  text-align: center;
+  font-size: 4rem;
+  font-weight: bold;
+}
+
+.header-container {
+  max-width: 1200px;
+  margin: auto;
+  margin-top: 50px;
+
+}
+
+nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background-color: white;
+  z-index: 1000;
+}
+
+
+nav ul {
+  justify-content: center;
+}
+
+nav ul a {
+  text-decoration: none;
+  color: black;
+}
+
+nav ul a:hover {
+  text-decoration: underline;
+}
+
+nav li {
+  padding: 0px 10px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+footer {
+  margin-top: auto;
+  flex: 0 0 125px;
+  max-width: 100%;
+  height: 128px;
+  margin: 20px;
+}
+
+.div-footer {
+  text-align: center;
+  padding-top: 12.5px;
+  width: 100%;
+  margin: auto;
+  height: 125px;
+  position: relative;
+}
+
+.footer-link-container {
+  text-align: center;
+  width: 100%;
+  padding-bottom: 20px;
+}
+
+.footer-link-container a {
+  margin: 20px;
+}
+
+.footer-link-container img {
+  display: inline;
+}
+
+.nav-container {
+  padding: .5rem;
+  padding-left: 0rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  height: 3rem;
+  margin: 0;
+}
+
+.nav-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 0 auto;
+  padding-right: 175px;
+
+}
+
+.nav-left {
+  display: flex;
+  align-items: center;
+  width: 175px;
+  text-align: center;
+}
+
+
+@media (max-width: 768px) {
+  .nav-container {
+    flex-direction: row;
+    align-items: flex-start;
+
+  }
+
+  .nav-left {
+    width: 30%;
+  }
+
+  .nav-center {
+    width: 60% !important;
+    padding-right: 30%;
+  }
+
+  .nav-left {
+    width: 50%;
+  }
+
+  .nav-center {
+    width: 50%;
+    padding-right: 5%;
+    justify-content: right;
+  }
+
+}
+
+@media (max-width: 468px) {
+  .nav-container {
+    flex-direction: row;
+    align-items: flex-start;
+
+  }
+
+}
+
+.header-logo {
+  font-size: 2rem;
+  font-weight: bold;
+  padding-left: 2rem;
+}
