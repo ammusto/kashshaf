@@ -23,7 +23,6 @@ export const loadTextsMetadata = async (): Promise<Map<number, Text>> => {
     // Convert to JSON with header: 1 to get raw rows
     const data = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
     
-    // Debug: Log the first row (headers) to see column names
     
     // Get headers from the first row
     const headers = data[0];
@@ -131,9 +130,6 @@ export const loadAuthorsMetadata = async (): Promise<Map<number, Author>> => {
     const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
     const firstSheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[firstSheetName];
-    
-    // Show general info about the workbook and worksheet
-
     
     // Get full raw data to see structure
     const rawData = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });

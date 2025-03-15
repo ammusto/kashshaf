@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { SearchResult } from '../../types';
 import { stripDiacriticsExceptShadda, truncateTitle } from '../../utils/textProcessing';
 

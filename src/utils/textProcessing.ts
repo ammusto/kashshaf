@@ -1,16 +1,5 @@
 /**
  * Strips all Arabic diacritics except shadda from the given text
- * 
- * Arabic diacritics Unicode ranges:
- * - Fathah: \u064E
- * - Kasrah: \u0650
- * - Dammah: \u064F
- * - Sukun: \u0652
- * - Fathatan: \u064B
- * - Kasratan: \u064D
- * - Dammatan: \u064C
- * - Shadda: \u0651 (this one we keep)
- * - Superscript Alef: \u0670
  */
 export const stripDiacriticsExceptShadda = (text: string): string => {
   if (!text) return '';

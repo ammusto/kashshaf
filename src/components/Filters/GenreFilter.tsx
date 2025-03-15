@@ -29,21 +29,6 @@ const GenreFilter: React.FC<GenreFilterProps> = ({
     }
   }, [selectedGenres, onChange]);
   
-  // Select all filtered genres
-  const selectAll = useCallback(() => {
-    // Create a set to deduplicate
-    const uniqueGenres = [...selectedGenres];
-    
-    // Add all filtered genres that aren't already selected
-    filteredGenres.forEach(genre => {
-      if (!selectedGenres.includes(genre)) {
-        uniqueGenres.push(genre);
-      }
-    });
-    
-    onChange(uniqueGenres);
-  }, [filteredGenres, selectedGenres, onChange]);
-  
   // Clear all filtered genres
   const clearAll = useCallback(() => {
     // Keep only genres that aren't in the filtered list

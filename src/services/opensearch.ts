@@ -1,7 +1,6 @@
 import { API_USER, API_PASS, API_URL, INDEX, MAX_RESULT_WINDOW } from '../config/api';
 import { SearchResult } from '../types';
 import { processHighlight } from '../utils/arabicNormalization';
-import { loadTextsMetadata, loadAuthorsMetadata } from './metadataService';
 
 interface OpenSearchResponse {
   hits: {
@@ -57,14 +56,7 @@ export const searchTexts = async (
 
     // Determine if query is single word or phrase
     const trimmedQuery = query.trim();
-    const isPhrase = trimmedQuery.includes(' ');
 
-    // Build query based on whether it's a phrase or single word
-    const queryClause = {
-      match_phrase: {
-        "page_content.proclitic": trimmedQuery
-      }
-    };
 
     // Build OpenSearch query
     const opensearchQuery = {
@@ -198,5 +190,4 @@ export const getAllResultsForExport = async (
   }
 };
 
-// Export metadataService functions for compatibility
 export { loadTextsMetadata, loadAuthorsMetadata, getAvailableGenres, searchAuthors } from './metadataService';

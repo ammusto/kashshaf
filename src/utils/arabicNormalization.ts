@@ -59,7 +59,7 @@ export const processHighlight = (highlight: string): { pre: string; match: strin
   // 1. Numbers with spaces or punctuation around them
   // 2. Numbers at the beginning or end of text
   // 3. Only numbers that are 4 or more digits long
-  const standaloneNumberRegex = /(\s|^)[\d٠-٩]{4,}(\s|$|\.|\,|\;|\:)/g;
+  const standaloneNumberRegex = /(\s|^)[\d٠-٩]{4,}(\s|$|\.|,|;|:)/g;
   
   // Replace with just the space(s) that were captured (to maintain spacing)
   cleanPre = cleanPre.replace(standaloneNumberRegex, '$1 $2').replace(/\s+/g, ' ');
@@ -67,9 +67,9 @@ export const processHighlight = (highlight: string): { pre: string; match: strin
   cleanPost = cleanPost.replace(standaloneNumberRegex, '$1 $2').replace(/\s+/g, ' ');
   
   // Remove all percentage symbols
-  cleanPre = cleanPre.replace(/\%/g, '');
-  cleanMatch = cleanMatch.replace(/\%/g, '');
-  cleanPost = cleanPost.replace(/\%/g, '');
+  cleanPre = cleanPre.replace(/%/g, '');
+  cleanMatch = cleanMatch.replace(/%/g, '');
+  cleanPost = cleanPost.replace(/%/g, '');
   
   // Clean up any double spaces that might be left after removing content
   cleanPre = cleanPre.replace(/\s+/g, ' ').trim();
@@ -88,6 +88,6 @@ export const processHighlight = (highlight: string): { pre: string; match: strin
 export const createSearchQueryString = (query: string): string => {
   const normalized = normalizeArabicText(query);
   // Escape special characters for OpenSearch
-  const escaped = normalized.replace(/[+\-=&|><!(){}[\]^"~*?:\\\/]/g, '\\$&');
+  const escaped = normalized.replace(/[+\-=&|><!(){}[\]^"~*?:\\]/g, '\\$&');
   return escaped;
 };

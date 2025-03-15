@@ -103,7 +103,6 @@ export const useSearch = (): UseSearchReturn => {
 
     // Filter texts based on selected filters
     const getFilteredTextIds = useCallback((currentFilters: FilterState): number[] => {
-        console.log('Filtering texts with filters:', currentFilters);
         
         // Start with all texts
         let filteredTexts = Array.from(textsMetadata.values());
@@ -152,7 +151,6 @@ export const useSearch = (): UseSearchReturn => {
         if (!query.trim()) return;
 
         setIsLoading(true);
-        console.log(`Executing search for "${query}" on page ${currentRequestPage}`);
 
         try {
             // Get filtered text IDs

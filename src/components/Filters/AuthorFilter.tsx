@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Author } from '../../types';
 
 interface AuthorFilterProps {
@@ -16,39 +16,6 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
   const [searchResults, setSearchResults] = useState<Author[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const timeoutRef = useRef<number | null>(null);
-  
-  // Handle search input change
-  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const newSearchTerm = e.target.value;
-    setSearchTerm(newSearchTerm);
-    
-    // Show loading state immediately
-    if (newSearchTerm.trim()) {
-      setIsLoading(true);
-    } else {
-      setSearchResults([]);
-      setIsLoading(false);
-    }
-    
-    // Clear any existing timeout
-    if (timeoutRef.current !== null) {
-      window.clearTimeout(timeoutRef.current);
-    }
-    
-    // Set a new timeout to perform the search after 500ms
-    timeoutRef.current = window.setTimeout(() => {
-      performSearch(newSearchTerm);
-    }, 500);
-  }, []);
-  
-  // Clean up the timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current !== null) {
-        window.clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
   
   // Perform author search - search both au_ar and au_sh_ar fields
   const performSearch = useCallback((query: string) => {
@@ -79,6 +46,39 @@ const AuthorFilter: React.FC<AuthorFilterProps> = ({
     setSearchResults(results);
     setIsLoading(false);
   }, [authorsMetadata]);
+  
+  // Handle search input change
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const newSearchTerm = e.target.value;
+    setSearchTerm(newSearchTerm);
+    
+    // Show loading state immediately
+    if (newSearchTerm.trim()) {
+      setIsLoading(true);
+    } else {
+      setSearchResults([]);
+      setIsLoading(false);
+    }
+    
+    // Clear any existing timeout
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+    }
+    
+    // Set a new timeout to perform the search after 500ms
+    timeoutRef.current = window.setTimeout(() => {
+      performSearch(newSearchTerm);
+    }, 500);
+  }, [performSearch]);
+  
+  // Clean up the timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
   
   // Add an author to the selection
   const addAuthor = useCallback((author: Author) => {

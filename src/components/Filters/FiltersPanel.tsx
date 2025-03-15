@@ -16,7 +16,6 @@ const FiltersPanel: React.FC = () => {
 
   // Update draft filters when props filters change (from URL or context)
   useEffect(() => {
-    console.log('FiltersPanel: filters changed', JSON.stringify(filters));
     setDraftFilters(filters);
   }, [filters]);
 
@@ -58,7 +57,6 @@ const FiltersPanel: React.FC = () => {
 
   // Update genre filters in draft - memoized callback
   const handleGenreChange = useCallback((genres: string[]) => {
-    console.log('FiltersPanel: genre change', genres);
     setDraftFilters(prev => ({
       ...prev,
       genres
@@ -67,7 +65,6 @@ const FiltersPanel: React.FC = () => {
 
   // Update author filters in draft - memoized callback
   const handleAuthorChange = useCallback((authors: number[]) => {
-    console.log('FiltersPanel: author change', authors);
     setDraftFilters(prev => ({
       ...prev,
       authors
@@ -76,7 +73,6 @@ const FiltersPanel: React.FC = () => {
 
   // Update death date range in draft - memoized callback
   const handleDeathDateChange = useCallback((min: number, max: number) => {
-    console.log(`FiltersPanel: death date change min=${min}, max=${max}`);
     setDraftFilters(prev => ({
       ...prev,
       deathDateRange: { min, max }
@@ -85,13 +81,11 @@ const FiltersPanel: React.FC = () => {
 
   // Handle applying filters
   const handleApplyFilters = useCallback(() => {
-    console.log('FiltersPanel: applying filters', JSON.stringify(draftFilters));
     applyFilters(draftFilters);
   }, [draftFilters, applyFilters]);
 
   // Handle resetting filters
   const handleResetFilters = useCallback(() => {
-    console.log('FiltersPanel: resetting filters');
     resetFilters();
   }, [resetFilters]);
 
@@ -110,7 +104,6 @@ const FiltersPanel: React.FC = () => {
       draftFilters.deathDateRange.min !== filters.deathDateRange.min ||
       draftFilters.deathDateRange.max !== filters.deathDateRange.max
     );
-    console.log(`FiltersPanel: hasUnappliedChanges = ${isDifferent}`);
     return isDifferent;
   }, [draftFilters, filters]);
 
@@ -118,27 +111,31 @@ const FiltersPanel: React.FC = () => {
     <div className="mt-4 border rounded-lg p-4">
       <div className="flex justify-between items-center mb-4">
         <div className="flex gap-2">
-          <button
-            className={`px-4 py-2 rounded ${hasUnappliedChanges
-              ? 'bg-gray-600 text-white hover:bg-gray-400'
-              : 'bg-gray-300 text-gray-600'
-              }`}
-            onClick={handleApplyFilters}
-            disabled={!hasUnappliedChanges || !searchQuery}
-            type="button"
-          >
-            Apply Filters
-          </button>
+          {isExpanded && (
+            <>
+              <button
+                className={`px-4 py-2 rounded ${hasUnappliedChanges
+                  ? 'bg-gray-600 text-white hover:bg-gray-400'
+                  : 'bg-gray-300 text-gray-600'
+                  }`}
+                onClick={handleApplyFilters}
+                disabled={!hasUnappliedChanges || !searchQuery}
+                type="button"
+              >
+                Apply Filters
+              </button>
 
-          {hasActiveFilters && (
-            <button
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-              onClick={handleResetFilters}
-              disabled={!searchQuery}
-              type="button"
-            >
-              Reset
-            </button>
+              {hasActiveFilters && (
+                <button
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                  onClick={handleResetFilters}
+                  disabled={!searchQuery}
+                  type="button"
+                >
+                  Reset
+                </button>
+              )}
+            </>
           )}
         </div>
         <button
