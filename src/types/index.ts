@@ -1,21 +1,25 @@
-// Author type
 export interface Author {
   id: number;
   name: string;
   death_date: number;
   birth_date?: number;
+  au_id?: number;
+  au_ar?: string;
+  au_sh_ar?: string;
+  au_lat?: string;
+  au_sh_lat?: string;
+  au_death?: number;
 }
-
 // Text type
 export interface Text {
   id: number;
   title: string;
+  title_lat?: string;
   au_id: number;
   tags: string[];
   volumes: number;
 }
 
-// Document type (based on your JSON samples)
 export interface TextDocument {
   text_id: number;
   uri: string;
@@ -28,7 +32,6 @@ export interface TextDocument {
 }
 
 // Search result with highlighting
-// Search result with highlighting
 export interface SearchResult {
   id: string;
   text_id: number;
@@ -37,12 +40,9 @@ export interface SearchResult {
   page_id: number;
   text_title?: string;
   author_name?: string;
-  // Add death_date field
   death_date?: number | null;
-  // Optional additional fields
   title_lat?: string | null;
   author_lat?: string | null;
-  // Add uri field
   uri?: string;
   highlights: {
     pre: string;

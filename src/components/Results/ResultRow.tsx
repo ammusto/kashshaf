@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { SearchResult } from '../../types';
 import { stripDiacriticsExceptShadda, truncateTitle } from '../../utils/textProcessing';
 
@@ -9,14 +10,7 @@ interface ResultRowProps {
 const ResultRow: React.FC<ResultRowProps> = ({ result }) => {
   const [showTooltip, setShowTooltip] = useState(false);
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
-  const titleRef = useRef<HTMLDivElement>(null);
   
-  // Handle clicking on a result row (e.g., to show full context)
-  const handleRowClick = () => {
-    // Navigate to full text view with context
-    // This is a placeholder for future implementation
-  };
-
   // Track mouse position when hovering over the title
   const handleMouseMove = (e: React.MouseEvent) => {
     setMousePosition({
@@ -42,23 +36,20 @@ const ResultRow: React.FC<ResultRowProps> = ({ result }) => {
   };
 
   return (
-    <tr
-      className="hover:bg-gray-50 cursor-pointer transition duration-150"
-      onClick={handleRowClick}
-    >
+    <tr className="hover:bg-gray-50 transition duration-150">
       <td className="px-6 whitespace-nowrap">
         {/* Create a relative container for the tooltip */}
         <div className="relative">
           {/* Show truncated text name with death date */}
-          <div 
-            ref={titleRef}
+          <Link 
+            to={`/text/${result.text_id}`}
             className="text-lg font-medium text-gray-900 hover:text-indigo-600"
             onMouseEnter={() => setShowTooltip(true)}
             onMouseMove={handleMouseMove}
             onMouseLeave={() => setShowTooltip(false)}
           >
             {formattedTitle()}
-          </div>
+          </Link>
           
           {/* Tooltip with detailed information - positioned based on mouse coordinates */}
           {showTooltip && (
@@ -82,7 +73,7 @@ const ResultRow: React.FC<ResultRowProps> = ({ result }) => {
               {result.author_name && (
                 <div className="mb-1">
                   <span className="font-semibold">المؤلف: </span>
-                  <span className="break-words">{result.author_name}</span>
+                    {result.author_name}
                 </div>
               )}
               

@@ -1,4 +1,5 @@
 import React from 'react';
+import { MAX_RESULT_WINDOW } from '../../config/api';
 
 interface PaginationProps {
   currentPage: number;
@@ -13,8 +14,11 @@ const Pagination: React.FC<PaginationProps> = ({
   rowsPerPage,
   onPageChange
 }) => {
-  // Calculate total pages
-  const totalPages = Math.ceil(totalResults / rowsPerPage);
+  // Use MAX_RESULT_WINDOW if total results exceed it
+  const adjustedTotalResults = Math.min(totalResults, MAX_RESULT_WINDOW);
+  
+  // Calculate total pages based on adjusted total results
+  const totalPages = Math.ceil(adjustedTotalResults / rowsPerPage);
   
   // Don't show pagination if there's only one page
   if (totalPages <= 1) {
@@ -119,8 +123,6 @@ const Pagination: React.FC<PaginationProps> = ({
             );
           })}
         </div>
-        
-
         
         <button
           onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))}

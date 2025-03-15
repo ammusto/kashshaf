@@ -3,6 +3,7 @@ import { useSearch } from '../../contexts/SearchContext';
 import ResultsTable from './ResultsTable';
 import Pagination from './Pagination';
 import DownloadButton from './DownloadButton';
+import { MAX_RESULT_WINDOW } from '../../config/api';
 
 const SearchResults: React.FC = () => {
   const {
@@ -30,11 +31,18 @@ const SearchResults: React.FC = () => {
     return null;
   }
 
+  // Determine the display of total results
+  const displayResults = totalResults > MAX_RESULT_WINDOW 
+    ? MAX_RESULT_WINDOW 
+    : totalResults;
+
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-semibold">
-          {totalResults} Results for "{searchQuery}"
+          {totalResults > MAX_RESULT_WINDOW 
+            ? `Displaying ${displayResults} of ${totalResults} Results for "${searchQuery}"` 
+            : `${totalResults} Results for "${searchQuery}"`}
         </h2>
         
         <div className="flex items-center gap-4">

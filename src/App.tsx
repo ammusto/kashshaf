@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './components/Layout/Header';
 import MainContent from './components/Layout/MainContent';
 import AboutPage from './components/About/AboutPage';
+import TextDetailPage from './components/TextDetailPage';
 import Footer from './components/Layout/Footer';
 import { MetadataProvider } from './contexts/MetadataContext';
 import { SearchProvider } from './contexts/SearchContext';
@@ -18,6 +19,7 @@ const App: React.FC = () => {
             <Routes>
               <Route path="/" element={<MainContent />} />
               <Route path="/about" element={<AboutPage />} />
+              <Route path="/text/:textId" element={<TextDetailPage />} />
             </Routes>
             <Footer />
           </div>

@@ -21,6 +21,7 @@ const AboutPage: React.FC = () => {
             <li>Search a word or phrase, and it will automatically include the following proclitics: ب، ف، و، ل، ك. e.g, if you search for التصوف it will include: بالتصوف، للتصوف، etc.</li>
             <li>Note that the search does not include BOTH definite and definite, e.g. if you search for التصوف it will not include تصوف</li>
             <li>Downloading search data will only include the first 5,000 results.</li>
+            <li>Clicking on the text title in results will bring you to metadata page. Note that metadata has not yet been corrected and transliterations are all automatically generated and likely contain errors!</li>
           </ul>
         </section>
       </div>

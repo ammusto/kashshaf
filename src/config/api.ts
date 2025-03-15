@@ -10,7 +10,7 @@ export const API_TIMEOUT = 30000;
 export const MAX_RESULTS_PER_PAGE = 100;
 
 // Max results for export
-export const MAX_EXPORT_RESULTS = 5000;
+export const MAX_EXPORT_RESULTS = 10000;
 
 // Max OpenSearch result window
-export const MAX_RESULT_WINDOW = 5000;
+export const MAX_RESULT_WINDOW = 10000;
