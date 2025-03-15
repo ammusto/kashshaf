@@ -59,9 +59,6 @@ export const searchTexts = async (
       });
     }
 
-    // Determine if query is single word or phrase
-    const trimmedQuery = query.trim();
-
     // Determine which field to search based on isExact flag
     const searchField = isExact ? "page_content" : "page_content.proclitic";
 
@@ -75,7 +72,7 @@ export const searchTexts = async (
           must: [
             {
               match_phrase: {
-                [searchField]: trimmedQuery
+                [searchField]: query
               }
             }
           ],
@@ -100,7 +97,7 @@ export const searchTexts = async (
         // Force exact match for highlighting
         highlight_query: {
           match_phrase: {
-            [searchField]: trimmedQuery
+            [searchField]: query
           }
         }
       }

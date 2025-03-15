@@ -21,8 +21,6 @@ interface SearchContextType {
   results: SearchResult[];
   isLoading: boolean;
   totalResults: number;
-  isExactSearch: boolean;
-  setIsExactSearch: (isExact: boolean) => void;
   
   // Pagination
   currentPage: number;
@@ -33,7 +31,7 @@ interface SearchContextType {
   setFilters: (filters: FilterState) => void;
   
   // Actions
-  handleSearch: (query: string, isExact?: boolean) => void;
+  handleSearch: (query: string) => void;
   handlePageChange: (page: number) => void;
   handleRowsPerPageChange: (rows: number) => void;
   applyFilters: (newFilters: FilterState) => void;
@@ -64,7 +62,6 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   
   // States
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isExactSearch, setIsExactSearch] = useState<boolean>(false);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [totalResults, setTotalResults] = useState<number>(0);
@@ -74,7 +71,6 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   
   // Refs for stale closure prevention
   const searchQueryRef = useRef(searchQuery);
-  const isExactSearchRef = useRef(isExactSearch);
   const currentPageRef = useRef(currentPage);
   const rowsPerPageRef = useRef(rowsPerPage);
   const filtersRef = useRef(filters);
@@ -83,10 +79,6 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   useEffect(() => {
     searchQueryRef.current = searchQuery;
   }, [searchQuery]);
-  
-  useEffect(() => {
-    isExactSearchRef.current = isExactSearch;
-  }, [isExactSearch]);
   
   useEffect(() => {
     currentPageRef.current = currentPage;
@@ -104,7 +96,6 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   const getFilteredTextIds = useCallback((): number[] => {
     if (!textsMetadata || !authorsMetadata) return [];
     
-    console.log('Calculating filtered text IDs with filters:', JSON.stringify(filtersRef.current));
     
     // Start with all texts
     let filteredTexts = Array.from(textsMetadata.values());
@@ -148,13 +139,11 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     query: string,
     page: number,
     size: number,
-    searchFilters: FilterState,
-    isExact: boolean
+    searchFilters: FilterState
   ) => {
     if (!query.trim() || metadataLoading) return;
     
     setIsLoading(true);
-    console.log(`Executing search for "${query}" on page ${page} with size ${size}, exact mode: ${isExact}`);
     
     try {
       // Get text IDs based on filters
@@ -211,8 +200,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
         page,
         size,
         textIds,
-        [page],
-        isExact
+        [page]
       );
       
       // Process search results
@@ -280,21 +268,13 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   useEffect(() => {
     if (metadataLoading) return;
     
-    console.log('SearchContext: Processing URL params');
     const params = parseUrlParams(location.search);
-    console.log('Parsed URL params:', params);
     
     let shouldSearch = false;
     
     // Update search query if changed
     if (params.query && params.query !== searchQueryRef.current) {
       setSearchQuery(params.query);
-      shouldSearch = true;
-    }
-    
-    // Update exact search flag if present
-    if (params.exact !== undefined && params.exact !== isExactSearchRef.current) {
-      setIsExactSearch(params.exact);
       shouldSearch = true;
     }
     
@@ -334,8 +314,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
         params.query,
         params.page || 1,
         params.rows || DEFAULT_ROWS_PER_PAGE,
-        params.filters || DEFAULT_FILTERS,
-        params.exact || false
+        params.filters || DEFAULT_FILTERS
       );
     }
   }, [location.search, metadataLoading]);
@@ -345,16 +324,14 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     query?: string,
     page?: number,
     rows?: number,
-    filters?: FilterState,
-    exact?: boolean
+    filters?: FilterState
   }) => {
     // Build the URL params
     const urlParams = buildUrlParams({
       query: params.query !== undefined ? params.query : searchQueryRef.current,
       page: params.page !== undefined ? params.page : currentPageRef.current,
       rows: params.rows !== undefined ? params.rows : rowsPerPageRef.current,
-      filters: params.filters !== undefined ? params.filters : filtersRef.current,
-      exact: params.exact !== undefined ? params.exact : isExactSearchRef.current
+      filters: params.filters !== undefined ? params.filters : filtersRef.current
     });
     
     // Update URL without reloading the page
@@ -362,27 +339,16 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   }, [navigate]);
   
   // Handle search form submission
-  const handleSearch = useCallback((query: string, isExact?: boolean) => {
+  const handleSearch = useCallback((query: string) => {
     if (!query.trim()) return;
     
-    console.log(`Handling search for: "${query}", exact: ${isExact}`);
-    // Update the exact search flag if provided
-    if (isExact !== undefined && isExact !== isExactSearchRef.current) {
-      setIsExactSearch(isExact);
-    }
-    
-    updateUrlAndSearch({ 
-      query, 
-      page: 1,
-      exact: isExact !== undefined ? isExact : isExactSearchRef.current
-    }); // Reset to page 1 for new searches
+    updateUrlAndSearch({ query, page: 1 }); // Reset to page 1 for new searches
   }, [updateUrlAndSearch]);
   
   // Handle page change
   const handlePageChange = useCallback((page: number) => {
     if (page === currentPageRef.current) return;
     
-    console.log(`Changing to page ${page}`);
     updateUrlAndSearch({ page });
   }, [updateUrlAndSearch]);
   
@@ -390,19 +356,16 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   const handleRowsPerPageChange = useCallback((rows: number) => {
     if (rows === rowsPerPageRef.current) return;
     
-    console.log(`Changing rows per page to ${rows}`);
     updateUrlAndSearch({ rows, page: 1 }); // Reset to page 1 when changing rows
   }, [updateUrlAndSearch]);
   
   // Apply filters
   const applyFilters = useCallback((newFilters: FilterState) => {
-    console.log('Applying filters:', newFilters);
     updateUrlAndSearch({ filters: newFilters, page: 1 }); // Reset to page 1 when applying filters
   }, [updateUrlAndSearch]);
   
   // Reset filters
   const resetFilters = useCallback(() => {
-    console.log('Resetting filters');
     updateUrlAndSearch({ 
       filters: DEFAULT_FILTERS,
       page: 1
@@ -413,8 +376,6 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   const contextValue = useMemo(() => ({
     searchQuery,
     setSearchQuery,
-    isExactSearch,
-    setIsExactSearch,
     results,
     isLoading,
     totalResults,
@@ -430,7 +391,6 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     getFilteredTextIds
   }), [
     searchQuery,
-    isExactSearch,
     results,
     isLoading,
     totalResults,

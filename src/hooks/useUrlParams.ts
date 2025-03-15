@@ -99,10 +99,8 @@ export const buildUrlParams = (params: Partial<SearchParams>): string => {
     urlParams.q = params.query;
   }
 
-  // Add exact search flag if true
-  if (params.exact) {
-    urlParams.exact = 'true';
-  }
+  // ALWAYS include exact search parameter - explicitly convert to string
+  urlParams.exact = (params.exact === true).toString();
 
   // Add page number - always include it for consistency
   if (params.page) {
