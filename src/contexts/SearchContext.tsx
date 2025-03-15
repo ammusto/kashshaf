@@ -96,7 +96,6 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   const getFilteredTextIds = useCallback((): number[] => {
     if (!textsMetadata || !authorsMetadata) return [];
     
-    
     // Start with all texts
     let filteredTexts = Array.from(textsMetadata.values());
     
@@ -146,43 +145,44 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     setIsLoading(true);
     
     try {
-      // Get text IDs based on filters
+      // Determine text IDs based on filters
       let textIds: number[] = [];
       
-      if (searchFilters.genres.length > 0 || 
-          searchFilters.authors.length > 0 || 
-          searchFilters.deathDateRange.min > 0 || 
-          searchFilters.deathDateRange.max < 2000) {
-        
-        // Create a temporary copy for calculation
-        const tempFilters = { ...searchFilters };
-        
+      // Check if we have any filters applied that would restrict text selection
+      const hasGenreFilter = searchFilters.genres.length > 0;
+      const hasAuthorFilter = searchFilters.authors.length > 0;
+      const hasDeathDateFilter = 
+        searchFilters.deathDateRange.min > 0 || 
+        searchFilters.deathDateRange.max < 2000;
+      
+      // If any filters are applied, get the filtered text IDs
+      if (hasGenreFilter || hasAuthorFilter || hasDeathDateFilter) {
         // Start with all texts
         let filteredTexts = Array.from(textsMetadata.values());
         
         // Filter by genres
-        if (tempFilters.genres.length > 0) {
-          const genresSet = new Set(tempFilters.genres);
+        if (hasGenreFilter) {
+          const genresSet = new Set(searchFilters.genres);
           filteredTexts = filteredTexts.filter(text => 
             text.tags && text.tags.some(genre => genresSet.has(genre))
           );
         }
         
         // Filter by authors
-        if (tempFilters.authors.length > 0) {
-          const authorsSet = new Set(tempFilters.authors);
+        if (hasAuthorFilter) {
+          const authorsSet = new Set(searchFilters.authors);
           filteredTexts = filteredTexts.filter(text => authorsSet.has(text.au_id));
         }
         
         // Filter by death date range
-        if (tempFilters.deathDateRange.min > 0 || tempFilters.deathDateRange.max < 2000) {
+        if (hasDeathDateFilter) {
           // Get author IDs within death date range
           const authorIdsInRange = new Set<number>();
           
           authorsMetadata.forEach(author => {
             if (author.death_date && 
-                author.death_date >= tempFilters.deathDateRange.min && 
-                author.death_date <= tempFilters.deathDateRange.max) {
+                author.death_date >= searchFilters.deathDateRange.min && 
+                author.death_date <= searchFilters.deathDateRange.max) {
               authorIdsInRange.add(author.id);
             }
           });
@@ -191,7 +191,16 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
           filteredTexts = filteredTexts.filter(text => authorIdsInRange.has(text.au_id));
         }
         
+        // Get text IDs for the filtered texts
         textIds = filteredTexts.map(text => text.id);
+        
+        // If no texts match the filters, return empty results
+        if (textIds.length === 0) {
+          setResults([]);
+          setTotalResults(0);
+          setIsLoading(false);
+          return;
+        }
       }
       
       // Execute search
@@ -199,7 +208,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
         normalizeArabicText(query),
         page,
         size,
-        textIds,
+        textIds.length > 0 ? textIds : undefined,
         [page]
       );
       
@@ -244,8 +253,14 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
       });
       
       // Update state
-      setResults(enrichedResults);
-      setTotalResults(response.total);
+      if (enrichedResults.length === 0) {
+        // If no results found, explicitly clear results and set total to 0
+        setResults([]);
+        setTotalResults(0);
+      } else {
+        setResults(enrichedResults);
+        setTotalResults(response.total);
+      }
       
     } catch (error) {
       console.error('Search failed:', error);
@@ -255,59 +270,59 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
       setIsLoading(false);
     }
   }, [textsMetadata, authorsMetadata, metadataLoading]);
-  
+
   // Create ref for executeSearch
   const executeSearchRef = useRef(executeSearch);
-  
+
   // Update the ref when executeSearch changes
   useEffect(() => {
     executeSearchRef.current = executeSearch;
   }, [executeSearch]);
-  
+
   // Process URL params on mount or URL change
   useEffect(() => {
     if (metadataLoading) return;
-    
+
     const params = parseUrlParams(location.search);
-    
+
     let shouldSearch = false;
-    
+
     // Update search query if changed
     if (params.query && params.query !== searchQueryRef.current) {
       setSearchQuery(params.query);
       shouldSearch = true;
     }
-    
+
     // Update page if changed
     if (params.page && params.page !== currentPageRef.current) {
       setCurrentPage(params.page);
       shouldSearch = true;
     }
-    
+
     // Update rows per page if changed
     if (params.rows && params.rows !== rowsPerPageRef.current) {
       setRowsPerPage(params.rows);
       shouldSearch = true;
     }
-    
+
     // Update filters if changed
     if (params.filters) {
       const currentFiltersStr = JSON.stringify(filtersRef.current);
       const newFiltersStr = JSON.stringify(params.filters);
-      
+
       if (currentFiltersStr !== newFiltersStr) {
         setFilters(params.filters);
         shouldSearch = true;
       }
-    } else if (filtersRef.current.genres.length > 0 || 
-               filtersRef.current.authors.length > 0 || 
-               filtersRef.current.deathDateRange.min > 0 || 
-               filtersRef.current.deathDateRange.max < 2000) {
+    } else if (filtersRef.current.genres.length > 0 ||
+      filtersRef.current.authors.length > 0 ||
+      filtersRef.current.deathDateRange.min > 0 ||
+      filtersRef.current.deathDateRange.max < 2000) {
       // Reset filters if URL has no filters but we have active filters
       setFilters(DEFAULT_FILTERS);
       shouldSearch = true;
     }
-    
+
     // Execute search if needed
     if (shouldSearch && params.query) {
       executeSearchRef.current(
@@ -318,7 +333,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
       );
     }
   }, [location.search, metadataLoading]);
-  
+
   // Update URL and trigger search
   const updateUrlAndSearch = useCallback((params: {
     query?: string,
@@ -333,45 +348,45 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
       rows: params.rows !== undefined ? params.rows : rowsPerPageRef.current,
       filters: params.filters !== undefined ? params.filters : filtersRef.current
     });
-    
+
     // Update URL without reloading the page
     navigate(`?${urlParams}`, { replace: false });
   }, [navigate]);
-  
+
   // Handle search form submission
   const handleSearch = useCallback((query: string) => {
     if (!query.trim()) return;
-    
+
     updateUrlAndSearch({ query, page: 1 }); // Reset to page 1 for new searches
   }, [updateUrlAndSearch]);
-  
+
   // Handle page change
   const handlePageChange = useCallback((page: number) => {
     if (page === currentPageRef.current) return;
-    
+
     updateUrlAndSearch({ page });
   }, [updateUrlAndSearch]);
-  
+
   // Handle rows per page change
   const handleRowsPerPageChange = useCallback((rows: number) => {
     if (rows === rowsPerPageRef.current) return;
-    
+
     updateUrlAndSearch({ rows, page: 1 }); // Reset to page 1 when changing rows
   }, [updateUrlAndSearch]);
-  
+
   // Apply filters
   const applyFilters = useCallback((newFilters: FilterState) => {
     updateUrlAndSearch({ filters: newFilters, page: 1 }); // Reset to page 1 when applying filters
   }, [updateUrlAndSearch]);
-  
+
   // Reset filters
   const resetFilters = useCallback(() => {
-    updateUrlAndSearch({ 
+    updateUrlAndSearch({
       filters: DEFAULT_FILTERS,
       page: 1
     });
   }, [updateUrlAndSearch]);
-  
+
   // Context value
   const contextValue = useMemo(() => ({
     searchQuery,
@@ -379,7 +394,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     results,
     isLoading,
     totalResults,
-    currentPage, 
+    currentPage,
     rowsPerPage,
     filters,
     setFilters,
@@ -404,7 +419,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     resetFilters,
     getFilteredTextIds
   ]);
-  
+
   return (
     <SearchContext.Provider value={contextValue}>
       {children}
