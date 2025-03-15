@@ -15,6 +15,14 @@ const AboutPage: React.FC = () => {
             The texts have been culled from the Open Islamicate Texts Initiative (<a href="https://openiti.org/" target="_blank" rel="noopener noreferrer">OITI</a>) and <a href='https://shamela.ws/' target="_blank" rel="noopener noreferrer">al-Maktaba al-Shāmila</a>. I have standardized them and did a significant amount of cleaning, but the corpus is still in its first iteration.
           </p>
         </section>
+        <section className="mb-8">
+          <h2 className="text-xl font-semibold mb-4">How to Use:</h2>
+          <ul className="list-disc pl-6 space-y-2">
+            <li>Search a word or phrase, and it will automatically include the following proclitics: ب، ف، و، ل. e.g, if you search for التصوف it will include: بالتصوف، للتصوف، etc.</li>
+            <li>If you want an exact search, you can check the "E" box on the Searchbar, which will search for an exact term.</li>
+            <li>Note that the search does not include BOTH definite and definite, e.g. if you search for التصوف it will not include تصوف</li>
+          </ul>
+        </section>
 
         <section className="mb-8">
           <h2 className="text-xl font-semibold mb-4">Features</h2>

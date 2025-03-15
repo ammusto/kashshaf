@@ -108,8 +108,8 @@ const FiltersPanel: React.FC = () => {
   }, [draftFilters, filters]);
 
   return (
-    <div className="mt-4 border rounded-lg p-4">
-      <div className="flex justify-between items-center mb-4">
+    <div className={`mt-4 ${isExpanded ? 'border rounded-lg p-4' : ''}`}>
+      <div className={`flex justify-between items-center ${isExpanded ? 'mb-4' : ''}`}>
         <div className="flex gap-2">
           {isExpanded && (
             <>
@@ -143,7 +143,6 @@ const FiltersPanel: React.FC = () => {
           onClick={() => setIsExpanded(!isExpanded)}
           type="button"
         >
-
           <h3 className="text-lg font-semibold">
             {hasActiveFilters && (
               <span className="mx-1 bg-indigo-100 text-indigo-800 text-xs font-semibold px-2.5 py-0.5 rounded">
@@ -156,7 +155,6 @@ const FiltersPanel: React.FC = () => {
               </span>
             )}
             Filtered search
-
           </h3>
           <span className="ml-2">
             {isExpanded ? (
@@ -190,12 +188,10 @@ const FiltersPanel: React.FC = () => {
             )}
           </span>
         </button>
-
-
       </div>
 
       {isExpanded && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
           <GenreFilter
             allGenres={allGenres}
             selectedGenres={draftFilters.genres}
