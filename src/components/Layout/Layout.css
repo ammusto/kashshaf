@@ -15,7 +15,6 @@ header {
   max-width: 1200px;
   margin: auto;
   margin-top: 50px;
-
 }
 
 nav {
@@ -25,16 +24,21 @@ nav {
   width: 100%;
   background-color: white;
   z-index: 1000;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-
 nav ul {
+  display: flex;
   justify-content: center;
+  list-style: none;
+  padding: 0;
+  margin: 0;
 }
 
 nav ul a {
   text-decoration: none;
   color: black;
+  padding: 0 15px;
 }
 
 nav ul a:hover {
@@ -42,7 +46,7 @@ nav ul a:hover {
 }
 
 nav li {
-  padding: 0px 10px;
+  padding: 0;
   height: 40px;
   display: flex;
   align-items: center;
@@ -80,72 +84,61 @@ footer {
 }
 
 .nav-container {
-  padding: .5rem;
-  padding-left: 0rem;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  width: 100%;
   height: 3rem;
-  margin: 0;
-}
-
-.nav-center {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin: 0 auto;
-  padding-right: 175px;
-
+  width: 100%;
+  padding: 0 2rem;
 }
 
 .nav-left {
+  position: absolute;
+  left: 2rem;
   display: flex;
   align-items: center;
-  width: 175px;
-  text-align: center;
 }
 
-
-@media (max-width: 768px) {
-  .nav-container {
-    flex-direction: row;
-    align-items: flex-start;
-
-  }
-
-  .nav-left {
-    width: 30%;
-  }
-
-  .nav-center {
-    width: 60% !important;
-    padding-right: 30%;
-  }
-
-  .nav-left {
-    width: 50%;
-  }
-
-  .nav-center {
-    width: 50%;
-    padding-right: 5%;
-    justify-content: right;
-  }
-
-}
-
-@media (max-width: 468px) {
-  .nav-container {
-    flex-direction: row;
-    align-items: flex-start;
-
-  }
-
+.nav-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .header-logo {
   font-size: 2rem;
   font-weight: bold;
-  padding-left: 2rem;
+}
+
+@media (max-width: 768px) {
+  .nav-container {
+    padding: 0 1rem;
+    justify-content: center;
+  }
+
+  .nav-center {
+    position: static;
+    transform: none;
+  }
+
+  .nav-left {
+    position: absolute;
+    left: 1rem;
+  }
+}
+
+@media (max-width: 468px) {
+  .nav-container {
+    padding: 0 0.5rem;
+  }
+  
+  .nav-left {
+    left: 0.5rem;
+  }
+  
+  .header-logo {
+    font-size: 1.5rem;
+  }
 }

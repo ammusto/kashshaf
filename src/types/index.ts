@@ -67,6 +67,7 @@ export interface SearchParams {
   page: number;
   rows: number;
   filters: FilterState;
+  exact?: boolean;
 }
 
 // OpenSearch inner hit
@@ -80,8 +81,10 @@ interface OpenSearchInnerHit {
 interface OpenSearchHit {
   _id: string;
   _source: TextDocument;
+  _score: number;
   highlight?: {
-    page_content: string[];
+    'page_content.proclitic'?: string[];
+    'page_content'?: string[];
   };
   inner_hits?: {
     page_matches?: {
@@ -113,6 +116,7 @@ export interface AppState {
   currentPage: number;
   rowsPerPage: number;
   filters: FilterState;
+  isExactSearch: boolean;
   textsMetadata: Map<number, Text>;
   authorsMetadata: Map<number, Author>;
 }

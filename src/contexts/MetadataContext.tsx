@@ -42,7 +42,6 @@ export const MetadataProvider: React.FC<MetadataProviderProps> = ({ children }) 
         if (texts.size === 0 || authors.size === 0) {
           setError('No metadata loaded. Please check the Excel files in the public folder.');
         } else {
-          console.log(`Successfully loaded ${texts.size} texts and ${authors.size} authors`);
           setTextsMetadata(texts);
           setAuthorsMetadata(authors);
           setError(null);

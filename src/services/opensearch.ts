@@ -1,4 +1,4 @@
-import { API_USER, API_PASS, API_URL, INDEX, MAX_RESULT_WINDOW } from '../config/api';
+import { API_USER, API_PASS, API_URL, INDEX, MAX_RESULT_WINDOW, MAX_EXPORT_RESULTS } from '../config/api';
 import { SearchResult } from '../types';
 import { processHighlight } from '../utils/arabicNormalization';
 
@@ -17,7 +17,8 @@ interface OpenSearchResponse {
       };
       _score: number;
       highlight?: {
-        'page_content.proclitic': string[];
+        'page_content.proclitic'?: string[];
+        'page_content'?: string[];
       };
     }>;
     total: {
@@ -35,13 +36,17 @@ export const searchTexts = async (
   page: number = 1,
   size: number = 50,
   textIds: number[] = [],
-  pagesToLoad: number[] = []
+  pagesToLoad: number[] = [],
+  isExact: boolean = false
 ): Promise<{ hits: SearchResult[], total: number }> => {
   try {
     // Check if we've reached the max result window
     const from = (page - 1) * size;
-    if (from >= MAX_RESULT_WINDOW) {
-      throw new Error(`Search results limited to first ${MAX_RESULT_WINDOW} results`);
+    
+    // Limit 'from' parameter to ensure we don't exceed the max result window
+    const adjustedFrom = Math.min(from, MAX_RESULT_WINDOW - size);
+    if (from !== adjustedFrom && from >= MAX_RESULT_WINDOW) {
+      console.warn(`Adjusted 'from' position from ${from} to ${adjustedFrom} to stay within MAX_RESULT_WINDOW limit`);
     }
 
     // Build filters
@@ -57,17 +62,20 @@ export const searchTexts = async (
     // Determine if query is single word or phrase
     const trimmedQuery = query.trim();
 
+    // Determine which field to search based on isExact flag
+    const searchField = isExact ? "page_content" : "page_content.proclitic";
 
     // Build OpenSearch query
     const opensearchQuery = {
-      from,
+      from: adjustedFrom,
       size,
+      track_total_hits: true, // Ensure total hits count is accurate even beyond 10k
       query: {
         bool: {
           must: [
             {
               match_phrase: {
-                "page_content.proclitic": trimmedQuery
+                [searchField]: trimmedQuery
               }
             }
           ],
@@ -81,7 +89,7 @@ export const searchTexts = async (
       highlight: {
         type: 'fvh',
         fields: {
-          "page_content.proclitic": {
+          [searchField]: {
             number_of_fragments: 10,
             fragment_size: 150,
             pre_tags: ['<em>'],
@@ -92,7 +100,7 @@ export const searchTexts = async (
         // Force exact match for highlighting
         highlight_query: {
           match_phrase: {
-            "page_content.proclitic": trimmedQuery
+            [searchField]: trimmedQuery
           }
         }
       }
@@ -129,9 +137,12 @@ export const searchTexts = async (
 
     data.hits.hits.forEach(hit => {
       const source = hit._source;
-      const mainHighlights = hit.highlight?.['page_content.proclitic'] || [];
+      
+      // Get highlights from the appropriate field based on the search mode
+      const highlightField = isExact ? 'page_content' : 'page_content.proclitic';
+      const mainHighlights = hit.highlight?.[highlightField] || [];
 
-      // Get inner hits (all matches for this document)
+      // Get all highlights
       const allHighlights = [...mainHighlights];
 
       // Process all highlights
@@ -168,11 +179,12 @@ export const searchTexts = async (
  */
 export const getAllResultsForExport = async (
   query: string,
-  textIds: number[] = []
+  textIds: number[] = [],
+  isExact: boolean = false
 ): Promise<SearchResult[]> => {
   try {
-    // Use a reasonable limit for exports
-    const MAX_EXPORT_RESULTS = 2000;
+    // Use the MAX_EXPORT_RESULTS constant from config
+    // MAX_EXPORT_RESULTS is set to 2000 in config/api.ts
 
     // This is similar to searchTexts but with a larger size limit
     const response = await searchTexts(
@@ -180,7 +192,8 @@ export const getAllResultsForExport = async (
       1,
       MAX_EXPORT_RESULTS,
       textIds,
-      []
+      [],
+      isExact
     );
 
     return response.hits;

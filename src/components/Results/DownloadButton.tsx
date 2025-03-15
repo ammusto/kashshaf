@@ -17,7 +17,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
 }) => {
   const [isExporting, setIsExporting] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { getFilteredTextIds } = useSearch();
+  const { getFilteredTextIds, isExactSearch } = useSearch();
   
   // Handle export
   const handleExport = async (format: 'csv' | 'xlsx') => {
@@ -29,7 +29,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
       const textIds = getFilteredTextIds();
       
       // Get all results (up to the export limit)
-      const allResults = await getAllResultsForExport(query, textIds);
+      const allResults = await getAllResultsForExport(query, textIds, isExactSearch);
       
       // Export based on format
       if (format === 'csv') {

@@ -70,7 +70,6 @@ const Pagination: React.FC<PaginationProps> = ({
   
   // Handle page change with logging to help debug
   const handlePageChange = (page: number) => {
-    console.log(`Pagination: Changing from page ${currentPage} to page ${page}`);
     onPageChange(page);
   };
   

@@ -11,7 +11,8 @@ const MainContent: React.FC = () => {
   const { 
     searchQuery, 
     isLoading: searchLoading, 
-    handleSearch
+    handleSearch,
+    isExactSearch
   } = useSearch();
 
   return (
@@ -41,6 +42,7 @@ const MainContent: React.FC = () => {
               query={searchQuery}
               onSearch={handleSearch}
               isLoading={searchLoading}
+              isExact={isExactSearch}
             />
             
             <FiltersPanel />
