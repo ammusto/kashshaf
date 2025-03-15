@@ -2,84 +2,92 @@
 
 /* Target all result rows for consistent spacing */
 .search-results-table tr {
-    margin-bottom: 0;
-    border-bottom: none;
-  }
-  
-  .search-results-table tr:nth-child(even) {
-    background-color: rgba(249, 250, 251, 0.5);
-  }
-  
+  margin-bottom: 0;
+  border-bottom: none;
+}
 
-  /* Adjust the spacing between highlight matches */
-  .highlight-row {
-    margin-bottom: 0.25rem !important;
-  }
-  .highlight-row:last-child {
-    margin-bottom: 0 !important;
-  }
-  
-  /* Enhanced tooltip styling */
-  .text-info-tooltip {
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s, visibility 0.2s;
-    z-index: 50;
-    width: auto !important;
-    max-width: 400px !important;
-    min-width: 300px !important;
-    word-wrap: break-word;
-    white-space: normal;
-    text-overflow: ellipsis;
-    overflow: visible;
-  }
-  
-  .text-title:hover + .text-info-tooltip,
-  .text-info-tooltip:hover {
-    opacity: 1;
-    visibility: visible;
-  }
-  
-  /* Tooltip content styling */
-  .tooltip-content {
-    overflow-wrap: break-word;
-    word-wrap: break-word;
-    word-break: break-word;
-    hyphens: auto;
-  }
-  
-  /* Ensure vertical alignment in the grid cells */
-  .search-result-text .grid {
-    display: grid;
-    align-items: center; /* This ensures vertical centering */
-  }
-  
-  .search-result-text .grid > div {
-    display: flex;
-    align-items: center;
-    min-height: 1.5em; /* Ensure consistent height */
-  }
-  
-  /* Make sure the pre and post parts align properly */
-  .search-result-text .grid > div:first-child {
-    justify-content: flex-start;
-  }
-  
+.search-results-table tr:nth-child(even) {
+  background-color: rgba(249, 250, 251, 0.5);
+}
 
-  
-  /* Make the matching text perfectly centered */
-  .search-result-text .grid > div.text-center {
-    justify-content: center;
-    padding: 0 0.25rem;
-  }
 
-  .tooltip {
+/* Adjust the spacing between highlight matches */
+.highlight-row {
+  margin-bottom: 0.25rem !important;
+}
+
+.highlight-row:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* Enhanced tooltip styling */
+.text-info-tooltip {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+  z-index: 50;
+  width: auto !important;
+  max-width: 400px !important;
+  min-width: 300px !important;
+  word-wrap: break-word;
+  white-space: normal;
+  text-overflow: ellipsis;
+  overflow: visible;
+}
+
+.text-title:hover+.text-info-tooltip,
+.text-info-tooltip:hover {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Tooltip content styling */
+.tooltip-content {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+/* Ensure vertical alignment in the grid cells */
+.search-result-text .grid {
+  display: grid;
+  align-items: center;
+  /* This ensures vertical centering */
+}
+
+.search-result-text .grid>div {
+  display: flex;
+  align-items: center;
+  min-height: 1.5em;
+  /* Ensure consistent height */
+}
+
+/* Make sure the pre and post parts align properly */
+.search-result-text .grid>div:first-child {
+  justify-content: flex-start;
+}
+
+
+
+/* Make the matching text perfectly centered */
+.search-result-text .grid>div.text-center {
+  justify-content: center;
+  padding: 0 0.25rem;
+}
+
+.tooltip {
   position: fixed !important;
   z-index: 1000 !important;
-  pointer-events: none; /* Prevents the tooltip from interfering with mouse events */
+  pointer-events: none;
+  /* Prevents the tooltip from interfering with mouse events */
 }
 
 .search-results-table,
 .overflow-x-auto {
   overflow: visible !important;
+}
+
+.expanded, .expanded:hover{
+  background-color: rgba(137, 43, 226, 0.068) !important;
 }

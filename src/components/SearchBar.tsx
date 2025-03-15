@@ -22,7 +22,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ query, onSearch, isLoading }) => 
   };
 
   return (
-    <div className="mb-6" >
+    <div className="mb-6">
       <form onSubmit={handleSubmit} className="relative">
         <div className="flex">
           <input
@@ -38,7 +38,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ query, onSearch, isLoading }) => 
             type="submit"
             disabled={isLoading || !inputValue.trim()}
             className={`
-    ml-2 px-6 h-12 rounded-lg text-white font-medium mr-2 w-[150px]
+              ml-2 px-6 h-12 rounded-lg text-white font-medium mr-2 w-[150px]
               ${isLoading || !inputValue.trim()
                 ? 'bg-gray-400 cursor-not-allowed'
                 : 'bg-gray-600 hover:bg-gray-400'

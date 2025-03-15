@@ -88,7 +88,7 @@ export const searchTexts = async (
         fields: {
           [searchField]: {
             number_of_fragments: 10,
-            fragment_size: 150,
+            fragment_size: 500,
             pre_tags: ['<em>'],
             post_tags: ['</em>'],
             require_field_match: true

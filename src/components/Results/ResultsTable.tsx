@@ -10,7 +10,6 @@ interface ResultsTableProps {
 const ResultsTable: React.FC<ResultsTableProps> = ({ results, isLoading }) => {
   return (
     <div className="overflow-x-auto" dir="rtl">
-      {/* Remove divide-y class to eliminate borders */}
       <table className="min-w-full text-xl">
         <thead className="">
           <tr>
@@ -22,13 +21,12 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, isLoading }) => {
             </th>
             <th
               scope="col"
-              className="px-6 text-xs font-medium text-gray-500  tracking-wider w-5/6 text-center"
+              className="px-6 text-xs font-medium text-gray-500 tracking-wider w-5/6 text-center"
             >
-                Result
+              Result
             </th>
           </tr>
         </thead>
-        {/* Remove divide-y class to eliminate borders between rows */}
         <tbody className="bg-white">
           {isLoading ? (
             // Loading placeholder rows
@@ -47,6 +45,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ results, isLoading }) => {
               </tr>
             ))
           ) : (
+            // Each result gets its own row
             results.map((result) => (
               <ResultRow key={result.id} result={result} />
             ))
