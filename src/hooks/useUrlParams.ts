@@ -1,90 +1,86 @@
-import queryString from 'query-string';
 import { FilterState, SearchParams } from '../types';
 
 /**
  * Parse URL search parameters into app state
  */
 export const parseUrlParams = (urlSearch: string): Partial<SearchParams> => {
-  const parsed = queryString.parse(urlSearch);
-
+  // Use URLSearchParams instead of queryString for better browser compatibility
+  const urlParams = new URLSearchParams(urlSearch);
+  
   const params: Partial<SearchParams> = {};
-
+  
   // Parse search query
-  if (typeof parsed.q === 'string') {
-    params.query = parsed.q;
+  const queryParam = urlParams.get('q');
+  if (queryParam) {
+    params.query = queryParam;
   }
-
-  // Parse exact search parameter
-  if (typeof parsed.exact === 'string') {
-    params.exact = parsed.exact === 'true';
-  }
-
+  
   // Parse page number
-  if (typeof parsed.page === 'string') {
-    const pageNum = parseInt(parsed.page, 10);
+  const pageParam = urlParams.get('page');
+  if (pageParam) {
+    const pageNum = parseInt(pageParam, 10);
     if (!isNaN(pageNum) && pageNum > 0) {
       params.page = pageNum;
     }
   }
-
+  
   // Parse rows per page
-  if (typeof parsed.rows === 'string') {
-    const rowsNum = parseInt(parsed.rows, 10);
+  const rowsParam = urlParams.get('rows');
+  if (rowsParam) {
+    const rowsNum = parseInt(rowsParam, 10);
     if (!isNaN(rowsNum) && [25, 50, 75, 100].includes(rowsNum)) {
       params.rows = rowsNum;
     }
   }
-
+  
   // Parse filters
   const filters: FilterState = {
     genres: [],
     authors: [],
     deathDateRange: { min: 0, max: 2000 }
   };
-
+  
   // Parse genre filters
-  if (typeof parsed.genres === 'string') {
-    filters.genres = parsed.genres.split(',').filter(Boolean);
-  } else if (Array.isArray(parsed.genres)) {
-    filters.genres = parsed.genres.filter((g): g is string => typeof g === 'string');
+  const genresParam = urlParams.get('genres');
+  if (genresParam) {
+    filters.genres = genresParam.split(',').filter(Boolean);
   }
-
+  
   // Parse author filters
-  if (typeof parsed.authors === 'string') {
-    filters.authors = parsed.authors
+  const authorsParam = urlParams.get('authors');
+  if (authorsParam) {
+    filters.authors = authorsParam
       .split(',')
       .map(id => parseInt(id, 10))
       .filter(id => !isNaN(id));
-  } else if (Array.isArray(parsed.authors)) {
-    filters.authors = parsed.authors
-      .map(id => typeof id === 'string' ? parseInt(id, 10) : NaN)
-      .filter(id => !isNaN(id));
   }
-
+  
   // Parse death date range
-  if (typeof parsed.death_min === 'string') {
-    const min = parseInt(parsed.death_min, 10);
+  const deathMinParam = urlParams.get('death_min');
+  if (deathMinParam) {
+    const min = parseInt(deathMinParam, 10);
     if (!isNaN(min)) {
       filters.deathDateRange.min = min;
     }
   }
-
-  if (typeof parsed.death_max === 'string') {
-    const max = parseInt(parsed.death_max, 10);
+  
+  const deathMaxParam = urlParams.get('death_max');
+  if (deathMaxParam) {
+    const max = parseInt(deathMaxParam, 10);
     if (!isNaN(max)) {
       filters.deathDateRange.max = max;
     }
   }
-
+  
   if (
-    filters.genres.length > 0 ||
-    filters.authors.length > 0 ||
-    filters.deathDateRange.min > 0 ||
+    filters.genres.length > 0 || 
+    filters.authors.length > 0 || 
+    filters.deathDateRange.min > 0 || 
     filters.deathDateRange.max < 2000
   ) {
     params.filters = filters;
   }
-
+  
   return params;
 };
 
@@ -92,47 +88,44 @@ export const parseUrlParams = (urlSearch: string): Partial<SearchParams> => {
  * Build URL search parameters from app state
  */
 export const buildUrlParams = (params: Partial<SearchParams>): string => {
-  const urlParams: Record<string, any> = {};
-
+  const urlParams = new URLSearchParams();
+  
   // Add search query
   if (params.query) {
-    urlParams.q = params.query;
+    urlParams.set('q', params.query);
   }
-
-  // ALWAYS include exact search parameter - explicitly convert to string
-  urlParams.exact = (params.exact === true).toString();
-
-  // Add page number - always include it for consistency
-  if (params.page) {
-    urlParams.page = params.page.toString();
+  
+  // Add page number
+  if (params.page && params.page > 1) {
+    urlParams.set('page', params.page.toString());
   }
-
+  
   // Add rows per page
   if (params.rows && params.rows !== 50) {
-    urlParams.rows = params.rows.toString();
+    urlParams.set('rows', params.rows.toString());
   }
-
+  
   // Add filters
   if (params.filters) {
     // Add genre filters
     if (params.filters.genres.length > 0) {
-      urlParams.genres = params.filters.genres.join(',');
+      urlParams.set('genres', params.filters.genres.join(','));
     }
-
+    
     // Add author filters
     if (params.filters.authors.length > 0) {
-      urlParams.authors = params.filters.authors.join(',');
+      urlParams.set('authors', params.filters.authors.join(','));
     }
-
+    
     // Add death date range
     if (params.filters.deathDateRange.min > 0) {
-      urlParams.death_min = params.filters.deathDateRange.min.toString();
+      urlParams.set('death_min', params.filters.deathDateRange.min.toString());
     }
-
+    
     if (params.filters.deathDateRange.max < 2000) {
-      urlParams.death_max = params.filters.deathDateRange.max.toString();
+      urlParams.set('death_max', params.filters.deathDateRange.max.toString());
     }
   }
-
-  return queryString.stringify(urlParams);
+  
+  return urlParams.toString();
 };

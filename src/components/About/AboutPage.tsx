@@ -16,24 +16,11 @@ const AboutPage: React.FC = () => {
           </p>
         </section>
         <section className="mb-8">
-          <h2 className="text-xl font-semibold mb-4">How to Use:</h2>
+          <h2 className="text-xl font-semibold mb-4">Notes on Use:</h2>
           <ul className="list-disc pl-6 space-y-2">
-            <li>Search a word or phrase, and it will automatically include the following proclitics: ب، ف، و، ل. e.g, if you search for التصوف it will include: بالتصوف، للتصوف، etc.</li>
-            <li>If you want an exact search, you can check the "E" box on the Searchbar, which will search for an exact term.</li>
+            <li>Search a word or phrase, and it will automatically include the following proclitics: ب، ف، و، ل، ك. e.g, if you search for التصوف it will include: بالتصوف، للتصوف، etc.</li>
             <li>Note that the search does not include BOTH definite and definite, e.g. if you search for التصوف it will not include تصوف</li>
-          </ul>
-        </section>
-
-        <section className="mb-8">
-          <h2 className="text-xl font-semibold mb-4">Features</h2>
-          <ul className="list-disc pl-6 space-y-2">
-            <li>Searches include the following proclitics: ب، ف، و، ل</li>
-            <li>Full-text search</li>
-            <li>Filter search results by genre, author, and death date</li>
-            <li>Highlighted search matches with surrounding context</li>
-            <li>Export search results to CSV or Excel formats</li>
-            <li>Specialized Arabic text processing with respect for diacritics and classical orthography</li>
-            <li>Modern, responsive interface designed for both desktop and mobile devices</li>
+            <li>Downloading search data will only include the first 5,000 results.</li>
           </ul>
         </section>
       </div>

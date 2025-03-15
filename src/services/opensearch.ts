@@ -157,7 +157,7 @@ export const searchTexts = async (
         page_id: source.page_id,
         highlights: processedHighlights,
         score: hit._score,
-        uri: source.uri // Make sure uri is included in the result
+        uri: source.uri 
       });
     });
 

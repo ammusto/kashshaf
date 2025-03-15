@@ -1,23 +1,33 @@
 import * as XLSX from 'xlsx';
-import { SearchResult } from '../types';
+import { SearchResult, Text, Author } from '../types';
 
 /**
- * Format search results for export
+ * Format search results for export with metadata lookup
  */
 const formatResultsForExport = (
   results: SearchResult[],
-  query: string
+  query: string,
+  textsMetadata: Map<number, Text>,
+  authorsMetadata: Map<number, Author>
 ): Array<Record<string, string>> => {
   return results.map(result => {
+    // Look up text and author information from metadata
+    const text = textsMetadata.get(result.text_id);
+    const author = text ? authorsMetadata.get(text.au_id) : undefined;
+    
+    // Use metadata for title and author name
+    const title = text?.title || result.text_title || `Text ID: ${result.text_id}`;
+    const authorName = author?.name || result.author_name || `Author ID: ${text?.au_id || 'Unknown'}`;
+    
     // Combine all highlights into a single context
     const context = result.highlights.map(h => {
       return `${h.pre} ${h.match} ${h.post}`;
     }).join(' ... ');
     
     return {
-      'Text': result.text_title || '',
-      'Author': result.author_name || '',
-      'Location': `${result.vol}:${result.page_num}`,
+      'Text': title,
+      'Author': authorName,
+      'Location': `vol. ${result.vol}, pg. ${result.page_num}`,
       'Context': context,
       'Search Term': query
     };
@@ -30,9 +40,11 @@ const formatResultsForExport = (
 export const exportResultsAsCsv = (
   results: SearchResult[],
   query: string,
-  filename = 'kashshaf-results.csv'
+  textsMetadata: Map<number, Text>,
+  authorsMetadata: Map<number, Author>,
+  filename = `kashshaf-results-${query}.csv`
 ): void => {
-  const data = formatResultsForExport(results, query);
+  const data = formatResultsForExport(results, query, textsMetadata, authorsMetadata);
   
   // Create a worksheet
   const worksheet = XLSX.utils.json_to_sheet(data);
@@ -51,9 +63,11 @@ export const exportResultsAsCsv = (
 export const exportResultsAsXlsx = (
   results: SearchResult[],
   query: string,
-  filename = 'kashshaf-results.xlsx'
+  textsMetadata: Map<number, Text>,
+  authorsMetadata: Map<number, Author>,
+  filename = `kashshaf-results-${query}.xlsx`
 ): void => {
-  const data = formatResultsForExport(results, query);
+  const data = formatResultsForExport(results, query, textsMetadata, authorsMetadata);
   
   // Create a worksheet
   const worksheet = XLSX.utils.json_to_sheet(data);

@@ -3,6 +3,7 @@ import { FilterState } from '../../types';
 import { getAllResultsForExport } from '../../services/opensearch';
 import { exportResultsAsCsv, exportResultsAsXlsx } from '../../utils/exportData';
 import { useSearch } from '../../contexts/SearchContext';
+import { useMetadata } from '../../contexts/MetadataContext';
 
 interface DownloadButtonProps {
   query: string;
@@ -18,6 +19,7 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
   const [isExporting, setIsExporting] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { getFilteredTextIds } = useSearch();
+  const { textsMetadata, authorsMetadata } = useMetadata();
   
   // Handle export
   const handleExport = async (format: 'csv' | 'xlsx') => {
@@ -31,11 +33,11 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
       // Get all results (up to the export limit)
       const allResults = await getAllResultsForExport(query, textIds);
       
-      // Export based on format
+      // Export based on format - pass metadata for accurate title/author information
       if (format === 'csv') {
-        exportResultsAsCsv(allResults, query);
+        exportResultsAsCsv(allResults, query, textsMetadata, authorsMetadata);
       } else {
-        exportResultsAsXlsx(allResults, query);
+        exportResultsAsXlsx(allResults, query, textsMetadata, authorsMetadata);
       }
     } catch (error) {
       console.error('Failed to export results:', error);
@@ -114,14 +116,14 @@ const DownloadButton: React.FC<DownloadButtonProps> = ({
           <div className="py-1" role="menu" aria-orientation="vertical">
             <button
               onClick={() => handleExport('csv')}
-              className="w-full text-right px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
               role="menuitem"
             >
               CSV
             </button>
             <button
               onClick={() => handleExport('xlsx')}
-              className="w-full text-right px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
               role="menuitem"
             >
               Excel
