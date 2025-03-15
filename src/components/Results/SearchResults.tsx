@@ -34,13 +34,13 @@ const SearchResults: React.FC = () => {
     <div className="bg-white rounded-lg shadow-md p-6">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-semibold">
-          {totalResults} نتيجة لـ "{searchQuery}"
+          {totalResults} Results for "{searchQuery}"
         </h2>
         
         <div className="flex items-center gap-4">
           <div className="flex items-center">
             <label htmlFor="rows-select" className="mr-2">
-              عرض:
+              Show:
             </label>
             <select
               id="rows-select"

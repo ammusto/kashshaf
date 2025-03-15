@@ -1,7 +1,8 @@
 import React from 'react';
-import { BrowserRouter as Router } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './components/Layout/Header';
 import MainContent from './components/Layout/MainContent';
+import AboutPage from './components/About/AboutPage';
 import Footer from './components/Layout/Footer';
 import { MetadataProvider } from './contexts/MetadataContext';
 import { SearchProvider } from './contexts/SearchContext';
@@ -12,9 +13,12 @@ const App: React.FC = () => {
     <Router>
       <MetadataProvider>
         <SearchProvider>
-          <div className="min-h-screen  flex flex-col">
+          <div className="min-h-screen flex flex-col">
             <Header />
-            <MainContent />
+            <Routes>
+              <Route path="/" element={<MainContent />} />
+              <Route path="/about" element={<AboutPage />} />
+            </Routes>
             <Footer />
           </div>
         </SearchProvider>

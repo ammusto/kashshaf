@@ -1,10 +1,3 @@
-/**
- * Normalizes Arabic text by:
- * - Removing diacritics (tashkeel)
- * - Normalizing hamzas (أ -> ا, ؤ -> و, etc.)
- * - Normalizing alifs (آ -> ا, إ -> ا, etc.)
- * - Normalizing tatweel (kashida)
- */
 export const normalizeArabicText = (text: string): string => {
   if (!text) return '';
   
@@ -22,10 +15,6 @@ export const normalizeArabicText = (text: string): string => {
   normalized = normalized
     .replace(/[ىی]/g, 'ي');
   
-  // Normalize taa marbouta
-  normalized = normalized
-    .replace(/ة/g, 'ه');
-  
   // Remove tatweel (kashida)
   normalized = normalized
     .replace(/ـ/g, '');
@@ -36,6 +25,7 @@ export const normalizeArabicText = (text: string): string => {
 /**
  * Processes OpenSearch highlighted text
  * Splits the highlight into pre, match, post segments
+ * Removes text in parentheses that contains digits
  */
 export const processHighlight = (highlight: string): { pre: string; match: string; post: string } => {
   const matchStart = '<em>';
@@ -53,9 +43,38 @@ export const processHighlight = (highlight: string): { pre: string; match: strin
   }
   
   // Clean all text of any other HTML tags
-  const cleanPre = highlight.substring(0, startIdx).replace(/<[^>]*>?/gm, '');
-  const cleanMatch = highlight.substring(startIdx + matchStart.length, endIdx).replace(/<[^>]*>?/gm, '');
-  const cleanPost = highlight.substring(endIdx + matchEnd.length).replace(/<[^>]*>?/gm, '');
+  let cleanPre = highlight.substring(0, startIdx).replace(/<[^>]*>?/gm, '');
+  let cleanMatch = highlight.substring(startIdx + matchStart.length, endIdx).replace(/<[^>]*>?/gm, '');
+  let cleanPost = highlight.substring(endIdx + matchEnd.length).replace(/<[^>]*>?/gm, '');
+  
+  // Remove content in parentheses that contains digits (both Western and Arabic numerals)
+  // Arabic numerals: ٠١٢٣٤٥٦٧٨٩ (Unicode range \u0660-\u0669)
+  const digitParenthesesRegex = /\([^)]*[\d٠-٩][^)]*\)/g;
+  cleanPre = cleanPre.replace(digitParenthesesRegex, '');
+  cleanMatch = cleanMatch.replace(digitParenthesesRegex, '');
+  cleanPost = cleanPost.replace(digitParenthesesRegex, '');
+  
+  // Remove standalone numbers (Western or Arabic digits) that are over 3 digits in length
+  // This regex matches:
+  // 1. Numbers with spaces or punctuation around them
+  // 2. Numbers at the beginning or end of text
+  // 3. Only numbers that are 4 or more digits long
+  const standaloneNumberRegex = /(\s|^)[\d٠-٩]{4,}(\s|$|\.|\,|\;|\:)/g;
+  
+  // Replace with just the space(s) that were captured (to maintain spacing)
+  cleanPre = cleanPre.replace(standaloneNumberRegex, '$1 $2').replace(/\s+/g, ' ');
+  cleanMatch = cleanMatch.replace(standaloneNumberRegex, '$1 $2').replace(/\s+/g, ' ');
+  cleanPost = cleanPost.replace(standaloneNumberRegex, '$1 $2').replace(/\s+/g, ' ');
+  
+  // Remove all percentage symbols
+  cleanPre = cleanPre.replace(/\%/g, '');
+  cleanMatch = cleanMatch.replace(/\%/g, '');
+  cleanPost = cleanPost.replace(/\%/g, '');
+  
+  // Clean up any double spaces that might be left after removing content
+  cleanPre = cleanPre.replace(/\s+/g, ' ').trim();
+  cleanMatch = cleanMatch.replace(/\s+/g, ' ').trim();
+  cleanPost = cleanPost.replace(/\s+/g, ' ').trim();
   
   return {
     pre: cleanPre,
@@ -63,7 +82,6 @@ export const processHighlight = (highlight: string): { pre: string; match: strin
     post: cleanPost
   };
 };
-
 /**
  * Creates an OpenSearch query string with proper Arabic normalization
  */

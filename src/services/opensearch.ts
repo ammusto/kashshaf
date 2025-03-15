@@ -18,7 +18,7 @@ interface OpenSearchResponse {
       };
       _score: number;
       highlight?: {
-        page_content: string[];
+        'page_content.proclitic': string[];
       };
     }>;
     total: {
@@ -62,7 +62,7 @@ export const searchTexts = async (
     // Build query based on whether it's a phrase or single word
     const queryClause = {
       match_phrase: {
-        page_content: trimmedQuery
+        "page_content.proclitic": trimmedQuery
       }
     };
 
@@ -75,7 +75,7 @@ export const searchTexts = async (
           must: [
             {
               match_phrase: {
-                page_content: trimmedQuery
+                "page_content.proclitic": trimmedQuery
               }
             }
           ],
@@ -89,7 +89,7 @@ export const searchTexts = async (
       highlight: {
         type: 'fvh',
         fields: {
-          page_content: {
+          "page_content.proclitic": {
             number_of_fragments: 10,
             fragment_size: 150,
             pre_tags: ['<em>'],
@@ -100,13 +100,11 @@ export const searchTexts = async (
         // Force exact match for highlighting
         highlight_query: {
           match_phrase: {
-            page_content: trimmedQuery
+            "page_content.proclitic": trimmedQuery
           }
         }
       }
     };
-    
-
 
     // Set headers with Basic Auth
     const headers: HeadersInit = {
@@ -139,11 +137,10 @@ export const searchTexts = async (
 
     data.hits.hits.forEach(hit => {
       const source = hit._source;
-      const mainHighlights = hit.highlight?.page_content || [];
+      const mainHighlights = hit.highlight?.['page_content.proclitic'] || [];
 
       // Get inner hits (all matches for this document)
       const allHighlights = [...mainHighlights];
-
 
       // Process all highlights
       const processedHighlights = allHighlights.map(highlight => {

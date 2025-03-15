@@ -17,6 +17,14 @@ body {
   line-height: 1.6; /* Adjusted line height for better spacing */
 }
 
+a {
+  text-decoration: underline;
+}
+
+a:hover {
+  text-decoration: none;
+}
+
 /* Custom class for text with diacritics */
 .arabic-text-with-diacritics {
   /* Additional space for diacritics to prevent line height issues */
@@ -27,6 +35,10 @@ body {
 .search-result-text {
   font-family: 'Noto Naskh Arabic', serif;
   line-height: 1.8;
+}
+
+.shadow-md {
+  border:1px solid #f0f0f0;
 }
 
 /* Custom scrollbar for the filter checkboxes */
@@ -79,6 +91,10 @@ body {
 .search-result-highlight {
   color: #dc2626;
   font-weight: bold;
+}
+
+.about {
+  max-width: 1200px;
 }
 
 /* Responsive table styles */

@@ -1,28 +1,34 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 
 const Header: React.FC = () => {
-
   return (
     <header>
       <div className="header-container">
         <nav className="nav-container">
           <div className="nav-left">
-            <li className="header-logo">kashshāf</li>
+            <li className="header-logo">
+              kashshāf
+            </li>
           </div>
           <div className="nav-center">
             <li>
-              <Link to="/">
+              <NavLink
+                to="/"
+                className={({ isActive }) => isActive ? "font-semibold" : ""}
+              >
                 Search
-              </Link>
+              </NavLink>
             </li>
             <li>
-              <Link to="/about">
+              <NavLink
+                to="/about"
+                className={({ isActive }) => isActive ? "font-semibold" : ""}
+              >
                 About
-              </Link>
+              </NavLink>
             </li>
           </div>
-
         </nav>
       </div>
     </header>

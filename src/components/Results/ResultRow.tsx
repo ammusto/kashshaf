@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { SearchResult } from '../../types';
 import { stripDiacriticsExceptShadda, truncateTitle } from '../../utils/textProcessing';
 
@@ -8,11 +8,21 @@ interface ResultRowProps {
 
 const ResultRow: React.FC<ResultRowProps> = ({ result }) => {
   const [showTooltip, setShowTooltip] = useState(false);
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+  const titleRef = useRef<HTMLDivElement>(null);
   
   // Handle clicking on a result row (e.g., to show full context)
   const handleRowClick = () => {
     // Navigate to full text view with context
     // This is a placeholder for future implementation
+  };
+
+  // Track mouse position when hovering over the title
+  const handleMouseMove = (e: React.MouseEvent) => {
+    setMousePosition({
+      x: e.clientX,
+      y: e.clientY
+    });
   };
 
   // Format the text title with death date if available
@@ -39,18 +49,28 @@ const ResultRow: React.FC<ResultRowProps> = ({ result }) => {
       <td className="px-6 whitespace-nowrap">
         {/* Create a relative container for the tooltip */}
         <div className="relative">
-          {/* Show truncated text name with death date - use onMouseEnter/Leave for tooltip */}
+          {/* Show truncated text name with death date */}
           <div 
+            ref={titleRef}
             className="text-lg font-medium text-gray-900 hover:text-indigo-600"
             onMouseEnter={() => setShowTooltip(true)}
+            onMouseMove={handleMouseMove}
             onMouseLeave={() => setShowTooltip(false)}
           >
             {formattedTitle()}
           </div>
           
-          {/* Tooltip with detailed information - fixed sizing */}
+          {/* Tooltip with detailed information - positioned based on mouse coordinates */}
           {showTooltip && (
-            <div className="absolute z-10  mt-1 min-w-[300px] max-w-[600px] px-4 py-3 bg-white rounded-lg shadow-lg border border-gray-200">
+            <div 
+              className="fixed z-50 px-4 py-3 bg-white rounded-lg shadow-lg border border-gray-200"
+              style={{
+                minWidth: '300px',
+                maxWidth: '600px',
+                right: `${Math.max(window.innerWidth - mousePosition.x, 10)}px`,
+                top: `${Math.min(mousePosition.y + 20, window.innerHeight - 200)}px`,
+              }}
+            >
               {/* Display all available text/author information with improved text wrapping */}
               {result.text_title && (
                 <div className="mb-1">
@@ -80,8 +100,8 @@ const ResultRow: React.FC<ResultRowProps> = ({ result }) => {
                 </div>
               )}
               
-              <div className="mt-1 text-xs text-gray-500">
-                المجلد {result.vol}، صفحة {result.page_num}
+              <div className="mt-1 text-sm text-gray-500">
+                vol. {result.vol} pg. {result.page_num}
               </div>
             </div>
           )}
