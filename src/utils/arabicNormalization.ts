@@ -1,6 +1,33 @@
 export const normalizeArabicText = (text: string): string => {
   if (!text) return '';
   
+  // Check if the query has wildcards - preserve them by only normalizing parts between wildcards
+  if (text.includes('*')) {
+    // Split by asterisk and normalize each part separately, then rejoin
+    const parts = text.split('*');
+    const normalizedParts = parts.map(part => {
+      // Apply standard normalization to each part
+      let normalized = part.replace(/[\u064B-\u0652]/g, '');
+      
+      normalized = normalized
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ؤ/g, 'و')
+        .replace(/ئ/g, 'ى');
+      
+      normalized = normalized
+        .replace(/[ىی]/g, 'ي');
+      
+      normalized = normalized
+        .replace(/ـ/g, '');
+      
+      return normalized;
+    });
+    
+    // Rejoin with asterisks
+    return normalizedParts.join('*');
+  }
+  
+  // Standard normalization for non-wildcard queries
   // Remove diacritics (tashkeel)
   // This includes: َ ً ُ ٌ ِ ٍ ْ ّ
   let normalized = text.replace(/[\u064B-\u0652]/g, '');
@@ -82,12 +109,19 @@ export const processHighlight = (highlight: string): { pre: string; match: strin
     post: cleanPost
   };
 };
+
 /**
  * Creates an OpenSearch query string with proper Arabic normalization
+ * Preserves wildcards for OpenSearch queries
  */
 export const createSearchQueryString = (query: string): string => {
   const normalized = normalizeArabicText(query);
-  // Escape special characters for OpenSearch
-  const escaped = normalized.replace(/[+\-=&|><!(){}[\]^"~*?:\\]/g, '\\$&');
-  return escaped;
+  
+  // If query contains wildcards, escape special characters except asterisks
+  if (query.includes('*')) {
+    return normalized.replace(/[+\-=&|><!(){}[\]^"~?:\\]/g, '\\$&');
+  }
+  
+  // Otherwise, escape all special characters for OpenSearch
+  return normalized.replace(/[+\-=&|><!(){}[\]^"~*?:\\]/g, '\\$&');
 };

@@ -19,6 +19,7 @@ const AboutPage: React.FC = () => {
           <h2 className="text-xl font-semibold mb-4">Notes on Use:</h2>
           <ul className="list-disc pl-6 space-y-2">
             <li>Search a word or phrase, and it will automatically include the following proclitics: ب، ف، و، ل، ك. e.g, if you search for التصوف it will include: بالتصوف، للتصوف، etc.</li>
+            <li>You can use asterisk as a wildcard.</li>
             <li>You can apply filters to your results after searching.</li>
             <li>Note that the search does not include BOTH definite and definite, e.g. if you search for التصوف it will not include تصوف</li>
             <li>Downloading search data will only include the first 5,000 results.</li>

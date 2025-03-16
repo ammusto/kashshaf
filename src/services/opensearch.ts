@@ -29,6 +29,13 @@ interface OpenSearchResponse {
 }
 
 /**
+ * Check if query contains wildcard characters and should use wildcard search
+ */
+const shouldUseWildcardSearch = (query: string): boolean => {
+  return query.includes('*');
+};
+
+/**
  * Search for texts matching the query and filters
  */
 export const searchTexts = async (
@@ -61,6 +68,31 @@ export const searchTexts = async (
 
     // Determine which field to search based on isExact flag
     const searchField = isExact ? "page_content" : "page_content.proclitic";
+    
+    // Check if the query contains wildcards
+    const isWildcardSearch = shouldUseWildcardSearch(query);
+
+    // Build the appropriate query based on search type
+    let searchQuery;
+    
+    if (isWildcardSearch) {
+      // Use wildcard query for asterisk searches
+      searchQuery = {
+        wildcard: {
+          [searchField]: {
+            value: query,
+            case_insensitive: true
+          }
+        }
+      };
+    } else {
+      // Use match_phrase for regular searches
+      searchQuery = {
+        match_phrase: {
+          [searchField]: query
+        }
+      };
+    }
 
     // Build OpenSearch query
     const opensearchQuery = {
@@ -69,13 +101,7 @@ export const searchTexts = async (
       track_total_hits: true, // Ensure total hits count is accurate even beyond 10k
       query: {
         bool: {
-          must: [
-            {
-              match_phrase: {
-                [searchField]: query
-              }
-            }
-          ],
+          must: [searchQuery],
           filter: filters.length > 0 ? filters : undefined
         }
       },
@@ -95,11 +121,7 @@ export const searchTexts = async (
           }
         },
         // Force exact match for highlighting
-        highlight_query: {
-          match_phrase: {
-            [searchField]: query
-          }
-        }
+        highlight_query: searchQuery
       }
     };
 
