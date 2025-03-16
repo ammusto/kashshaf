@@ -155,7 +155,7 @@ export const searchTexts = async (
     // Use different highlighter based on query type
     if (hasWildcard && !isQueryPhrase) {
       // For single word with wildcard, use unified highlighter
-      highlightConfig.type = 'unified';
+      highlightConfig.type = 'fvh';
     } else {
       // For phrases and single words without wildcards, use fast vector highlighter
       highlightConfig.type = 'fvh';

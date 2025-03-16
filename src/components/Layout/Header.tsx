@@ -1,8 +1,21 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
+import { useSearch } from '../../contexts/SearchContext';
 import './Layout.css';
 
 const Header: React.FC = () => {
+  const { resetSearch } = useSearch();
+  const location = useLocation();
+  
+  const handleHomeClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    // If we're already on the home page, prevent default navigation and just reset the search
+    if (location.pathname === '/' && location.search) {
+      e.preventDefault();
+      resetSearch();
+    }
+    // Otherwise, let the normal navigation happen
+  };
+  
   return (
     <header>
       <div className="header-container">
@@ -18,6 +31,7 @@ const Header: React.FC = () => {
                 <NavLink
                   to="/"
                   className={({ isActive }) => isActive ? "font-semibold" : ""}
+                  onClick={handleHomeClick}
                 >
                   Search
                 </NavLink>

@@ -54,6 +54,7 @@ interface SearchContextType {
   handleRowsPerPageChange: (rows: number) => void;
   applyFilters: (newFilters: FilterState) => void;
   resetFilters: () => void;
+  resetSearch: () => void; // New reset search function
   
   // Utility
   getFilteredTextIds: () => number[];
@@ -447,6 +448,27 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     });
   }, [updateUrlAndSearch]);
 
+  // Reset search - new function
+  const resetSearch = useCallback(() => {
+    // Clear search query
+    setSearchQuery('');
+    // Reset page to 1
+    setCurrentPage(1);
+    // Reset rows per page to default
+    setRowsPerPage(DEFAULT_ROWS_PER_PAGE);
+    // Reset filters
+    setFilters(DEFAULT_FILTERS);
+    // Clear results
+    setResults([]);
+    // Clear total results
+    setTotalResults(0);
+    // Clear search error
+    setSearchError(null);
+    
+    // Update URL to remove all search params
+    navigate('/', { replace: true });
+  }, [navigate]);
+
   // Context value
   const contextValue = useMemo(() => ({
     searchQuery,
@@ -464,6 +486,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     handleRowsPerPageChange,
     applyFilters,
     resetFilters,
+    resetSearch,
     getFilteredTextIds
   }), [
     searchQuery,
@@ -479,6 +502,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     handleRowsPerPageChange,
     applyFilters,
     resetFilters,
+    resetSearch,
     getFilteredTextIds
   ]);
 

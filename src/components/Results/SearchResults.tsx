@@ -16,7 +16,8 @@ const SearchResults: React.FC = () => {
     filters,
     searchError,
     handlePageChange,
-    handleRowsPerPageChange
+    handleRowsPerPageChange,
+    resetSearch
   } = useSearch();
 
   // If there's a search error, display it
@@ -43,7 +44,27 @@ const SearchResults: React.FC = () => {
     if (searchQuery) {
       return (
         <div className="bg-white rounded-lg shadow-md p-6 text-center">
-          <p className="text-lg">لا توجد نتائج لـ "{searchQuery}"</p>
+          <p className="text-lg">No results for {searchQuery}"</p>
+          <button
+            onClick={resetSearch}
+            className="mt-4 inline-flex items-center px-4 py-2 border border-transparent font-medium rounded-md shadow-sm bg-gray-200 text-gray-800 hover:bg-gray-300"
+          >
+            <svg
+              className="-ml-1 mr-2 h-5 w-5"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+            Reset Search
+          </button>
         </div>
       );
     }
@@ -83,6 +104,26 @@ const SearchResults: React.FC = () => {
               ))}
             </select>
           </div>
+          
+          <button
+            onClick={resetSearch}
+            className="inline-flex items-center px-4 py-2 border border-transparent font-medium rounded-md shadow-sm bg-gray-200 text-gray-800 hover:bg-gray-300">
+            <svg
+              className="-ml-1 mr-2 h-5 w-5"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+            Clear Search
+          </button>
           
           <DownloadButton
             query={searchQuery}
