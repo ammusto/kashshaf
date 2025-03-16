@@ -14,6 +14,23 @@ const DEFAULT_FILTERS: FilterState = {
   deathDateRange: { min: 0, max: 2000 }
 };
 
+// Validation functions
+const containsWildcard = (query: string): boolean => {
+  return query.includes('*');
+};
+
+const isPhrase = (query: string): boolean => {
+  const words = query.trim().split(/\s+/);
+  return words.length > 1;
+};
+
+const validateSearchQuery = (query: string): boolean => {
+  if (isPhrase(query) && containsWildcard(query)) {
+    return false; // Invalid: phrase with wildcard
+  }
+  return true; // Valid query
+};
+
 interface SearchContextType {
   // Search state
   searchQuery: string;
@@ -21,6 +38,7 @@ interface SearchContextType {
   results: SearchResult[];
   isLoading: boolean;
   totalResults: number;
+  searchError: string | null;
   
   // Pagination
   currentPage: number;
@@ -68,6 +86,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [rowsPerPage, setRowsPerPage] = useState<number>(DEFAULT_ROWS_PER_PAGE);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  const [searchError, setSearchError] = useState<string | null>(null);
   
   // Refs for stale closure prevention
   const searchQueryRef = useRef(searchQuery);
@@ -142,6 +161,17 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   ) => {
     if (!query.trim() || metadataLoading) return;
     
+    // Validate the query - don't allow wildcards in phrase searches
+    if (!validateSearchQuery(query)) {
+      setSearchError("Wildcards (*) are not allowed in phrase searches. Please use wildcards only with single words.");
+      setIsLoading(false);
+      setResults([]);
+      setTotalResults(0);
+      return;
+    }
+    
+    // Clear any previous errors
+    setSearchError(null);
     setIsLoading(true);
     
     try {
@@ -264,6 +294,11 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
       
     } catch (error) {
       console.error('Search failed:', error);
+      if (error instanceof Error) {
+        setSearchError(error.message);
+      } else {
+        setSearchError('An unexpected error occurred during search');
+      }
       setResults([]);
       setTotalResults(0);
     } finally {
@@ -284,6 +319,17 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     if (metadataLoading) return;
 
     const params = parseUrlParams(location.search);
+
+    // Validate the query if it exists
+    if (params.query && !validateSearchQuery(params.query)) {
+      setSearchError("Wildcards (*) are not allowed in phrase searches. Please use wildcards only with single words.");
+      setResults([]);
+      setTotalResults(0);
+      
+      // Clear invalid query from URL by replacing with valid URL
+      navigate('/', { replace: true });
+      return;
+    }
 
     let shouldSearch = false;
 
@@ -332,7 +378,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
         params.filters || DEFAULT_FILTERS
       );
     }
-  }, [location.search, metadataLoading]);
+  }, [location.search, metadataLoading, navigate]);
 
   // Update URL and trigger search
   const updateUrlAndSearch = useCallback((params: {
@@ -341,9 +387,17 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     rows?: number,
     filters?: FilterState
   }) => {
+    const queryToUse = params.query !== undefined ? params.query : searchQueryRef.current;
+    
+    // Validate the query before updating URL
+    if (queryToUse && !validateSearchQuery(queryToUse)) {
+      setSearchError("Wildcards (*) are not allowed in phrase searches. Please use wildcards only with single words.");
+      return;
+    }
+    
     // Build the URL params
     const urlParams = buildUrlParams({
-      query: params.query !== undefined ? params.query : searchQueryRef.current,
+      query: queryToUse,
       page: params.page !== undefined ? params.page : currentPageRef.current,
       rows: params.rows !== undefined ? params.rows : rowsPerPageRef.current,
       filters: params.filters !== undefined ? params.filters : filtersRef.current
@@ -356,6 +410,12 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
   // Handle search form submission
   const handleSearch = useCallback((query: string) => {
     if (!query.trim()) return;
+
+    // Validate the query before initiating search
+    if (!validateSearchQuery(query)) {
+      setSearchError("Wildcards (*) are not allowed in phrase searches. Please use wildcards only with single words.");
+      return;
+    }
 
     updateUrlAndSearch({ query, page: 1 }); // Reset to page 1 for new searches
   }, [updateUrlAndSearch]);
@@ -394,6 +454,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     results,
     isLoading,
     totalResults,
+    searchError,
     currentPage,
     rowsPerPage,
     filters,
@@ -409,6 +470,7 @@ export const SearchProvider: React.FC<SearchProviderProps> = ({ children }) => {
     results,
     isLoading,
     totalResults,
+    searchError,
     currentPage,
     rowsPerPage,
     filters,

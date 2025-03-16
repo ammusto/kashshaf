@@ -29,10 +29,30 @@ interface OpenSearchResponse {
 }
 
 /**
- * Check if query contains wildcard characters and should use wildcard search
+ * Check if query contains wildcard characters 
  */
-const shouldUseWildcardSearch = (query: string): boolean => {
+const containsWildcard = (query: string): boolean => {
   return query.includes('*');
+};
+
+/**
+ * Check if query is a phrase (multiple words)
+ */
+const isPhrase = (query: string): boolean => {
+  // Trim whitespace and split by spaces
+  const words = query.trim().split(/\s+/);
+  // If there's more than one word, it's a phrase
+  return words.length > 1;
+};
+
+/**
+ * Validate search query - phrase searches cannot contain wildcards
+ */
+const validateSearchQuery = (query: string): boolean => {
+  if (isPhrase(query) && containsWildcard(query)) {
+    return false; // Invalid: phrase with wildcard
+  }
+  return true; // Valid query
 };
 
 /**
@@ -47,6 +67,11 @@ export const searchTexts = async (
   isExact: boolean = false
 ): Promise<{ hits: SearchResult[], total: number }> => {
   try {
+    // Validate the search query
+    if (!validateSearchQuery(query)) {
+      throw new Error('Invalid search query: Wildcards are not allowed in phrase searches');
+    }
+
     // Check if we've reached the max result window
     const from = (page - 1) * size;
     
@@ -69,14 +94,15 @@ export const searchTexts = async (
     // Determine which field to search based on isExact flag
     const searchField = isExact ? "page_content" : "page_content.proclitic";
     
-    // Check if the query contains wildcards
-    const isWildcardSearch = shouldUseWildcardSearch(query);
+    // Check if the query contains wildcards and is a phrase
+    const hasWildcard = containsWildcard(query);
+    const isQueryPhrase = isPhrase(query);
 
     // Build the appropriate query based on search type
     let searchQuery;
     
-    if (isWildcardSearch) {
-      // Use wildcard query for asterisk searches
+    if (hasWildcard) {
+      // Use wildcard query for asterisk searches (single word only)
       searchQuery = {
         wildcard: {
           [searchField]: {
@@ -86,12 +112,53 @@ export const searchTexts = async (
         }
       };
     } else {
-      // Use match_phrase for regular searches
+      // Use match_phrase for regular searches (both single words and phrases)
       searchQuery = {
         match_phrase: {
           [searchField]: query
         }
       };
+    }
+
+    // Define the type for the highlight configuration
+    interface HighlightConfig {
+      type: string;
+      fields: {
+        [key: string]: {
+          number_of_fragments: number;
+          fragment_size: number;
+          pre_tags: string[];
+          post_tags: string[];
+          require_field_match: boolean;
+        }
+      };
+      highlight_query: any;
+    }
+
+    // Build highlight configuration based on query type
+    const highlightConfig: HighlightConfig = {
+      // Default type, will be overridden below
+      type: 'fvh',
+      fields: {
+        [searchField]: {
+          number_of_fragments: 10,
+          fragment_size: 500,
+          pre_tags: ['<em>'],
+          post_tags: ['</em>'],
+          require_field_match: true
+        }
+      },
+      // Force exact match for highlighting
+      highlight_query: searchQuery
+    };
+
+    // Use different highlighter based on query type
+    if (hasWildcard && !isQueryPhrase) {
+      // For single word with wildcard, use unified highlighter
+      highlightConfig.type = 'unified';
+    } else {
+      // For phrases and single words without wildcards, use fast vector highlighter
+      highlightConfig.type = 'fvh';
     }
 
     // Build OpenSearch query
@@ -109,20 +176,7 @@ export const searchTexts = async (
       sort: [
         { "uri": { "order": "asc" } }
       ],
-      highlight: {
-        type: 'fvh',
-        fields: {
-          [searchField]: {
-            number_of_fragments: 10,
-            fragment_size: 500,
-            pre_tags: ['<em>'],
-            post_tags: ['</em>'],
-            require_field_match: true
-          }
-        },
-        // Force exact match for highlighting
-        highlight_query: searchQuery
-      }
+      highlight: highlightConfig
     };
 
     // Set headers with Basic Auth
@@ -202,10 +256,12 @@ export const getAllResultsForExport = async (
   isExact: boolean = false
 ): Promise<SearchResult[]> => {
   try {
-    // Use the MAX_EXPORT_RESULTS constant from config
-    // MAX_EXPORT_RESULTS is set to 2000 in config/api.ts
+    // Check if query is valid first
+    if (!validateSearchQuery(query)) {
+      throw new Error('Invalid search query: Wildcards are not allowed in phrase searches');
+    }
 
-    // This is similar to searchTexts but with a larger size limit
+    // Use the MAX_EXPORT_RESULTS constant from config
     const response = await searchTexts(
       query,
       1,
