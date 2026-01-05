@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { showAppMenu, checkAppUpdate, getAppSetting, setAppSetting } from '../api/tauri';
+import { AppUpdateModal } from './modals/AppUpdateModal';
 import type { AppUpdateStatus } from '../types';
+
+// Setting key for "do not show again" preference
+const SETTING_SKIP_APP_UPDATE_PROMPT = 'skip_app_update_prompt';
 
 interface ToolbarProps {
   onBrowseTexts: () => void;
@@ -23,46 +28,83 @@ export function Toolbar({
   isOnlineMode,
   onDownloadCorpus,
 }: ToolbarProps) {
-  const [showDownloadConfirm, setShowDownloadConfirm] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
-  const [showUpdateBanner, setShowUpdateBanner] = useState(false);
-  const [showRequiredUpdateModal, setShowRequiredUpdateModal] = useState(false);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [isManualCheck, setIsManualCheck] = useState(false);
+  const [showNoUpdateModal, setShowNoUpdateModal] = useState(false);
 
   useEffect(() => {
-    checkForUpdates();
+    // Check for updates on startup
+    checkForUpdates(false);
+
+    // Listen for manual "Check for Updates" from menu
+    const unlisten = listen('check-for-updates', () => {
+      handleManualCheckForUpdates();
+    });
+
+    return () => {
+      unlisten.then(fn => fn());
+    };
   }, []);
 
-  async function checkForUpdates() {
+  async function checkForUpdates(manual: boolean) {
     try {
       const status = await checkAppUpdate();
       setUpdateStatus(status);
 
       if (status.update_required) {
-        // Required update - show blocking modal
-        setShowRequiredUpdateModal(true);
+        // Required update - always show blocking modal
+        setIsManualCheck(manual);
+        setShowUpdateModal(true);
       } else if (status.update_available) {
-        // Optional update - check if user dismissed this version
-        const dismissedVersion = await getAppSetting('dismissed_update_version');
-        if (dismissedVersion !== status.latest_version) {
-          setShowUpdateBanner(true);
+        if (manual) {
+          // Manual check - always show modal (reset "do not show again")
+          await setAppSetting(SETTING_SKIP_APP_UPDATE_PROMPT, 'false');
+          setIsManualCheck(true);
+          setShowUpdateModal(true);
+        } else {
+          // Automatic startup check - respect "do not show again" preference
+          const skipPrompt = await getAppSetting(SETTING_SKIP_APP_UPDATE_PROMPT);
+          if (skipPrompt !== 'true') {
+            setIsManualCheck(false);
+            setShowUpdateModal(true);
+          }
         }
+      } else if (manual) {
+        // Manual check but no update available
+        setShowNoUpdateModal(true);
       }
     } catch (err) {
       console.error('Failed to check for updates:', err);
+      if (manual) {
+        // Show error for manual check
+        setShowNoUpdateModal(true);
+      }
     }
   }
 
-  async function handleDismissUpdate() {
-    if (updateStatus) {
-      await setAppSetting('dismissed_update_version', updateStatus.latest_version);
-      setShowUpdateBanner(false);
-    }
+  async function handleManualCheckForUpdates() {
+    // Reset "do not show again" when user manually checks
+    await setAppSetting(SETTING_SKIP_APP_UPDATE_PROMPT, 'false');
+    await checkForUpdates(true);
   }
 
   function handleDownloadUpdate() {
     if (updateStatus?.download_url) {
       window.open(updateStatus.download_url, '_blank');
     }
+  }
+
+  async function handleSkipUpdate(doNotShowAgain: boolean) {
+    if (isManualCheck) {
+      // User did manual check, then skipped - reset "do not show again" to false
+      // This ensures next app launch will show the modal again
+      await setAppSetting(SETTING_SKIP_APP_UPDATE_PROMPT, 'false');
+    } else if (doNotShowAgain) {
+      // Automatic check and user checked "do not show again"
+      await setAppSetting(SETTING_SKIP_APP_UPDATE_PROMPT, 'true');
+    }
+    setShowUpdateModal(false);
   }
 
   const handleMenuClick = async () => {
@@ -75,38 +117,6 @@ export function Toolbar({
 
   return (
     <div className="flex flex-col flex-shrink-0">
-      {/* Update Available Banner (optional update) */}
-      {showUpdateBanner && updateStatus && !updateStatus.update_required && (
-        <div className="h-10 flex items-center justify-between px-4 bg-blue-50 border-b border-blue-200">
-          <div className="flex items-center gap-2 text-sm text-blue-800">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span>
-              Update available: <strong>v{updateStatus.latest_version}</strong>
-              {updateStatus.release_notes && ` - ${updateStatus.release_notes}`}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleDownloadUpdate}
-              className="px-3 py-1 text-sm font-medium text-blue-700 hover:bg-blue-100 rounded transition-colors"
-            >
-              Download
-            </button>
-            <button
-              onClick={handleDismissUpdate}
-              className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded transition-colors"
-              title="Dismiss"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Main Toolbar */}
       <div className="h-10 flex items-center gap-2 px-3 bg-white border-b border-app-border-light">
         {/* Menu Button */}
@@ -183,7 +193,7 @@ export function Toolbar({
         {/* Online Mode Button - only visible when in online mode */}
         {isOnlineMode && onDownloadCorpus && (
           <button
-            onClick={() => setShowDownloadConfirm(true)}
+            onClick={onDownloadCorpus}
             className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
                        bg-amber-100 text-amber-800 hover:bg-amber-200
                        flex items-center gap-1.5"
@@ -197,70 +207,38 @@ export function Toolbar({
         )}
       </div>
 
-      {/* Download Confirmation Dialog */}
-      {showDownloadConfirm && (
+      {/* App Update Modal */}
+      {showUpdateModal && updateStatus && (
+        <AppUpdateModal
+          updateStatus={updateStatus}
+          onUpdate={handleDownloadUpdate}
+          onSkip={handleSkipUpdate}
+        />
+      )}
+
+      {/* No Update Available Modal (for manual check) */}
+      {showNoUpdateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-2xl w-[400px] flex flex-col">
             <div className="px-6 py-4 border-b border-app-border-light">
-              <h2 className="text-lg font-semibold text-app-text-primary">Download Corpus</h2>
-            </div>
-            <div className="px-6 py-6">
-              <p className="text-app-text-secondary">
-                Download the corpus for offline use? This is a large download (~8 GB) but enables faster searches and offline access.
-              </p>
-            </div>
-            <div className="px-6 py-4 border-t border-app-border-light flex justify-end gap-3">
-              <button
-                onClick={() => setShowDownloadConfirm(false)}
-                className="px-4 py-2 rounded-lg text-app-text-secondary hover:bg-app-surface-variant transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  setShowDownloadConfirm(false);
-                  onDownloadCorpus?.();
-                }}
-                className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
-              >
-                Download
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Required Update Modal (blocking) */}
-      {showRequiredUpdateModal && updateStatus && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-2xl w-[450px] flex flex-col">
-            <div className="px-6 py-4 border-b border-app-border-light">
-              <h2 className="text-lg font-semibold text-red-600 flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              <h2 className="text-lg font-semibold text-app-text-primary flex items-center gap-2">
+                <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                Update Required
+                Up to Date
               </h2>
             </div>
             <div className="px-6 py-6">
-              <p className="text-app-text-secondary mb-4">
-                A required update is available. Your current version (<strong>v{updateStatus.current_version}</strong>) is no longer supported.
+              <p className="text-app-text-secondary">
+                You're running the latest version of Kashshaf{updateStatus ? ` (v${updateStatus.current_version})` : ''}.
               </p>
-              <p className="text-app-text-secondary mb-4">
-                Please update to <strong>v{updateStatus.latest_version}</strong> to continue using Kashshaf.
-              </p>
-              {updateStatus.release_notes && (
-                <div className="bg-gray-50 rounded-lg p-3 text-sm text-app-text-secondary">
-                  <strong>What's new:</strong> {updateStatus.release_notes}
-                </div>
-              )}
             </div>
             <div className="px-6 py-4 border-t border-app-border-light flex justify-end">
               <button
-                onClick={handleDownloadUpdate}
-                className="px-6 py-2.5 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors font-medium"
+                onClick={() => setShowNoUpdateModal(false)}
+                className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
               >
-                Download Update
+                OK
               </button>
             </div>
           </div>

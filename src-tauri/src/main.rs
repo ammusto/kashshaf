@@ -7,6 +7,7 @@ mod commands;
 
 use kashshaf_lib::{AppState, get_data_dir};
 use std::sync::{Arc, RwLock};
+use tauri::Emitter;
 
 /// Wrapper for AppState that allows hot-reloading after corpus download
 pub type ManagedAppState = Arc<RwLock<Option<Arc<AppState>>>>;
@@ -94,6 +95,12 @@ fn main() {
             match event.id().as_ref() {
                 "quit" => {
                     app.exit(0);
+                }
+                "check_for_updates" => {
+                    // Emit event to frontend to trigger manual update check
+                    if let Err(e) = app.emit("check-for-updates", ()) {
+                        eprintln!("Failed to emit check-for-updates event: {}", e);
+                    }
                 }
                 "settings" => {
                     // Settings does nothing for now - can be implemented later

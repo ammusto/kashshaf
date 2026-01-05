@@ -37,3 +37,6 @@ Cargo.lock
 
 # TypeScript
 *.tsbuildinfo
+
+# Internal Documents
+docs/internal

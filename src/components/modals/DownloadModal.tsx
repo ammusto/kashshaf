@@ -339,12 +339,22 @@ export function DownloadModal({
           )}
 
           {progress && (progress.state === 'failed' || progress.state === 'cancelled') && (
-            <button
-              onClick={handleStartDownload}
-              className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
-            >
-              Retry
-            </button>
+            <>
+              {onOnlineUse && (
+                <button
+                  onClick={() => onOnlineUse(false)}
+                  className="px-4 py-2 rounded-lg text-app-text-secondary hover:bg-app-surface-variant transition-colors"
+                >
+                  Use Online Mode
+                </button>
+              )}
+              <button
+                onClick={handleStartDownload}
+                className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
+              >
+                Retry
+              </button>
+            </>
           )}
         </div>
       </div>

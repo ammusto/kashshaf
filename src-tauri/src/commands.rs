@@ -2,26 +2,31 @@
 
 use anyhow;
 use kashshaf_lib::error::KashshafError;
-use kashshaf_lib::search::{PageWithMatches, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, validate_wildcard_query};
+use kashshaf_lib::search::{
+    validate_wildcard_query, PageWithMatches, SearchFilters, SearchMode, SearchResult,
+    SearchResults, SearchTerm,
+};
 use kashshaf_lib::state::AppState;
 use kashshaf_lib::tokens::{Token, TokenField};
 use rusqlite::{OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::sync::{Arc, RwLock};
-use tauri::{AppHandle, Manager, State};
 use tauri::menu::{ContextMenu, MenuBuilder, MenuItemBuilder};
+use tauri::{AppHandle, Manager, State};
 
 /// Type alias for managed app state (allows hot-reloading after corpus download)
 pub type ManagedAppState = Arc<RwLock<Option<Arc<AppState>>>>;
 
 /// Helper to get AppState or return error if not ready
 fn require_state(state: &ManagedAppState) -> Result<Arc<AppState>, KashshafError> {
-    let guard = state.read().map_err(|_| {
-        KashshafError::Other("Failed to acquire state lock".to_string())
-    })?;
+    let guard = state
+        .read()
+        .map_err(|_| KashshafError::Other("Failed to acquire state lock".to_string()))?;
     guard.clone().ok_or_else(|| {
-        KashshafError::CorpusNotReady("Corpus data not downloaded. Please download the corpus first.".to_string())
+        KashshafError::CorpusNotReady(
+            "Corpus data not downloaded. Please download the corpus first.".to_string(),
+        )
     })
 }
 
@@ -41,8 +46,8 @@ pub struct BookMetadata {
     pub original_id: Option<String>,
     pub date: Option<String>,
     pub paginated: Option<bool>,
-    pub tags: Option<String>,       // JSON array as string
-    pub book_meta: Option<String>,  // JSON array as string
+    pub tags: Option<String>,        // JSON array as string
+    pub book_meta: Option<String>,   // JSON array as string
     pub author_meta: Option<String>, // JSON array as string
 }
 
@@ -113,24 +118,22 @@ pub fn get_page(
 
 fn normalize_arabic_for_search(text: &str) -> String {
     text.chars()
-        .filter_map(|c| {
-            match c {
-                '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{0671}' => None,
-                'أ' | 'إ' | 'آ' => Some('ا'),
-                'ؤ' => Some('و'),
-                'ئ' | 'ى' => Some('ي'),
-                'ک' | 'گ' | 'ڭ' => Some('ك'),
-                'ی' | 'ے' => Some('ي'),
-                'ۀ' | 'ە' => Some('ه'),
-                'ۃ' => Some('ة'),
-                'ٹ' => Some('ت'),
-                'پ' => Some('ب'),
-                'چ' => Some('ج'),
-                'ژ' => Some('ز'),
-                'ڤ' => Some('ف'),
-                'ڨ' => Some('ق'),
-                _ => Some(c),
-            }
+        .filter_map(|c| match c {
+            '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{0671}' => None,
+            'أ' | 'إ' | 'آ' => Some('ا'),
+            'ؤ' => Some('و'),
+            'ئ' | 'ى' => Some('ي'),
+            'ک' | 'گ' | 'ڭ' => Some('ك'),
+            'ی' | 'ے' => Some('ي'),
+            'ۀ' | 'ە' => Some('ه'),
+            'ۃ' => Some('ة'),
+            'ٹ' => Some('ت'),
+            'پ' => Some('ب'),
+            'چ' => Some('ج'),
+            'ژ' => Some('ز'),
+            'ڤ' => Some('ف'),
+            'ڨ' => Some('ق'),
+            _ => Some(c),
         })
         .collect()
 }
@@ -142,7 +145,8 @@ pub fn get_all_books(
     state: State<'_, ManagedAppState>,
 ) -> Result<Vec<BookMetadata>, KashshafError> {
     let app_state = require_state(&state)?;
-    let conn = app_state.get_db_connection()
+    let conn = app_state
+        .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
 
     let mut stmt = conn
@@ -171,15 +175,13 @@ pub fn list_books(
     offset: Option<i64>,
 ) -> Result<Vec<BookMetadata>, KashshafError> {
     let app_state = require_state(&state)?;
-    let conn = app_state.get_db_connection()
+    let conn = app_state
+        .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
     let limit = limit.unwrap_or(100);
     let offset = offset.unwrap_or(0);
 
-    let mut sql = format!(
-        "SELECT {} FROM books WHERE 1=1",
-        BOOK_COLUMNS
-    );
+    let mut sql = format!("SELECT {} FROM books WHERE 1=1", BOOK_COLUMNS);
 
     if genre.is_some() {
         sql.push_str(" AND genre = ?1");
@@ -226,16 +228,14 @@ pub fn list_books_filtered(
     offset: Option<i64>,
 ) -> Result<Vec<BookMetadata>, KashshafError> {
     let app_state = require_state(&state)?;
-    let conn = app_state.get_db_connection()
+    let conn = app_state
+        .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
     let limit = limit.unwrap_or(10000);
     let offset = offset.unwrap_or(0);
 
     // Build query dynamically
-    let mut sql = format!(
-        "SELECT {} FROM books WHERE 1=1",
-        BOOK_COLUMNS
-    );
+    let mut sql = format!("SELECT {} FROM books WHERE 1=1", BOOK_COLUMNS);
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     let mut param_idx = 1;
 
@@ -254,7 +254,9 @@ pub fn list_books_filtered(
     // Genre filter (multiple genres with OR)
     if let Some(ref genre_list) = genres {
         if !genre_list.is_empty() {
-            let placeholders: Vec<String> = genre_list.iter().enumerate()
+            let placeholders: Vec<String> = genre_list
+                .iter()
+                .enumerate()
                 .map(|(i, _)| format!("?{}", param_idx + i))
                 .collect();
             sql.push_str(&format!(" AND genre IN ({})", placeholders.join(",")));
@@ -265,7 +267,11 @@ pub fn list_books_filtered(
         }
     }
 
-    sql.push_str(&format!(" ORDER BY death_ah ASC NULLS LAST, id ASC LIMIT ?{} OFFSET ?{}", param_idx, param_idx + 1));
+    sql.push_str(&format!(
+        " ORDER BY death_ah ASC NULLS LAST, id ASC LIMIT ?{} OFFSET ?{}",
+        param_idx,
+        param_idx + 1
+    ));
     params.push(Box::new(limit));
     params.push(Box::new(offset));
 
@@ -284,7 +290,8 @@ pub fn list_books_filtered(
     let books = if let Some(ref search_term) = author_search {
         if search_term.len() >= 3 {
             let normalized_search = normalize_arabic_for_search(search_term).to_lowercase();
-            books.into_iter()
+            books
+                .into_iter()
                 .filter(|b| {
                     if let Some(ref author) = b.author {
                         let normalized_author = normalize_arabic_for_search(author).to_lowercase();
@@ -314,7 +321,8 @@ pub fn search_authors(
         return Ok(Vec::new());
     }
 
-    let conn = app_state.get_db_connection()
+    let conn = app_state
+        .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
 
     let mut stmt = conn
@@ -344,16 +352,17 @@ pub fn search_authors(
 }
 
 #[tauri::command]
-pub fn get_book(state: State<'_, ManagedAppState>, id: i64) -> Result<Option<BookMetadata>, KashshafError> {
+pub fn get_book(
+    state: State<'_, ManagedAppState>,
+    id: i64,
+) -> Result<Option<BookMetadata>, KashshafError> {
     let app_state = require_state(&state)?;
-    let conn = app_state.get_db_connection()
+    let conn = app_state
+        .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
 
     let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {} FROM books WHERE id = ?",
-            BOOK_COLUMNS
-        ))
+        .prepare(&format!("SELECT {} FROM books WHERE id = ?", BOOK_COLUMNS))
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     let book = stmt
@@ -367,7 +376,8 @@ pub fn get_book(state: State<'_, ManagedAppState>, id: i64) -> Result<Option<Boo
 #[tauri::command]
 pub fn get_genres(state: State<'_, ManagedAppState>) -> Result<Vec<(String, i64)>, KashshafError> {
     let app_state = require_state(&state)?;
-    let conn = app_state.get_db_connection()
+    let conn = app_state
+        .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
 
     let mut stmt = conn
@@ -375,7 +385,9 @@ pub fn get_genres(state: State<'_, ManagedAppState>) -> Result<Vec<(String, i64)
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     let genres = stmt
-        .query_map([], |row: &Row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .query_map([], |row: &Row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
@@ -386,7 +398,8 @@ pub fn get_genres(state: State<'_, ManagedAppState>) -> Result<Vec<(String, i64)
 #[tauri::command]
 pub fn get_centuries(state: State<'_, ManagedAppState>) -> Result<Vec<(i64, i64)>, KashshafError> {
     let app_state = require_state(&state)?;
-    let conn = app_state.get_db_connection()
+    let conn = app_state
+        .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
 
     let mut stmt = conn
@@ -394,7 +407,9 @@ pub fn get_centuries(state: State<'_, ManagedAppState>) -> Result<Vec<(i64, i64)
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     let centuries = stmt
-        .query_map([], |row: &Row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+        .query_map([], |row: &Row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
@@ -410,7 +425,8 @@ pub fn get_stats(state: State<'_, ManagedAppState>) -> Result<serde_json::Value,
         .doc_count()
         .map_err(|e: anyhow::Error| KashshafError::Index(e.to_string()))?;
 
-    let conn = app_state.get_db_connection()
+    let conn = app_state
+        .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
     let book_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM books", [], |row: &Row| row.get(0))
@@ -464,7 +480,14 @@ pub async fn proximity_search(
 
     tokio::task::spawn_blocking(move || {
         search_engine
-            .proximity_search(&search_term1, &search_term2, distance, &filters, limit, offset)
+            .proximity_search(
+                &search_term1,
+                &search_term2,
+                distance,
+                &filters,
+                limit,
+                offset,
+            )
             .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
     })
     .await
@@ -746,21 +769,26 @@ pub async fn concordance_search(
     };
 
     // Convert to SearchTerms for combined search
-    let search_terms: Vec<SearchTerm> = search_queries.iter().map(|q| SearchTerm {
-        query: q.clone(),
-        mode,
-    }).collect();
+    let search_terms: Vec<SearchTerm> = search_queries
+        .iter()
+        .map(|q| SearchTerm {
+            query: q.clone(),
+            mode,
+        })
+        .collect();
 
     let search_engine = app_state.search_engine.clone();
 
     tokio::task::spawn_blocking(move || {
-        search_engine.combined_search(
-            &[],  // No AND terms
-            &search_terms,  // All variants as OR terms
-            &filters,
-            limit,
-            offset,
-        ).map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
+        search_engine
+            .combined_search(
+                &[],           // No AND terms
+                &search_terms, // All variants as OR terms
+                &filters,
+                limit,
+                offset,
+            )
+            .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
     })
     .await
     .map_err(|e| KashshafError::Search(format!("Task join error: {}", e)))?
@@ -786,19 +814,19 @@ pub fn export_concordance(
         vec![query.clone()]
     };
 
-    let search_terms: Vec<SearchTerm> = search_queries.iter().map(|q| SearchTerm {
-        query: q.clone(),
-        mode,
-    }).collect();
+    let search_terms: Vec<SearchTerm> = search_queries
+        .iter()
+        .map(|q| SearchTerm {
+            query: q.clone(),
+            mode,
+        })
+        .collect();
 
     // Get all results (up to max)
-    let results = app_state.search_engine.combined_search(
-        &[],
-        &search_terms,
-        &filters,
-        max_results,
-        0,
-    ).map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))?;
+    let results = app_state
+        .search_engine
+        .combined_search(&[], &search_terms, &filters, max_results, 0)
+        .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))?;
 
     // Create CSV file in temp directory
     let timestamp = std::time::SystemTime::now()
@@ -806,7 +834,8 @@ pub fn export_concordance(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let sanitized_query: String = query.chars()
+    let sanitized_query: String = query
+        .chars()
         .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
         .take(20)
         .collect();
@@ -823,8 +852,11 @@ pub fn export_concordance(
         .map_err(|e| KashshafError::Database(format!("Failed to write BOM: {}", e)))?;
 
     // Write header - simple CSV export with body text and match info
-    writeln!(file, "id,part_index,page_id,part_label,page_number,body,title,author,death_ah,genre,corpus")
-        .map_err(|e| KashshafError::Database(format!("Failed to write header: {}", e)))?;
+    writeln!(
+        file,
+        "id,part_index,page_id,part_label,page_number,body,title,author,death_ah,genre,corpus"
+    )
+    .map_err(|e| KashshafError::Database(format!("Failed to write header: {}", e)))?;
 
     // Helper to escape CSV fields
     let escape_csv = |s: &str| -> String {
@@ -849,9 +881,14 @@ pub fn export_concordance(
             escape_csv(&result.title),
             escape_csv(&result.author),
             result.death_ah.map(|d| d.to_string()).unwrap_or_default(),
-            result.genre.as_deref().map(|g| escape_csv(g)).unwrap_or_default(),
+            result
+                .genre
+                .as_deref()
+                .map(|g| escape_csv(g))
+                .unwrap_or_default(),
             escape_csv(&result.corpus),
-        ).map_err(|e| KashshafError::Database(format!("Failed to write row: {}", e)))?;
+        )
+        .map_err(|e| KashshafError::Database(format!("Failed to write row: {}", e)))?;
     }
 
     Ok(file_path.to_string_lossy().to_string())
@@ -863,17 +900,28 @@ pub async fn show_app_menu(app: AppHandle) -> Result<String, KashshafError> {
         .build(&app)
         .map_err(|e| KashshafError::Other(format!("Failed to create settings menu item: {}", e)))?;
 
+    let check_updates_item = MenuItemBuilder::with_id("check_for_updates", "Check for Updates")
+        .build(&app)
+        .map_err(|e| {
+            KashshafError::Other(format!(
+                "Failed to create check for updates menu item: {}",
+                e
+            ))
+        })?;
+
     let quit_item = MenuItemBuilder::with_id("quit", "Quit")
         .build(&app)
         .map_err(|e| KashshafError::Other(format!("Failed to create quit menu item: {}", e)))?;
 
     let menu = MenuBuilder::new(&app)
         .item(&settings_item)
+        .item(&check_updates_item)
         .item(&quit_item)
         .build()
         .map_err(|e| KashshafError::Other(format!("Failed to build menu: {}", e)))?;
 
-    let webview_window = app.get_webview_window("main")
+    let webview_window = app
+        .get_webview_window("main")
         .ok_or_else(|| KashshafError::Other("Main window not found".to_string()))?;
 
     // Get the underlying Window from WebviewWindow for the popup
@@ -919,13 +967,13 @@ pub use kashshaf_lib::downloader::AppUpdateStatus;
 fn get_settings_connection() -> Result<rusqlite::Connection, KashshafError> {
     use kashshaf_lib::downloader::get_settings_db_path;
 
-    let settings_path = get_settings_db_path()
-        .map_err(|e| KashshafError::Other(e.to_string()))?;
+    let settings_path = get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
 
     // Ensure parent directory exists
     if let Some(parent) = settings_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| KashshafError::Database(format!("Failed to create data directory: {}", e)))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            KashshafError::Database(format!("Failed to create data directory: {}", e))
+        })?;
     }
 
     let conn = rusqlite::Connection::open(&settings_path)
@@ -967,7 +1015,8 @@ fn get_settings_connection() -> Result<rusqlite::Connection, KashshafError> {
         CREATE INDEX IF NOT EXISTS idx_saved_searches_created
         ON saved_searches(created_at DESC);
         "#,
-    ).map_err(|e| KashshafError::Database(e.to_string()))?;
+    )
+    .map_err(|e| KashshafError::Database(e.to_string()))?;
 
     Ok(conn)
 }
@@ -999,15 +1048,14 @@ pub fn add_to_history(
             SELECT id FROM search_history ORDER BY created_at DESC LIMIT 100
         )",
         [],
-    ).map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+    )
+    .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     Ok(id)
 }
 
 #[tauri::command]
-pub fn get_search_history(
-    limit: Option<i64>,
-) -> Result<Vec<SearchHistoryEntry>, KashshafError> {
+pub fn get_search_history(limit: Option<i64>) -> Result<Vec<SearchHistoryEntry>, KashshafError> {
     let conn = get_settings_connection()?;
     let limit = limit.unwrap_or(100);
 
@@ -1020,18 +1068,20 @@ pub fn get_search_history(
          LIMIT ?1"
     ).map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
-    let entries = stmt.query_map([limit], |row: &Row| {
-        Ok(SearchHistoryEntry {
-            id: row.get(0)?,
-            search_type: row.get(1)?,
-            query_data: row.get(2)?,
-            display_label: row.get(3)?,
-            book_filter_count: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-            book_ids: row.get(5)?,
-            created_at: row.get(6)?,
-            is_saved: row.get::<_, i64>(7)? == 1,
+    let entries = stmt
+        .query_map([limit], |row: &Row| {
+            Ok(SearchHistoryEntry {
+                id: row.get(0)?,
+                search_type: row.get(1)?,
+                query_data: row.get(2)?,
+                display_label: row.get(3)?,
+                book_filter_count: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                book_ids: row.get(5)?,
+                created_at: row.get(6)?,
+                is_saved: row.get::<_, i64>(7)? == 1,
+            })
         })
-    }).map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
@@ -1068,11 +1118,13 @@ pub fn save_search(
     ).map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     // Get the ID (either newly inserted or existing)
-    let id: i64 = conn.query_row(
-        "SELECT id FROM saved_searches WHERE query_data = ?1",
-        [&query_data],
-        |row| row.get(0),
-    ).map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+    let id: i64 = conn
+        .query_row(
+            "SELECT id FROM saved_searches WHERE query_data = ?1",
+            [&query_data],
+            |row| row.get(0),
+        )
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     Ok(id)
 }
@@ -1088,26 +1140,29 @@ pub fn unsave_search(id: i64) -> Result<(), KashshafError> {
 #[tauri::command]
 pub fn unsave_search_by_query(query_data: String) -> Result<(), KashshafError> {
     let conn = get_settings_connection()?;
-    conn.execute("DELETE FROM saved_searches WHERE query_data = ?1", [query_data])
-        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+    conn.execute(
+        "DELETE FROM saved_searches WHERE query_data = ?1",
+        [query_data],
+    )
+    .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn is_search_saved(query_data: String) -> Result<bool, KashshafError> {
     let conn = get_settings_connection()?;
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM saved_searches WHERE query_data = ?1",
-        [&query_data],
-        |row| row.get(0),
-    ).map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM saved_searches WHERE query_data = ?1",
+            [&query_data],
+            |row| row.get(0),
+        )
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
     Ok(count > 0)
 }
 
 #[tauri::command]
-pub fn get_saved_searches(
-    limit: Option<i64>,
-) -> Result<Vec<SavedSearchEntry>, KashshafError> {
+pub fn get_saved_searches(limit: Option<i64>) -> Result<Vec<SavedSearchEntry>, KashshafError> {
     let conn = get_settings_connection()?;
     let limit = limit.unwrap_or(100);
 
@@ -1118,18 +1173,20 @@ pub fn get_saved_searches(
          LIMIT ?1"
     ).map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
-    let entries = stmt.query_map([limit], |row: &Row| {
-        Ok(SavedSearchEntry {
-            id: row.get(0)?,
-            history_id: row.get(1)?,
-            search_type: row.get(2)?,
-            query_data: row.get(3)?,
-            display_label: row.get(4)?,
-            book_filter_count: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
-            book_ids: row.get(6)?,
-            created_at: row.get(7)?,
+    let entries = stmt
+        .query_map([limit], |row: &Row| {
+            Ok(SavedSearchEntry {
+                id: row.get(0)?,
+                history_id: row.get(1)?,
+                search_type: row.get(2)?,
+                query_data: row.get(3)?,
+                display_label: row.get(4)?,
+                book_filter_count: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                book_ids: row.get(6)?,
+                created_at: row.get(7)?,
+            })
         })
-    }).map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
@@ -1161,7 +1218,8 @@ pub fn set_app_setting(key: String, value: String) -> Result<(), KashshafError> 
     conn.execute(
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
         rusqlite::params![key, value],
-    ).map_err(|e| KashshafError::Database(e.to_string()))?;
+    )
+    .map_err(|e| KashshafError::Database(e.to_string()))?;
 
     Ok(())
 }
@@ -1170,14 +1228,12 @@ pub fn set_app_setting(key: String, value: String) -> Result<(), KashshafError> 
 
 #[tauri::command]
 pub async fn check_app_update() -> Result<AppUpdateStatus, KashshafError> {
-    use kashshaf_lib::downloader::{fetch_app_manifest, check_app_update as check_update};
+    use kashshaf_lib::downloader::{check_app_update as check_update, fetch_app_manifest};
 
     let current_version = env!("CARGO_PKG_VERSION");
 
     match fetch_app_manifest().await {
-        Ok(manifest) => {
-            Ok(check_update(current_version, &manifest))
-        }
+        Ok(manifest) => Ok(check_update(current_version, &manifest)),
         Err(_e) => {
             // Return status indicating we couldn't check
             Ok(AppUpdateStatus {
@@ -1196,8 +1252,7 @@ pub async fn check_app_update() -> Result<AppUpdateStatus, KashshafError> {
 // ============ Corpus Download Commands ============
 
 use kashshaf_lib::downloader::{
-    CorpusStatus, DownloadProgress,
-    get_app_data_directory, get_corpus_data_directory,
+    get_app_data_directory, get_corpus_data_directory, CorpusStatus, DownloadProgress,
 };
 use std::sync::Mutex;
 use tauri::Emitter;
@@ -1208,8 +1263,7 @@ static DOWNLOAD_CANCEL_TX: Mutex<Option<tokio::sync::watch::Sender<bool>>> = Mut
 /// Check corpus status - can be called before AppState is initialized
 #[tauri::command]
 pub async fn check_corpus_status() -> Result<CorpusStatus, KashshafError> {
-    let data_dir = get_corpus_data_directory()
-        .map_err(|e| KashshafError::Other(e.to_string()))?;
+    let data_dir = get_corpus_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
 
     // Get app version from Cargo.toml
     let app_version = env!("CARGO_PKG_VERSION");
@@ -1219,10 +1273,13 @@ pub async fn check_corpus_status() -> Result<CorpusStatus, KashshafError> {
 
 /// Start corpus download - emits "download-progress" events
 #[tauri::command]
-pub async fn start_corpus_download(window: tauri::Window, skip_verify: Option<bool>) -> Result<(), KashshafError> {
+pub async fn start_corpus_download(
+    window: tauri::Window,
+    skip_verify: Option<bool>,
+) -> Result<(), KashshafError> {
     let skip_verify = skip_verify.unwrap_or(false);
-    let data_dir = get_corpus_data_directory()
-        .map_err(|e| KashshafError::Download(e.to_string()))?;
+    let data_dir =
+        get_corpus_data_directory().map_err(|e| KashshafError::Download(e.to_string()))?;
 
     // Create data directory if it doesn't exist
     std::fs::create_dir_all(&data_dir)
@@ -1287,23 +1344,23 @@ pub fn cancel_corpus_download() -> Result<(), KashshafError> {
         let _ = tx.send(true);
         Ok(())
     } else {
-        Err(KashshafError::Download("No download in progress".to_string()))
+        Err(KashshafError::Download(
+            "No download in progress".to_string(),
+        ))
     }
 }
 
 /// Get the application data directory
 #[tauri::command]
 pub fn get_data_directory() -> Result<String, KashshafError> {
-    let dir = get_app_data_directory()
-        .map_err(|e| KashshafError::Other(e.to_string()))?;
+    let dir = get_app_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
     Ok(dir.to_string_lossy().to_string())
 }
 
 /// Archive old corpus before update
 #[tauri::command]
 pub fn archive_old_corpus(version: String) -> Result<String, KashshafError> {
-    let app_data_dir = get_app_data_directory()
-        .map_err(|e| KashshafError::Other(e.to_string()))?;
+    let app_data_dir = get_app_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
 
     let archive_path = kashshaf_lib::archive_old_corpus(&app_data_dir, &version)
         .map_err(|e| KashshafError::Other(e.to_string()))?;
@@ -1314,11 +1371,8 @@ pub fn archive_old_corpus(version: String) -> Result<String, KashshafError> {
 /// Reload AppState after download completes
 /// Returns true if successful, false if data still not ready
 #[tauri::command]
-pub async fn reload_app_state(
-    state: State<'_, ManagedAppState>,
-) -> Result<bool, KashshafError> {
-    let data_dir = get_corpus_data_directory()
-        .map_err(|e| KashshafError::Other(e.to_string()))?;
+pub async fn reload_app_state(state: State<'_, ManagedAppState>) -> Result<bool, KashshafError> {
+    let data_dir = get_corpus_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
 
     // Try to create new AppState
     match AppState::new(data_dir) {
@@ -1346,8 +1400,7 @@ pub async fn reload_app_state(
 pub fn get_user_setting(key: String) -> Result<Option<String>, KashshafError> {
     use kashshaf_lib::downloader::get_settings_db_path;
 
-    let settings_path = get_settings_db_path()
-        .map_err(|e| KashshafError::Other(e.to_string()))?;
+    let settings_path = get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
 
     // Initialize settings DB if not exists (same as in state.rs)
     let conn = rusqlite::Connection::open(&settings_path)
@@ -1357,7 +1410,8 @@ pub fn get_user_setting(key: String) -> Result<Option<String>, KashshafError> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS user_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
         [],
-    ).map_err(|e| KashshafError::Database(e.to_string()))?;
+    )
+    .map_err(|e| KashshafError::Database(e.to_string()))?;
 
     let result: Option<String> = conn
         .query_row(
@@ -1377,8 +1431,7 @@ pub fn get_user_setting(key: String) -> Result<Option<String>, KashshafError> {
 pub fn set_user_setting(key: String, value: String) -> Result<(), KashshafError> {
     use kashshaf_lib::downloader::get_settings_db_path;
 
-    let settings_path = get_settings_db_path()
-        .map_err(|e| KashshafError::Other(e.to_string()))?;
+    let settings_path = get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
 
     let conn = rusqlite::Connection::open(&settings_path)
         .map_err(|e| KashshafError::Database(e.to_string()))?;
@@ -1387,12 +1440,14 @@ pub fn set_user_setting(key: String, value: String) -> Result<(), KashshafError>
     conn.execute(
         "CREATE TABLE IF NOT EXISTS user_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
         [],
-    ).map_err(|e| KashshafError::Database(e.to_string()))?;
+    )
+    .map_err(|e| KashshafError::Database(e.to_string()))?;
 
     conn.execute(
         "INSERT OR REPLACE INTO user_settings (key, value) VALUES (?1, ?2)",
         rusqlite::params![key, value],
-    ).map_err(|e| KashshafError::Database(e.to_string()))?;
+    )
+    .map_err(|e| KashshafError::Database(e.to_string()))?;
 
     Ok(())
 }
@@ -1401,8 +1456,7 @@ pub fn set_user_setting(key: String, value: String) -> Result<(), KashshafError>
 /// Returns true if both exist, false otherwise
 #[tauri::command]
 pub fn corpus_exists() -> Result<bool, KashshafError> {
-    let data_dir = get_corpus_data_directory()
-        .map_err(|e| KashshafError::Other(e.to_string()))?;
+    let data_dir = get_corpus_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
 
     let index_path = data_dir.join("tantivy_index");
     let db_path = data_dir.join("corpus.db");

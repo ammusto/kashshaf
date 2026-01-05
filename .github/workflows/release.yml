@@ -150,13 +150,13 @@ jobs:
 
       - name: Create DMG
         run: |
-          hdiutil create -volname "Kashshaf" -srcfolder src-tauri/target/universal/Kashshaf.app -ov -format UDZO Kashshaf-universal.dmg
-
+          VERSION=${GITHUB_REF_NAME#v}
+          hdiutil create -volname "Kashshaf" -srcfolder src-tauri/target/universal/Kashshaf.app -ov -format UDZO Kashshaf_${VERSION}_macos.dmg
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: kashshaf-macos
-          path: Kashshaf-universal.dmg
+          path: Kashshaf_*_macos.dmg
   create-release:
       needs: [build-windows, build-linux, build-macos]
       runs-on: ubuntu-latest
