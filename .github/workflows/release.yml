@@ -1,0 +1,177 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run tauri build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kashshaf-windows
+          path: src-tauri/target/release/bundle/msi/*.msi
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run tauri build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kashshaf-linux
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
+
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: |
+            aarch64-apple-darwin
+            x86_64-apple-darwin
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > cert.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import cert.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+          security set-keychain-settings -t 7200 -u build.keychain
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build arm64 (no notarization)
+        run: npm run tauri build -- --target aarch64-apple-darwin
+        env:
+          SKIP_NOTARIZATION: true
+
+      - name: Build x86_64 (no notarization)
+        run: npm run tauri build -- --target x86_64-apple-darwin
+        env:
+          SKIP_NOTARIZATION: true
+
+      - name: Create universal app
+        run: |
+          ARM_APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Kashshaf.app"
+          INTEL_APP="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Kashshaf.app"
+          UNIVERSAL_APP="src-tauri/target/universal/Kashshaf.app"
+
+          mkdir -p src-tauri/target/universal
+          cp -R "$ARM_APP" "$UNIVERSAL_APP"
+
+          lipo -create \
+            "$ARM_APP/Contents/MacOS/kashshaf" \
+            "$INTEL_APP/Contents/MacOS/kashshaf" \
+            -output "$UNIVERSAL_APP/Contents/MacOS/kashshaf"
+
+      - name: Re-sign universal app
+        run: |
+          codesign --force --deep --options runtime \
+            --sign "Developer ID Application: Antonio Musto (ALLW8R237Y)" \
+            src-tauri/target/universal/Kashshaf.app
+
+      - name: Notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent \
+            src-tauri/target/universal/Kashshaf.app \
+            Kashshaf.zip
+
+          xcrun notarytool submit Kashshaf.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" \
+            --wait
+
+      - name: Staple
+        run: |
+          xcrun stapler staple src-tauri/target/universal/Kashshaf.app
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "Kashshaf" -srcfolder src-tauri/target/universal/Kashshaf.app -ov -format UDZO Kashshaf-universal.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kashshaf-macos
+          path: Kashshaf-universal.dmg
+
+  create-release:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
+          files: |
+            kashshaf-windows/*.msi
+            kashshaf-linux/*.AppImage
+            kashshaf-linux/*.deb
+            kashshaf-macos/*.dmg
