@@ -1,0 +1,39 @@
+# Virtual Environment
+venv/
+
+# Dependencies
+node_modules/
+target/
+
+# Build outputs
+dist/
+src-tauri/target/
+
+# Local data (users download separately)
+src-tauri/data/
+data/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# Logs
+*.log
+
+# Rust
+**/*.rs.bk
+Cargo.lock
+
+# TypeScript
+*.tsbuildinfo

@@ -1,0 +1,138 @@
+/* Import Tailwind CSS v4 */
+@import "tailwindcss";
+
+/* Only scan src folder for classes (ignore /data with 17GB of files) */
+@source "../";
+
+/* Local font: Scheherazade New */
+@font-face {
+  font-family: 'Scheherazade New';
+  src: url('/fonts/ScheherazadeNew-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Scheherazade New';
+  src: url('/fonts/ScheherazadeNew-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Scheherazade New';
+  src: url('/fonts/ScheherazadeNew-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Scheherazade New';
+  src: url('/fonts/ScheherazadeNew-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Custom theme configuration for Tailwind v4 */
+@theme {
+  /* Colors */
+  --color-app-bg: #FAFAFA;
+  --color-app-surface: #FFFFFF;
+  --color-app-surface-variant: #F5F5F5;
+  --color-app-text-primary: #1A1A1A;
+  --color-app-text-secondary: #666666;
+  --color-app-text-tertiary: #999999;
+  --color-app-accent: #2C5F8D;
+  --color-app-accent-hover: #1E4A6F;
+  --color-app-accent-light: #E8F1F8;
+  --color-app-highlight-surface: #FFF4CC;
+  --color-app-highlight-lemma: #D4EDDA;
+  --color-app-highlight-root: #E0E7FF;
+  --color-app-border-light: #E0E0E0;
+  --color-app-border-medium: #CCCCCC;
+  --color-app-border-focus: #2C5F8D;
+  --color-app-success: #28A745;
+  --color-app-warning: #FFC107;
+  --color-app-error: #DC3545;
+
+  /* Font families */
+  --font-arabic: 'Scheherazade New', 'Amiri', 'Noto Naskh Arabic', sans-serif;
+  --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Box shadows */
+  --shadow-app-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-app-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-app-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* Base styles - Tailwind's preflight handles resets */
+html {
+  font-size: 16px;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: #FAFAFA;
+  color: #1A1A1A;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* Arabic text styling */
+.arabic {
+  font-family: 'Scheherazade New', 'Amiri', 'Noto Naskh Arabic', serif;
+  line-height: 2;
+  direction: rtl;
+  /* font-size:1rem; */
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F5F5F5;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CCCCCC;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #999999;
+}
+
+/* Text selection */
+.select-text {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Token highlight colors for search results */
+.highlight-surface {
+  background: #FFF4CC;
+  border-bottom: 2px solid #F59E0B;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.highlight-lemma {
+  background: #D4EDDA;
+  border-bottom: 2px solid #28A745;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.highlight-root {
+  background: #E0E7FF;
+  border-bottom: 2px solid #6366F1;
+  padding: 0 2px;
+  border-radius: 2px;
+}
