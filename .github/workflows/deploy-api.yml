@@ -1,0 +1,25 @@
+name: Deploy API
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'api/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 5.161.127.18
+          username: kashshaf
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /opt/kashshaf/api
+            git pull origin main
+            cargo build --release
+            sudo systemctl restart kashshaf-api

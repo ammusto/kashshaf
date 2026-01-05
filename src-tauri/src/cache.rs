@@ -131,33 +131,41 @@ impl TokenCache {
             return Ok(Vec::new());
         }
 
-        let placeholders: String = token_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT id, surface, lemma_id, root_id, pos_id, feature_set_id, clitic_set_id
-             FROM token_definitions WHERE id IN ({})",
-            placeholders
-        );
+        // Build token definitions map in batches (SQLite limit is 999 variables)
+        let mut token_defs: HashMap<u32, (String, i64, Option<i64>, i64, i64, i64)> = HashMap::new();
 
-        let mut stmt = conn.prepare(&sql)?;
-        let token_defs: HashMap<u32, (String, i64, Option<i64>, i64, i64, i64)> = stmt
-            .query_map(
-                rusqlite::params_from_iter(token_ids.iter().map(|id| *id as i64)),
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)? as u32,
-                        (
-                            row.get::<_, String>(1)?,  // surface
-                            row.get::<_, i64>(2)?,     // lemma_id
-                            row.get::<_, Option<i64>>(3)?, // root_id
-                            row.get::<_, i64>(4)?,     // pos_id
-                            row.get::<_, i64>(5)?,     // feature_set_id
-                            row.get::<_, i64>(6)?,     // clitic_set_id
-                        ),
-                    ))
-                },
-            )?
-            .filter_map(|r| r.ok())
-            .collect();
+        for chunk in token_ids.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT id, surface, lemma_id, root_id, pos_id, feature_set_id, clitic_set_id
+                 FROM token_definitions WHERE id IN ({})",
+                placeholders
+            );
+
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(chunk.iter().map(|id| *id as i64)),
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)? as u32,
+                            (
+                                row.get::<_, String>(1)?,  // surface
+                                row.get::<_, i64>(2)?,     // lemma_id
+                                row.get::<_, Option<i64>>(3)?, // root_id
+                                row.get::<_, i64>(4)?,     // pos_id
+                                row.get::<_, i64>(5)?,     // feature_set_id
+                                row.get::<_, i64>(6)?,     // clitic_set_id
+                            ),
+                        ))
+                    },
+                )?
+                .filter_map(|r| r.ok());
+
+            for (id, data) in rows {
+                token_defs.insert(id, data);
+            }
+        }
 
         let tokens: Vec<Token> = token_ids
             .iter()
