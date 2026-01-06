@@ -60,11 +60,16 @@ export function AppUpdateModal({
             </>
           )}
 
-          {updateStatus.release_notes && (
-            <div className="bg-gray-50 rounded-lg p-3 text-sm text-app-text-secondary mb-4">
-              <strong>What's new:</strong> {updateStatus.release_notes}
-            </div>
-          )}
+          <div className="text-sm text-app-text-secondary mb-4">
+            <a
+              href="https://github.com/ammusto/kashshaf/releases/latest"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-app-accent hover:underline"
+            >
+              What's New?
+            </a>
+          </div>
 
           {/* Do not show again checkbox - only for optional updates */}
           {!isRequired && (
