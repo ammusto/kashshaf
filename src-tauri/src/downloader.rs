@@ -119,6 +119,14 @@ pub struct AppManifest {
     pub releases: Vec<AppRelease>,
 }
 
+/// Platform-specific download URLs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformDownloads {
+    pub windows: String,
+    pub macos: String,
+    pub linux: String,
+}
+
 /// App release entry in manifest
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppRelease {
@@ -126,7 +134,19 @@ pub struct AppRelease {
     pub released_at: String,
     pub required: bool,
     pub notes: String,
-    pub download_url: String,
+    pub downloads: PlatformDownloads,
+}
+
+impl AppRelease {
+    /// Get the download URL for the current platform
+    pub fn download_url_for_current_platform(&self) -> &str {
+        #[cfg(target_os = "windows")]
+        { &self.downloads.windows }
+        #[cfg(target_os = "macos")]
+        { &self.downloads.macos }
+        #[cfg(target_os = "linux")]
+        { &self.downloads.linux }
+    }
 }
 
 /// App update status returned to frontend
@@ -743,7 +763,7 @@ pub fn check_app_update(current_version: &str, manifest: &AppManifest) -> AppUpd
         update_required,
         update_available,
         release_notes: latest_release.map(|r| r.notes.clone()),
-        download_url: latest_release.map(|r| r.download_url.clone()),
+        download_url: latest_release.map(|r| r.download_url_for_current_platform().to_string()),
     }
 }
 
