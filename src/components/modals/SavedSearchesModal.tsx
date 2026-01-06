@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { SavedSearchEntry } from '../../types';
-import { getSavedSearches, unsaveSearch } from '../../api/tauri';
+import { getSavedSearches, unsaveSearch } from '../../utils/storage';
 
 interface SavedSearchesModalProps {
   isOpen: boolean;

@@ -1,8 +1,8 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import type { SearchAPI, OperatingMode } from '../api';
-import { getOfflineAPI } from '../api/offline';
 import { getOnlineAPI } from '../api/online';
-import { corpusExists, getUserSetting, setUserSetting } from '../api/tauri';
+import { isWebTarget } from '../utils/platform';
+import { getUserSetting, setUserSetting } from '../utils/storage';
 
 interface OperatingModeContextValue {
   /** Current operating mode */
@@ -33,13 +33,26 @@ export function OperatingModeProvider({ children }: OperatingModeProviderProps) 
   const [mode, setModeState] = useState<OperatingMode>('pending');
   const [corpusDownloaded, setCorpusDownloaded] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [api, setApi] = useState<SearchAPI>(getOfflineAPI());
+  const [api, setApi] = useState<SearchAPI>(getOnlineAPI());
 
   // Initialize mode based on corpus existence and user settings
   useEffect(() => {
     async function initialize() {
       try {
         setLoading(true);
+
+        // Web target: always use online mode
+        if (isWebTarget()) {
+          setModeState('online');
+          setApi(getOnlineAPI());
+          setCorpusDownloaded(false);
+          setLoading(false);
+          return;
+        }
+
+        // Desktop target: dynamic import to avoid bundling Tauri for web
+        const { corpusExists } = await import('../api/tauri');
+        const { getOfflineAPI } = await import('../api/offline');
 
         // Check if corpus exists locally
         const exists = await corpusExists();
@@ -65,8 +78,13 @@ export function OperatingModeProvider({ children }: OperatingModeProviderProps) 
         }
       } catch (err) {
         console.error('Failed to initialize operating mode:', err);
-        // Default to pending state on error
-        setModeState('pending');
+        // Default to pending state on error (or online for web)
+        if (isWebTarget()) {
+          setModeState('online');
+          setApi(getOnlineAPI());
+        } else {
+          setModeState('pending');
+        }
       } finally {
         setLoading(false);
       }
@@ -77,11 +95,15 @@ export function OperatingModeProvider({ children }: OperatingModeProviderProps) 
 
   // Update API instance when mode changes
   useEffect(() => {
-    if (mode === 'online') {
-      setApi(getOnlineAPI());
-    } else if (mode === 'offline') {
-      setApi(getOfflineAPI());
+    async function updateApi() {
+      if (mode === 'online') {
+        setApi(getOnlineAPI());
+      } else if (mode === 'offline' && !isWebTarget()) {
+        const { getOfflineAPI } = await import('../api/offline');
+        setApi(getOfflineAPI());
+      }
     }
+    updateApi();
   }, [mode]);
 
   const setMode = useCallback((newMode: 'online' | 'offline') => {
@@ -89,7 +111,15 @@ export function OperatingModeProvider({ children }: OperatingModeProviderProps) 
   }, []);
 
   const refreshCorpusStatus = useCallback(async () => {
+    // No-op for web target
+    if (isWebTarget()) {
+      return;
+    }
+
     try {
+      const { corpusExists } = await import('../api/tauri');
+      const { getOfflineAPI } = await import('../api/offline');
+
       const exists = await corpusExists();
       setCorpusDownloaded(exists);
 
@@ -129,6 +159,10 @@ export function useOperatingMode(): OperatingModeContextValue {
 
 // Re-export helper functions for saving user preferences
 export async function saveOnlineModePreference(skipPrompt: boolean): Promise<void> {
+  // No-op for web target (always online)
+  if (isWebTarget()) {
+    return;
+  }
   await setUserSetting(SETTING_SKIP_DOWNLOAD_PROMPT, skipPrompt ? 'true' : 'false');
   if (skipPrompt) {
     await setUserSetting(SETTING_MODE, 'online');
@@ -136,6 +170,10 @@ export async function saveOnlineModePreference(skipPrompt: boolean): Promise<voi
 }
 
 export async function clearModePreference(): Promise<void> {
+  // No-op for web target (always online)
+  if (isWebTarget()) {
+    return;
+  }
   await setUserSetting(SETTING_SKIP_DOWNLOAD_PROMPT, 'false');
   await setUserSetting(SETTING_MODE, '');
 }

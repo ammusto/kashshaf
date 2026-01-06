@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import type { SearchMode, SearchHistoryEntry, SavedSearchEntry, CorpusStatus } from './types';
 import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from './types/search';
 import { MAX_RESULTS, CONCORDANCE_MAX_RESULTS } from './constants/search';
-import { getStats, checkCorpusStatus, reloadAppState } from './api/tauri';
 import { useSearchTabsContext } from './contexts/SearchTabsContext';
 import { useOperatingMode, saveOnlineModePreference } from './contexts/OperatingModeContext';
 import { BooksProvider } from './contexts/BooksContext';
@@ -11,11 +10,15 @@ import { useReaderNavigation } from './hooks/useReaderNavigation';
 import { Sidebar } from './components/Sidebar';
 import { ReaderPanel, ResultsPanel, ConcordancePanel, HelpPanel } from './components/panels';
 import { DraggableSplitter, UpdateBanner } from './components/ui';
-import { TextSelectionModal, MetadataBrowser, SavedSearchesModal, SearchHistoryModal, DownloadModal } from './components/modals';
+import { TextSelectionModal, MetadataBrowser, SavedSearchesModal, SearchHistoryModal } from './components/modals';
 import { Toolbar } from './components/Toolbar';
 import { SearchTabs, type TabData } from './components/SearchTabs';
 import type { NameFormData } from './utils/namePatterns';
 import { createEmptyNameForm } from './utils/namePatterns';
+import { isWebTarget } from './utils/platform';
+
+// Lazy load DownloadModal only for desktop
+const DownloadModal = lazy(() => import('./components/modals/DownloadModal').then(m => ({ default: m.DownloadModal })));
 
 function App() {
   // Operating mode context
@@ -93,14 +96,16 @@ function App() {
   // Check corpus status on mount (only when mode is pending or offline)
   useEffect(() => {
     async function checkStatus() {
-      // Skip if we're in online mode (no need to check corpus)
-      if (mode === 'online') {
+      // Skip for web target or online mode
+      if (isWebTarget() || mode === 'online') {
         setCheckingCorpus(false);
         return;
       }
 
       try {
         setCheckingCorpus(true);
+        // Dynamic import for desktop only
+        const { checkCorpusStatus } = await import('./api/tauri');
         const status = await checkCorpusStatus();
         setCorpusStatus(status);
 
@@ -144,7 +149,7 @@ function App() {
 
   // Load stats when corpus is ready and we're in offline mode
   useEffect(() => {
-    if (mode === 'offline' && !checkingCorpus && corpusStatus?.ready && !showDownloadModal) {
+    if (mode === 'offline' && !checkingCorpus && corpusStatus?.ready && !showDownloadModal && !isWebTarget()) {
       loadStats();
     }
   }, [mode, checkingCorpus, corpusStatus?.ready, showDownloadModal]);
@@ -154,7 +159,11 @@ function App() {
   }, [splitterRatio]);
 
   async function loadStats() {
+    // Skip for web target
+    if (isWebTarget()) return;
+
     try {
+      const { getStats } = await import('./api/tauri');
       const appStats = await getStats();
       setStats(appStats);
     } catch (err) {
@@ -172,9 +181,13 @@ function App() {
   // Determine if current tab is concordance
   const isConcordanceTab = activeTab?.tabType === 'concordance';
 
-  // Handle download complete - reload app state and recheck status
+  // Handle download complete - reload app state and recheck status (desktop only)
   const handleDownloadComplete = useCallback(async () => {
+    // Skip for web target
+    if (isWebTarget()) return;
+
     try {
+      const { reloadAppState, checkCorpusStatus } = await import('./api/tauri');
       const success = await reloadAppState();
       if (success) {
         // Recheck status after reload
@@ -205,10 +218,14 @@ function App() {
     setShowDownloadModal(false);
   }, [setMode]);
 
-  // Handle download corpus from toolbar (when in online mode)
+  // Handle download corpus from toolbar (when in online mode) - desktop only
   const handleDownloadCorpus = useCallback(async () => {
+    // Skip for web target
+    if (isWebTarget()) return;
+
     // Fetch corpus status before showing modal
     try {
+      const { checkCorpusStatus } = await import('./api/tauri');
       const status = await checkCorpusStatus();
       setCorpusStatus(status);
     } catch (err) {
@@ -294,19 +311,23 @@ function App() {
     );
   }
 
-  // Show download modal if needed
-  if (showDownloadModal && corpusStatus) {
+  // Show download modal if needed (desktop only)
+  if (showDownloadModal && corpusStatus && !isWebTarget()) {
     return (
-      <DownloadModal
-        status={corpusStatus}
-        onDownloadComplete={handleDownloadComplete}
-        onOnlineUse={handleOnlineUse}
-        showOnlineOption={mode === 'pending' && !corpusDownloaded}
-        onDismiss={corpusStatus.update_available && !corpusStatus.update_required ? () => {
-          setShowDownloadModal(false);
-          setShowUpdateBanner(true);
-        } : undefined}
-      />
+      <Suspense fallback={<div className="h-screen w-screen flex items-center justify-center bg-app-bg">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-app-accent"></div>
+      </div>}>
+        <DownloadModal
+          status={corpusStatus}
+          onDownloadComplete={handleDownloadComplete}
+          onOnlineUse={handleOnlineUse}
+          showOnlineOption={mode === 'pending' && !corpusDownloaded}
+          onDismiss={corpusStatus.update_available && !corpusStatus.update_required ? () => {
+            setShowDownloadModal(false);
+            setShowUpdateBanner(true);
+          } : undefined}
+        />
+      </Suspense>
     );
   }
 
@@ -314,8 +335,8 @@ function App() {
   return (
     <BooksProvider api={api}>
       <div className="h-screen w-screen flex flex-col bg-app-bg overflow-hidden">
-        {/* Update Banner */}
-        {showUpdateBanner && corpusStatus?.update_available && (
+        {/* Update Banner - desktop only */}
+        {!isWebTarget() && showUpdateBanner && corpusStatus?.update_available && (
           <UpdateBanner
             remoteVersion={corpusStatus.remote_version}
             onUpdate={handleUpdateClick}
@@ -331,7 +352,8 @@ function App() {
           onHelp={() => setHelpOpen(!helpOpen)}
           helpActive={helpOpen}
           isOnlineMode={mode === 'online'}
-          onDownloadCorpus={handleDownloadCorpus}
+          onDownloadCorpus={isWebTarget() ? undefined : handleDownloadCorpus}
+          isWebTarget={isWebTarget()}
         />
 
         <div className="flex-1 flex overflow-hidden">

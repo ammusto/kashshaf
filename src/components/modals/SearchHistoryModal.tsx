@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { SearchHistoryEntry } from '../../types';
-import { getSearchHistory, saveSearch, unsaveSearchByQuery, clearHistory } from '../../api/tauri';
+import { getSearchHistory, saveSearch, unsaveSearchByQuery, clearHistory } from '../../utils/storage';
 
 interface SearchHistoryModalProps {
   isOpen: boolean;

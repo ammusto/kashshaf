@@ -25,9 +25,6 @@ data/
 .DS_Store
 Thumbs.db
 
-# Claude
-.claude/
-
 # Logs
 *.log
 

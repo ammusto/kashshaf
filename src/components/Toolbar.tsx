@@ -1,10 +1,6 @@
 import { useState, useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-shell';
-import { showAppMenu, checkAppUpdate, getAppSetting, setAppSetting, deleteLocalData } from '../api/tauri';
-import { AppUpdateModal } from './modals/AppUpdateModal';
-import { DeleteDataModal } from './modals/DeleteDataModal';
 import type { AppUpdateStatus } from '../types';
+import { getAppSetting, setAppSetting } from '../utils/storage';
 
 // Setting key for "do not show again" preference
 const SETTING_SKIP_APP_UPDATE_PROMPT = 'skip_app_update_prompt';
@@ -21,6 +17,8 @@ interface ToolbarProps {
   onDownloadCorpus?: () => void;
   /** Callback when local data is deleted - app should switch to online mode or show download modal */
   onDataDeleted?: () => void;
+  /** Whether running as web target (no Tauri) */
+  isWebTarget?: boolean;
 }
 
 export function Toolbar({
@@ -32,6 +30,7 @@ export function Toolbar({
   isOnlineMode,
   onDownloadCorpus,
   onDataDeleted,
+  isWebTarget = false,
 }: ToolbarProps) {
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -39,27 +38,48 @@ export function Toolbar({
   const [showNoUpdateModal, setShowNoUpdateModal] = useState(false);
   const [showDeleteDataModal, setShowDeleteDataModal] = useState(false);
 
+  // Desktop-only: App updates and menu listeners
   useEffect(() => {
-    // Check for updates on startup
-    checkForUpdates(false);
+    // Skip all Tauri-specific logic for web target
+    if (isWebTarget) return;
 
-    // Listen for manual "Check for Updates" from menu
-    const unlistenUpdates = listen('check-for-updates', () => {
-      handleManualCheckForUpdates();
-    });
+    let unlistenUpdates: (() => void) | null = null;
+    let unlistenDelete: (() => void) | null = null;
 
-    // Listen for "Delete Local Data" from menu
-    const unlistenDelete = listen('delete-local-data', () => {
-      setShowDeleteDataModal(true);
-    });
+    async function setupDesktopFeatures() {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const { checkAppUpdate } = await import('../api/tauri');
+
+        // Check for updates on startup
+        checkForUpdatesDesktop(checkAppUpdate, false);
+
+        // Listen for manual "Check for Updates" from menu
+        unlistenUpdates = await listen('check-for-updates', () => {
+          handleManualCheckForUpdatesDesktop(checkAppUpdate);
+        });
+
+        // Listen for "Delete Local Data" from menu
+        unlistenDelete = await listen('delete-local-data', () => {
+          setShowDeleteDataModal(true);
+        });
+      } catch (err) {
+        console.error('Failed to setup desktop features:', err);
+      }
+    }
+
+    setupDesktopFeatures();
 
     return () => {
-      unlistenUpdates.then(fn => fn());
-      unlistenDelete.then(fn => fn());
+      unlistenUpdates?.();
+      unlistenDelete?.();
     };
-  }, []);
+  }, [isWebTarget]);
 
-  async function checkForUpdates(manual: boolean) {
+  async function checkForUpdatesDesktop(
+    checkAppUpdate: () => Promise<AppUpdateStatus>,
+    manual: boolean
+  ) {
     try {
       const status = await checkAppUpdate();
       setUpdateStatus(status);
@@ -95,15 +115,22 @@ export function Toolbar({
     }
   }
 
-  async function handleManualCheckForUpdates() {
+  async function handleManualCheckForUpdatesDesktop(
+    checkAppUpdate: () => Promise<AppUpdateStatus>
+  ) {
     // Reset "do not show again" when user manually checks
     await setAppSetting(SETTING_SKIP_APP_UPDATE_PROMPT, 'false');
-    await checkForUpdates(true);
+    await checkForUpdatesDesktop(checkAppUpdate, true);
   }
 
   async function handleDownloadUpdate() {
     if (updateStatus?.download_url) {
-      await open(updateStatus.download_url);
+      if (isWebTarget) {
+        window.open(updateStatus.download_url, '_blank');
+      } else {
+        const { open } = await import('@tauri-apps/plugin-shell');
+        await open(updateStatus.download_url);
+      }
     }
   }
 
@@ -120,14 +147,18 @@ export function Toolbar({
   }
 
   const handleMenuClick = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    // Skip for web target - no native menu
+    if (isWebTarget) return;
+
+    // Capture button position BEFORE any async operations
+    // (React's synthetic event is nullified after the handler returns)
+    const button = event.currentTarget;
+    const rect = button.getBoundingClientRect();
+    const x = rect.left * window.devicePixelRatio;
+    const y = rect.bottom * window.devicePixelRatio;
+
     try {
-      // Get button position to show menu aligned with button's left edge
-      const button = event.currentTarget;
-      const rect = button.getBoundingClientRect();
-      // Position at the bottom-left of the button
-      // Multiply by devicePixelRatio to convert to physical pixels
-      const x = rect.left * window.devicePixelRatio;
-      const y = rect.bottom * window.devicePixelRatio;
+      const { showAppMenu } = await import('../api/tauri');
       await showAppMenu(x, y);
     } catch (err) {
       console.error('Failed to show menu:', err);
@@ -135,27 +166,56 @@ export function Toolbar({
   };
 
   async function handleDeleteData() {
-    await deleteLocalData();
-    setShowDeleteDataModal(false);
-    onDataDeleted?.();
+    if (isWebTarget) return;
+
+    try {
+      const { deleteLocalData } = await import('../api/tauri');
+      await deleteLocalData();
+      setShowDeleteDataModal(false);
+      onDataDeleted?.();
+    } catch (err) {
+      console.error('Failed to delete local data:', err);
+    }
   }
+
+  // Dynamically import modals for desktop
+  const [AppUpdateModal, setAppUpdateModal] = useState<React.ComponentType<{
+    updateStatus: AppUpdateStatus;
+    onUpdate: () => void;
+    onSkip: (doNotShowAgain: boolean) => void;
+  }> | null>(null);
+
+  const [DeleteDataModal, setDeleteDataModal] = useState<React.ComponentType<{
+    onConfirm: () => Promise<void>;
+    onCancel: () => void;
+  }> | null>(null);
+
+  useEffect(() => {
+    if (isWebTarget) return;
+
+    // Lazy load modals for desktop
+    import('./modals/AppUpdateModal').then(m => setAppUpdateModal(() => m.AppUpdateModal));
+    import('./modals/DeleteDataModal').then(m => setDeleteDataModal(() => m.DeleteDataModal));
+  }, [isWebTarget]);
 
   return (
     <div className="flex flex-col flex-shrink-0">
       {/* Main Toolbar */}
       <div className="h-10 flex items-center gap-2 px-3 bg-white border-b border-app-border-light">
-        {/* Menu Button */}
-        <button
-          onClick={handleMenuClick}
-          className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                     bg-app-surface-variant text-app-text-primary hover:bg-app-accent-light
-                     flex items-center gap-1.5"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-          Menu
-        </button>
+        {/* Menu Button - only show on desktop */}
+        {!isWebTarget && (
+          <button
+            onClick={handleMenuClick}
+            className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
+                       bg-app-surface-variant text-app-text-primary hover:bg-app-accent-light
+                       flex items-center gap-1.5"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+            Menu
+          </button>
+        )}
 
         {/* Browse Texts Button */}
         <button
@@ -215,8 +275,8 @@ export function Toolbar({
         {/* Spacer to push Online Mode button to the right */}
         <div className="flex-1" />
 
-        {/* Online Mode Button - only visible when in online mode */}
-        {isOnlineMode && onDownloadCorpus && (
+        {/* Online Mode Button - only visible when in online mode on desktop */}
+        {!isWebTarget && isOnlineMode && onDownloadCorpus && (
           <button
             onClick={onDownloadCorpus}
             className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
@@ -230,10 +290,17 @@ export function Toolbar({
             Online Mode
           </button>
         )}
+
+        {/* Web badge - show when running as web app */}
+        {isWebTarget && (
+          <span className="px-2 py-1 text-xs rounded bg-blue-100 text-blue-700 font-medium">
+            Web
+          </span>
+        )}
       </div>
 
-      {/* App Update Modal */}
-      {showUpdateModal && updateStatus && (
+      {/* App Update Modal - desktop only */}
+      {!isWebTarget && showUpdateModal && updateStatus && AppUpdateModal && (
         <AppUpdateModal
           updateStatus={updateStatus}
           onUpdate={handleDownloadUpdate}
@@ -241,8 +308,8 @@ export function Toolbar({
         />
       )}
 
-      {/* No Update Available Modal (for manual check) */}
-      {showNoUpdateModal && (
+      {/* No Update Available Modal (for manual check) - desktop only */}
+      {!isWebTarget && showNoUpdateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-2xl w-[400px] flex flex-col">
             <div className="px-6 py-4 border-b border-app-border-light">
@@ -270,8 +337,8 @@ export function Toolbar({
         </div>
       )}
 
-      {/* Delete Local Data Modal */}
-      {showDeleteDataModal && (
+      {/* Delete Local Data Modal - desktop only */}
+      {!isWebTarget && showDeleteDataModal && DeleteDataModal && (
         <DeleteDataModal
           onConfirm={handleDeleteData}
           onCancel={() => setShowDeleteDataModal(false)}

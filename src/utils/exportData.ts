@@ -1,7 +1,6 @@
-import { save } from '@tauri-apps/plugin-dialog';
-import { writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import * as XLSX from 'xlsx';
 import type { BookMetadata, SearchResult } from '../types';
+import { isWebTarget } from './platform';
 
 // BOM for UTF-8 Excel compatibility with Arabic
 const UTF8_BOM = '\uFEFF';
@@ -194,12 +193,37 @@ export function generateSearchResultsXLSX(results: SearchResult[]): Uint8Array {
 export type ExportFormat = 'csv' | 'xlsx';
 
 /**
+ * Download file in browser
+ */
+function downloadInBrowser(content: string | Uint8Array, fileName: string, mimeType: string): void {
+  const blob = content instanceof Uint8Array
+    ? new Blob([content], { type: mimeType })
+    : new Blob([content], { type: mimeType });
+
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+/**
  * Show save dialog and export CSV data
  */
 async function exportCSVWithDialog(
   content: string,
   defaultFileName: string
 ): Promise<boolean> {
+  if (isWebTarget()) {
+    // Web: trigger browser download
+    downloadInBrowser(content, defaultFileName, 'text/csv;charset=utf-8;');
+    return true;
+  }
+
+  // Desktop: use Tauri dialog
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+
   const filePath = await save({
     filters: [{ name: 'CSV', extensions: ['csv'] }],
     defaultPath: defaultFileName,
@@ -220,6 +244,16 @@ async function exportXLSXWithDialog(
   data: Uint8Array,
   defaultFileName: string
 ): Promise<boolean> {
+  if (isWebTarget()) {
+    // Web: trigger browser download
+    downloadInBrowser(data, defaultFileName, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    return true;
+  }
+
+  // Desktop: use Tauri dialog
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const { writeFile } = await import('@tauri-apps/plugin-fs');
+
   const filePath = await save({
     filters: [{ name: 'Excel Workbook', extensions: ['xlsx'] }],
     defaultPath: defaultFileName,

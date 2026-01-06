@@ -4,10 +4,8 @@ import type { SearchContext, AppSearchMode, CombinedSearchQuery, ProximitySearch
 import type { NameFormData } from '../utils/namePatterns';
 import type { SearchAPI, NameSearchForm as NameSearchFormAPI } from '../api';
 import { PAGE_SIZE, MAX_RESULTS, EXPORT_MAX_RESULTS, CONCORDANCE_PAGE_SIZE, CONCORDANCE_MAX_RESULTS } from '../constants/search';
-import {
-  exportConcordance,
-  addToHistory,
-} from '../api/tauri';
+import { addToHistory } from '../utils/storage';
+import { isWebTarget } from '../utils/platform';
 import { useSearchTabsContext } from '../contexts/SearchTabsContext';
 import { generateSearchPatterns, generateDisplayPatterns } from '../utils/namePatterns';
 
@@ -420,21 +418,61 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
 
     try {
       const filters = getFilters();
-      const filePath = await exportConcordance(
-        searchContext.concordanceQuery,
-        searchContext.concordanceMode || 'lemma',
-        searchContext.concordanceIgnoreClitics || false,
-        filters,
-        CONCORDANCE_MAX_RESULTS
-      );
 
-      console.log('Exported to:', filePath);
-      alert(`Exported to: ${filePath}`);
+      if (isWebTarget()) {
+        // Web: Fetch all results and export to CSV in browser
+        const results = await api.concordanceSearch(
+          searchContext.concordanceQuery,
+          searchContext.concordanceMode || 'lemma',
+          searchContext.concordanceIgnoreClitics || false,
+          filters,
+          CONCORDANCE_MAX_RESULTS,
+          0
+        );
+
+        // Generate CSV content
+        const headers = ['Title', 'Author', 'Part', 'Page', 'Context'];
+        const rows = results.results.map(r => [
+          r.title,
+          r.author,
+          r.part_label || '',
+          r.page_number || '',
+          r.body || '',
+        ]);
+
+        const csvContent = [
+          headers.join(','),
+          ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+        ].join('\n');
+
+        // Trigger download
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `concordance_${searchContext.concordanceQuery.slice(0, 20)}.csv`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+
+        console.log('Exported concordance results');
+      } else {
+        // Desktop: Use Tauri export
+        const { exportConcordance } = await import('../api/tauri');
+        const filePath = await exportConcordance(
+          searchContext.concordanceQuery,
+          searchContext.concordanceMode || 'lemma',
+          searchContext.concordanceIgnoreClitics || false,
+          filters,
+          CONCORDANCE_MAX_RESULTS
+        );
+
+        console.log('Exported to:', filePath);
+        alert(`Exported to: ${filePath}`);
+      }
     } catch (err) {
       updateTab(activeTab.id, { errorMessage: `Export failed: ${err}` });
       console.error('Export failed:', err);
     }
-  }, [activeTab, getFilters, updateTab]);
+  }, [activeTab, getFilters, updateTab, api]);
 
   // Result click handler
   const handleResultClick = useCallback(async (result: SearchResult) => {
