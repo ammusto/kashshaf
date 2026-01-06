@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-shell';
 import { showAppMenu, checkAppUpdate, getAppSetting, setAppSetting, deleteLocalData } from '../api/tauri';
 import { AppUpdateModal } from './modals/AppUpdateModal';
 import { DeleteDataModal } from './modals/DeleteDataModal';
@@ -100,9 +101,9 @@ export function Toolbar({
     await checkForUpdates(true);
   }
 
-  function handleDownloadUpdate() {
+  async function handleDownloadUpdate() {
     if (updateStatus?.download_url) {
-      window.open(updateStatus.download_url, '_blank');
+      await open(updateStatus.download_url);
     }
   }
 
