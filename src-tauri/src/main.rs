@@ -90,6 +90,7 @@ fn main() {
             commands::get_user_setting,
             commands::set_user_setting,
             commands::corpus_exists,
+            commands::delete_local_data,
         ])
         .on_menu_event(|app, event| {
             match event.id().as_ref() {
@@ -100,6 +101,12 @@ fn main() {
                     // Emit event to frontend to trigger manual update check
                     if let Err(e) = app.emit("check-for-updates", ()) {
                         eprintln!("Failed to emit check-for-updates event: {}", e);
+                    }
+                }
+                "delete_local_data" => {
+                    // Emit event to frontend to show delete confirmation modal
+                    if let Err(e) = app.emit("delete-local-data", ()) {
+                        eprintln!("Failed to emit delete-local-data event: {}", e);
                     }
                 }
                 "settings" => {

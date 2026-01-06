@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 /// R2 public bucket URLs
-const CORPUS_MANIFEST_URL: &str = "https://pub-d56de5917e794f86a29ffd0406d0724a.r2.dev/corpus_manifest.json";
-const APP_MANIFEST_URL: &str = "https://pub-d56de5917e794f86a29ffd0406d0724a.r2.dev/app_manifest.json";
-const DATA_BASE_URL: &str = "https://pub-d56de5917e794f86a29ffd0406d0724a.r2.dev/";
+const CORPUS_MANIFEST_URL: &str = "https://cdn.kashshaf.com/corpus_manifest.json";
+const APP_MANIFEST_URL: &str = "https://cdn.kashshaf.com/app_manifest.json";
+const DATA_BASE_URL: &str = "https://cdn.kashshaf.com/";
 
 // Alias for backwards compatibility
 const MANIFEST_URL: &str = CORPUS_MANIFEST_URL;

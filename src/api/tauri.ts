@@ -288,10 +288,12 @@ export async function wildcardSearch(
 }
 
 /**
- * Show the app menu popup (Settings, Quit)
+ * Show the app menu popup at a specific position
+ * @param x - X coordinate relative to window's top-left corner (physical pixels)
+ * @param y - Y coordinate relative to window's top-left corner (physical pixels)
  */
-export async function showAppMenu(): Promise<string> {
-  return invoke('show_app_menu');
+export async function showAppMenu(x: number, y: number): Promise<string> {
+  return invoke('show_app_menu', { x, y });
 }
 
 // ============ Search History ============
@@ -460,4 +462,13 @@ export async function setUserSetting(key: string, value: string): Promise<void> 
  */
 export async function corpusExists(): Promise<boolean> {
   return invoke('corpus_exists');
+}
+
+/**
+ * Delete local corpus data (corpus.db, tantivy_index, manifest.local.json)
+ * Preserves settings.db (search history, saved searches, user preferences)
+ * Returns the number of items deleted
+ */
+export async function deleteLocalData(): Promise<number> {
+  return invoke('delete_local_data');
 }

@@ -895,7 +895,13 @@ pub fn export_concordance(
 }
 
 #[tauri::command]
-pub async fn show_app_menu(app: AppHandle) -> Result<String, KashshafError> {
+pub async fn show_app_menu(app: AppHandle, x: f64, y: f64) -> Result<String, KashshafError> {
+    // Check if local data exists to determine if delete option should be enabled
+    let data_dir = get_corpus_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
+    let has_local_data = data_dir.join("corpus.db").exists()
+        || data_dir.join("tantivy_index").exists()
+        || data_dir.join("manifest.local.json").exists();
+
     let settings_item = MenuItemBuilder::with_id("settings", "Settings")
         .build(&app)
         .map_err(|e| KashshafError::Other(format!("Failed to create settings menu item: {}", e)))?;
@@ -909,6 +915,16 @@ pub async fn show_app_menu(app: AppHandle) -> Result<String, KashshafError> {
             ))
         })?;
 
+    let delete_data_item = MenuItemBuilder::with_id("delete_local_data", "Delete Local Data")
+        .enabled(has_local_data)
+        .build(&app)
+        .map_err(|e| {
+            KashshafError::Other(format!(
+                "Failed to create delete local data menu item: {}",
+                e
+            ))
+        })?;
+
     let quit_item = MenuItemBuilder::with_id("quit", "Quit")
         .build(&app)
         .map_err(|e| KashshafError::Other(format!("Failed to create quit menu item: {}", e)))?;
@@ -916,6 +932,7 @@ pub async fn show_app_menu(app: AppHandle) -> Result<String, KashshafError> {
     let menu = MenuBuilder::new(&app)
         .item(&settings_item)
         .item(&check_updates_item)
+        .item(&delete_data_item)
         .item(&quit_item)
         .build()
         .map_err(|e| KashshafError::Other(format!("Failed to build menu: {}", e)))?;
@@ -927,7 +944,9 @@ pub async fn show_app_menu(app: AppHandle) -> Result<String, KashshafError> {
     // Get the underlying Window from WebviewWindow for the popup
     let window = webview_window.as_ref().window();
 
-    menu.popup(window.clone())
+    // Position is relative to the window's top-left corner
+    let position = tauri::PhysicalPosition::new(x as i32, y as i32);
+    menu.popup_at(window.clone(), position)
         .map_err(|e| KashshafError::Other(format!("Failed to show menu: {}", e)))?;
 
     Ok("Menu shown".to_string())
@@ -1463,4 +1482,53 @@ pub fn corpus_exists() -> Result<bool, KashshafError> {
 
     let exists = index_path.exists() && db_path.exists();
     Ok(exists)
+}
+
+/// Delete local corpus data (corpus.db, tantivy_index, manifest.local.json)
+/// Preserves settings.db (search history, saved searches, user preferences)
+/// Returns the number of items deleted
+#[tauri::command]
+pub fn delete_local_data(state: State<'_, ManagedAppState>) -> Result<u32, KashshafError> {
+    let data_dir = get_corpus_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
+
+    // First, clear the AppState to release any file handles
+    {
+        let mut guard = state.write().map_err(|_| {
+            KashshafError::Other("Failed to acquire state write lock".to_string())
+        })?;
+        *guard = None;
+        println!("AppState cleared before deleting local data");
+    }
+
+    let mut deleted_count: u32 = 0;
+
+    // Delete corpus.db
+    let db_path = data_dir.join("corpus.db");
+    if db_path.exists() {
+        std::fs::remove_file(&db_path)
+            .map_err(|e| KashshafError::Other(format!("Failed to delete corpus.db: {}", e)))?;
+        println!("Deleted: {:?}", db_path);
+        deleted_count += 1;
+    }
+
+    // Delete tantivy_index directory
+    let index_path = data_dir.join("tantivy_index");
+    if index_path.exists() {
+        std::fs::remove_dir_all(&index_path)
+            .map_err(|e| KashshafError::Other(format!("Failed to delete tantivy_index: {}", e)))?;
+        println!("Deleted: {:?}", index_path);
+        deleted_count += 1;
+    }
+
+    // Delete manifest.local.json (download tracking file)
+    let manifest_path = data_dir.join("manifest.local.json");
+    if manifest_path.exists() {
+        std::fs::remove_file(&manifest_path)
+            .map_err(|e| KashshafError::Other(format!("Failed to delete manifest.local.json: {}", e)))?;
+        println!("Deleted: {:?}", manifest_path);
+        deleted_count += 1;
+    }
+
+    println!("Local data deletion complete. {} items deleted.", deleted_count);
+    Ok(deleted_count)
 }

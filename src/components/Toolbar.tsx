@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { showAppMenu, checkAppUpdate, getAppSetting, setAppSetting } from '../api/tauri';
+import { showAppMenu, checkAppUpdate, getAppSetting, setAppSetting, deleteLocalData } from '../api/tauri';
 import { AppUpdateModal } from './modals/AppUpdateModal';
+import { DeleteDataModal } from './modals/DeleteDataModal';
 import type { AppUpdateStatus } from '../types';
 
 // Setting key for "do not show again" preference
@@ -17,6 +18,8 @@ interface ToolbarProps {
   isOnlineMode?: boolean;
   /** Callback when user wants to download corpus (from online mode button) */
   onDownloadCorpus?: () => void;
+  /** Callback when local data is deleted - app should switch to online mode or show download modal */
+  onDataDeleted?: () => void;
 }
 
 export function Toolbar({
@@ -27,23 +30,31 @@ export function Toolbar({
   helpActive,
   isOnlineMode,
   onDownloadCorpus,
+  onDataDeleted,
 }: ToolbarProps) {
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [isManualCheck, setIsManualCheck] = useState(false);
   const [showNoUpdateModal, setShowNoUpdateModal] = useState(false);
+  const [showDeleteDataModal, setShowDeleteDataModal] = useState(false);
 
   useEffect(() => {
     // Check for updates on startup
     checkForUpdates(false);
 
     // Listen for manual "Check for Updates" from menu
-    const unlisten = listen('check-for-updates', () => {
+    const unlistenUpdates = listen('check-for-updates', () => {
       handleManualCheckForUpdates();
     });
 
+    // Listen for "Delete Local Data" from menu
+    const unlistenDelete = listen('delete-local-data', () => {
+      setShowDeleteDataModal(true);
+    });
+
     return () => {
-      unlisten.then(fn => fn());
+      unlistenUpdates.then(fn => fn());
+      unlistenDelete.then(fn => fn());
     };
   }, []);
 
@@ -107,13 +118,26 @@ export function Toolbar({
     setShowUpdateModal(false);
   }
 
-  const handleMenuClick = async () => {
+  const handleMenuClick = async (event: React.MouseEvent<HTMLButtonElement>) => {
     try {
-      await showAppMenu();
+      // Get button position to show menu aligned with button's left edge
+      const button = event.currentTarget;
+      const rect = button.getBoundingClientRect();
+      // Position at the bottom-left of the button
+      // Multiply by devicePixelRatio to convert to physical pixels
+      const x = rect.left * window.devicePixelRatio;
+      const y = rect.bottom * window.devicePixelRatio;
+      await showAppMenu(x, y);
     } catch (err) {
       console.error('Failed to show menu:', err);
     }
   };
+
+  async function handleDeleteData() {
+    await deleteLocalData();
+    setShowDeleteDataModal(false);
+    onDataDeleted?.();
+  }
 
   return (
     <div className="flex flex-col flex-shrink-0">
@@ -243,6 +267,14 @@ export function Toolbar({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Delete Local Data Modal */}
+      {showDeleteDataModal && (
+        <DeleteDataModal
+          onConfirm={handleDeleteData}
+          onCancel={() => setShowDeleteDataModal(false)}
+        />
       )}
     </div>
   );

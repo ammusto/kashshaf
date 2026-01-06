@@ -40,3 +40,4 @@ Cargo.lock
 
 # Internal Documents
 docs/internal
+releases/

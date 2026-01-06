@@ -34,6 +34,9 @@
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico"
+      },
+      "wix": {
+        "upgradeCode": "8D63204C-5EBC-406E-B50F-DE7242B40716"
       }
     },
     "macOS": {

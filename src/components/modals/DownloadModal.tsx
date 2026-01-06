@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { CorpusStatus, DownloadProgress } from '../../types';
 import { startCorpusDownload, cancelCorpusDownload } from '../../api/tauri';
+
+// Number of speed samples to keep for rolling average
+const SPEED_SAMPLE_COUNT = 10;
 
 interface DownloadModalProps {
   status: CorpusStatus;
@@ -42,26 +45,40 @@ export function DownloadModal({
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloadSpeed, setDownloadSpeed] = useState(0);
-  const [lastBytesDownloaded, setLastBytesDownloaded] = useState(0);
-  const [lastTimestamp, setLastTimestamp] = useState(Date.now());
   const [skipVerify, setSkipVerify] = useState(true);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [skipPromptNextTime, setSkipPromptNextTime] = useState(false);
+
+  // Refs for speed calculation (avoid re-renders and dependency issues)
+  const speedSamplesRef = useRef<number[]>([]);
+  const lastBytesRef = useRef(0);
+  const lastTimestampRef = useRef(Date.now());
 
   useEffect(() => {
     const unlisten = listen<DownloadProgress>('download-progress', (event) => {
       const newProgress = event.payload;
       setProgress(newProgress);
 
-      // Calculate download speed
+      // Calculate download speed using rolling average
       const now = Date.now();
-      const timeDiff = (now - lastTimestamp) / 1000;
+      const timeDiff = (now - lastTimestampRef.current) / 1000;
       if (timeDiff >= 1) {
-        const bytesDiff = newProgress.overall_bytes_downloaded - lastBytesDownloaded;
-        setDownloadSpeed(bytesDiff / timeDiff);
-        setLastBytesDownloaded(newProgress.overall_bytes_downloaded);
-        setLastTimestamp(now);
+        const bytesDiff = newProgress.overall_bytes_downloaded - lastBytesRef.current;
+        const instantSpeed = bytesDiff / timeDiff;
+
+        // Add to samples and keep only last N samples
+        speedSamplesRef.current.push(instantSpeed);
+        if (speedSamplesRef.current.length > SPEED_SAMPLE_COUNT) {
+          speedSamplesRef.current.shift();
+        }
+
+        // Calculate average speed from samples
+        const avgSpeed = speedSamplesRef.current.reduce((a, b) => a + b, 0) / speedSamplesRef.current.length;
+        setDownloadSpeed(avgSpeed);
+
+        lastBytesRef.current = newProgress.overall_bytes_downloaded;
+        lastTimestampRef.current = now;
       }
 
       // Check for completion
@@ -79,7 +96,7 @@ export function DownloadModal({
     return () => {
       unlisten.then(f => f());
     };
-  }, [lastBytesDownloaded, lastTimestamp, onDownloadComplete]);
+  }, [onDownloadComplete]);
 
   // Timer effect
   useEffect(() => {
@@ -97,8 +114,11 @@ export function DownloadModal({
       setError(null);
       setDownloading(true);
       setProgress(null);
-      setLastBytesDownloaded(0);
-      setLastTimestamp(Date.now());
+      setDownloadSpeed(0);
+      // Reset refs for speed calculation
+      speedSamplesRef.current = [];
+      lastBytesRef.current = 0;
+      lastTimestampRef.current = Date.now();
       setStartTime(Date.now());
       setElapsedTime(0);
       await startCorpusDownload(skipVerify);
