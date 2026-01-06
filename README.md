@@ -1,4 +1,4 @@
-# Kashshaf
+# Kashshāf
 
 Desktop application for searching medieval Arabic texts (pre-750/1350) with token-level morphological data.
 
