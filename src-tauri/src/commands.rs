@@ -1421,6 +1421,11 @@ pub fn get_user_setting(key: String) -> Result<Option<String>, KashshafError> {
 
     let settings_path = get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
 
+    // Ensure parent directory exists (may not exist on first startup)
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| KashshafError::Other(e.to_string()))?;
+    }
+
     // Initialize settings DB if not exists (same as in state.rs)
     let conn = rusqlite::Connection::open(&settings_path)
         .map_err(|e| KashshafError::Database(e.to_string()))?;
@@ -1451,6 +1456,11 @@ pub fn set_user_setting(key: String, value: String) -> Result<(), KashshafError>
     use kashshaf_lib::downloader::get_settings_db_path;
 
     let settings_path = get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
+
+    // Ensure parent directory exists (may not exist on first startup)
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| KashshafError::Other(e.to_string()))?;
+    }
 
     let conn = rusqlite::Connection::open(&settings_path)
         .map_err(|e| KashshafError::Database(e.to_string()))?;
