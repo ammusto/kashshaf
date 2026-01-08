@@ -592,7 +592,9 @@ impl SearchEngine {
         let reader = self.index.reader_builder().reload_policy(ReloadPolicy::OnCommitWithDelay).try_into()?;
         let searcher = reader.searcher();
 
-        let overfetch_limit = (limit + offset) * 10;
+        // Overfetch significantly to account for proximity filtering.
+        // Many candidates won't pass the distance check, so we need a high cap.
+        let overfetch_limit = ((limit + offset) * 20).max(5000);
         let term1_query = self.build_term_query(term1)?;
         let term2_query = self.build_term_query(term2)?;
         let text_query = BooleanQuery::new(vec![(Occur::Must, term1_query), (Occur::Must, term2_query)]);
