@@ -117,7 +117,7 @@ export function TokenPopup({ token, position, onClose }: TokenPopupProps) {
         <InfoRow label="Root" value={token.root} rtl tall />
         <InfoRow label="POS" value={token.pos} rtl />
         <InfoRow label="Features" value={token.features.join(', ')} small rtl />
-        <InfoRow label="Clitics" value={token.clitics.map(c => c.display).join(', ')} small rtl />
+        <InfoRow label="Clitics" value={token.clitics.map(c => c.display).join(', ')} rtl />
       </div>
     </div>
   );

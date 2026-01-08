@@ -3,6 +3,13 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenClitic {
+    #[serde(rename = "type")]
+    pub clitic_type: String,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Token {
     pub idx: usize,
     pub surface: String,
@@ -11,7 +18,7 @@ pub struct Token {
     pub root: Option<String>,
     pub pos: String,
     pub features: Vec<String>,
-    pub clitics: Vec<String>,
+    pub clitics: Vec<TokenClitic>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 //! Token caching with LRU eviction, loads from SQLite corpus.db
 
-use crate::tokens::{PageKey, Token, TokenField};
+use crate::tokens::{PageKey, Token, TokenClitic, TokenField};
 use anyhow::{Context, Result};
 use lru::LruCache;
 use rusqlite::Connection;
@@ -14,7 +14,7 @@ struct LookupTables {
     lemmas: HashMap<i64, String>,
     pos_types: HashMap<i64, String>,
     feature_sets: HashMap<i64, Vec<String>>,
-    clitic_sets: HashMap<i64, Vec<String>>,
+    clitic_sets: HashMap<i64, Vec<TokenClitic>>,
 }
 
 pub struct TokenCache {
@@ -66,7 +66,7 @@ impl TokenCache {
             })
             .collect();
 
-        let clitic_sets: HashMap<i64, Vec<String>> = conn
+        let clitic_sets: HashMap<i64, Vec<TokenClitic>> = conn
             .prepare("SELECT id, clitics FROM clitic_sets")?
             .query_map([], |row| {
                 let id: i64 = row.get(0)?;
@@ -75,7 +75,7 @@ impl TokenCache {
             })?
             .filter_map(|r| r.ok())
             .map(|(id, json)| {
-                let clitics: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
+                let clitics: Vec<TokenClitic> = serde_json::from_str(&json).unwrap_or_default();
                 (id, clitics)
             })
             .collect();
