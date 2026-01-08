@@ -147,8 +147,21 @@ export function DownloadModal({
     }
   }
 
+  // Check if this is an app version too old error (requires app update, not corpus download)
+  const isAppTooOld = status.update_required && status.error?.includes('too old');
+
   // Determine message based on status
   const getMessage = () => {
+    // App version too old - need to update the app itself
+    if (isAppTooOld) {
+      return {
+        title: 'App Update Required',
+        message: status.error || 'Your app version is too old. Please update to continue.',
+        canDismiss: false,
+        showOnline: false,
+        requiresAppUpdate: true,
+      };
+    }
     // Fresh install - no corpus data
     if (!status.ready && status.missing_files.length > 0 && !status.update_required) {
       return {
@@ -156,6 +169,7 @@ export function DownloadModal({
         message: `For offline use, you must download the corpus (${formatBytes(status.total_download_size)}). Do you want to proceed?`,
         canDismiss: false,
         showOnline: showOnlineOption && !!onOnlineUse,
+        requiresAppUpdate: false,
       };
     }
     if (status.update_required) {
@@ -164,6 +178,7 @@ export function DownloadModal({
         message: 'The corpus format has changed. Please download the updated corpus data to continue.',
         canDismiss: false,
         showOnline: false,
+        requiresAppUpdate: false,
       };
     }
     if (status.update_available) {
@@ -172,6 +187,7 @@ export function DownloadModal({
         message: `A new version of the corpus is available (${status.remote_version}). Would you like to update?`,
         canDismiss: true,
         showOnline: false,
+        requiresAppUpdate: false,
       };
     }
     return {
@@ -179,6 +195,7 @@ export function DownloadModal({
       message: 'Download corpus data to continue.',
       canDismiss: false,
       showOnline: showOnlineOption && !!onOnlineUse,
+      requiresAppUpdate: false,
     };
   };
 
@@ -214,21 +231,24 @@ export function DownloadModal({
           {!downloading && !progress && (
             <div className="space-y-4">
               <p className="text-app-text-secondary">{msgInfo.message}</p>
-              {status.error && (
+              {/* Show error only if not app-too-old (that message is already in msgInfo.message) */}
+              {status.error && !isAppTooOld && (
                 <div className="p-3 rounded-lg bg-yellow-50 text-yellow-700 text-sm">
                   {status.error}
                 </div>
               )}
-              {/* Verify files checkbox */}
-              <label className="flex items-center gap-2 text-sm text-app-text-tertiary cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={!skipVerify}
-                  onChange={(e) => setSkipVerify(!e.target.checked)}
-                  className="w-4 h-4 rounded border-app-border-light"
-                />
-                <span>Verify downloaded files (slower)</span>
-              </label>
+              {/* Verify files checkbox - hide when app update required */}
+              {!msgInfo.requiresAppUpdate && (
+                <label className="flex items-center gap-2 text-sm text-app-text-tertiary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!skipVerify}
+                    onChange={(e) => setSkipVerify(!e.target.checked)}
+                    className="w-4 h-4 rounded border-app-border-light"
+                  />
+                  <span>Verify downloaded files (slower)</span>
+                </label>
+              )}
               {/* Do not show again checkbox - only for online use */}
               {msgInfo.showOnline && (
                 <label className="flex items-center gap-2 text-sm text-app-text-tertiary cursor-pointer">
@@ -331,12 +351,23 @@ export function DownloadModal({
                   Later
                 </button>
               )}
-              <button
-                onClick={handleStartDownload}
-                className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
-              >
-                Download
-              </button>
+              {msgInfo.requiresAppUpdate ? (
+                <a
+                  href="https://kashshaf.com/download"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
+                >
+                  Download Update
+                </a>
+              ) : (
+                <button
+                  onClick={handleStartDownload}
+                  className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
+                >
+                  Download
+                </button>
+              )}
             </>
           )}
 
