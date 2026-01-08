@@ -53,6 +53,11 @@ export interface PageWithMatches {
 }
 
 // Token types
+export interface TokenClitic {
+  type: string;
+  display: string;
+}
+
 export interface Token {
   idx: number;
   surface: string;
@@ -61,7 +66,7 @@ export interface Token {
   root?: string;
   pos: string;
   features: string[];
-  clitics: string[];
+  clitics: TokenClitic[];
 }
 
 // Book metadata types (from corpus.db)
