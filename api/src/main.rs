@@ -115,6 +115,12 @@ struct BookMetadata {
     genre: Option<String>,
     page_count: Option<i64>,
     token_count: Option<i64>,
+    original_id: Option<String>,
+    date: Option<String>,
+    paginated: Option<bool>,
+    tags: Option<String>,
+    book_meta: Option<String>,
+    author_meta: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -246,7 +252,8 @@ async fn get_all_books(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, corpus, title, author_id, author, death_ah, century_ah, genre, page_count, token_count 
+        "SELECT id, corpus, title, author_id, author, death_ah, century_ah, genre, page_count, token_count,
+                original_id, date, paginated, tags, book_meta, author_meta
          FROM books ORDER BY death_ah ASC NULLS LAST, id ASC"
     ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
@@ -262,6 +269,12 @@ async fn get_all_books(
             genre: row.get(7)?,
             page_count: row.get(8)?,
             token_count: row.get(9)?,
+            original_id: row.get(10)?,
+            date: row.get(11)?,
+            paginated: row.get::<_, Option<i64>>(12)?.map(|v| v != 0),
+            tags: row.get(13)?,
+            book_meta: row.get(14)?,
+            author_meta: row.get(15)?,
         })
     }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
         .filter_map(|r| r.ok())
