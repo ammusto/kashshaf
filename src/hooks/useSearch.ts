@@ -1,11 +1,10 @@
 import { useCallback } from 'react';
-import type { SearchMode, SearchFilters, SearchResults, SearchResult } from '../types';
+import type { SearchFilters, SearchResults, SearchResult } from '../types';
 import type { SearchContext, AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from '../types/search';
 import type { NameFormData } from '../utils/namePatterns';
 import type { SearchAPI, NameSearchForm as NameSearchFormAPI } from '../api';
-import { PAGE_SIZE, MAX_RESULTS, EXPORT_MAX_RESULTS, CONCORDANCE_PAGE_SIZE, CONCORDANCE_MAX_RESULTS } from '../constants/search';
+import { PAGE_SIZE, MAX_RESULTS, EXPORT_MAX_RESULTS } from '../constants/search';
 import { addToHistory } from '../utils/storage';
-import { isWebTarget } from '../utils/platform';
 import { useSearchTabsContext } from '../contexts/SearchTabsContext';
 import { generateSearchPatterns, generateDisplayPatterns } from '../utils/namePatterns';
 
@@ -20,10 +19,8 @@ export interface UseSearchReturn {
   handleSearch: (combined: CombinedSearchQuery) => Promise<void>;
   handleProximitySearch: (query: ProximitySearchQuery) => Promise<void>;
   handleNameSearch: (nameFormData: NameFormData[]) => Promise<{ displayPatterns: string[][] }>;
-  handleConcordanceSearch: (query: string, mode: SearchMode, ignoreClitics: boolean) => Promise<void>;
   handleLoadMore: () => Promise<void>;
   handleExportResults: () => Promise<SearchResult[]>;
-  handleConcordanceExport: () => Promise<void>;
   handleResultClick: (result: SearchResult) => Promise<void>;
 }
 
@@ -114,7 +111,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
 
   // Add search to history (fire and forget)
   const addSearchToHistory = useCallback((
-    searchType: 'boolean' | 'proximity' | 'name' | 'wildcard' | 'concordance',
+    searchType: 'boolean' | 'proximity' | 'name' | 'wildcard',
     queryData: object,
     displayLabel: string
   ) => {
@@ -276,43 +273,6 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
     return { displayPatterns };
   }, [createTab, updateTab, getFilters, addSearchToHistory, loadResultIntoTab, api]);
 
-  // Concordance search handler
-  const handleConcordanceSearch = useCallback(async (query: string, mode: SearchMode, ignoreClitics: boolean) => {
-    if (!query.trim()) return;
-
-    const label = query.length > 15 ? query.slice(0, 15) : query;
-    const fullQuery = query;
-
-    const searchContext: SearchContext = {
-      type: 'concordance',
-      concordanceQuery: query,
-      concordanceMode: mode,
-      concordanceIgnoreClitics: ignoreClitics,
-    };
-
-    const tabId = createTab(label, fullQuery, 'concordance', searchContext);
-
-    try {
-      const filters = getFilters();
-      const results = await api.concordanceSearch(
-        query,
-        mode,
-        ignoreClitics,
-        filters,
-        CONCORDANCE_PAGE_SIZE,
-        0
-      );
-      updateTab(tabId, { searchResults: results, loading: false });
-
-      if (results.results.length > 0) {
-        loadResultIntoTab(tabId, results.results[0]);
-      }
-    } catch (err) {
-      updateTab(tabId, { errorMessage: `Concordance search failed: ${err}`, loading: false });
-      console.error('Concordance search failed:', err);
-    }
-  }, [createTab, updateTab, getFilters, loadResultIntoTab, api]);
-
   // Load more results handler (works for all search types)
   const handleLoadMore = useCallback(async () => {
     if (!activeTab || activeTab.loadingMore || !activeTab.searchResults) return;
@@ -339,15 +299,6 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       } else if (searchContext.type === 'combined' && searchContext.combinedQuery) {
         moreResults = await api.combinedSearch(
           searchContext.combinedQuery, filters, PAGE_SIZE, currentCount
-        );
-      } else if (searchContext.type === 'concordance' && searchContext.concordanceQuery) {
-        moreResults = await api.concordanceSearch(
-          searchContext.concordanceQuery,
-          searchContext.concordanceMode || 'lemma',
-          searchContext.concordanceIgnoreClitics || false,
-          filters,
-          CONCORDANCE_PAGE_SIZE,
-          currentCount
         );
       } else if (searchContext.type === 'wildcard' && searchContext.wildcardQuery) {
         moreResults = await api.wildcardSearch(
@@ -409,71 +360,6 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
     return exportResults.results;
   }, [activeTab, getFilters, api]);
 
-  // Concordance export handler
-  const handleConcordanceExport = useCallback(async () => {
-    if (!activeTab || !activeTab.searchResults || activeTab.searchResults.total_hits === 0) return;
-
-    const { searchContext } = activeTab;
-    if (searchContext.type !== 'concordance' || !searchContext.concordanceQuery) return;
-
-    try {
-      const filters = getFilters();
-
-      if (isWebTarget()) {
-        // Web: Fetch all results and export to CSV in browser
-        const results = await api.concordanceSearch(
-          searchContext.concordanceQuery,
-          searchContext.concordanceMode || 'lemma',
-          searchContext.concordanceIgnoreClitics || false,
-          filters,
-          CONCORDANCE_MAX_RESULTS,
-          0
-        );
-
-        // Generate CSV content
-        const headers = ['Title', 'Author', 'Part', 'Page', 'Context'];
-        const rows = results.results.map(r => [
-          r.title,
-          r.author,
-          r.part_label || '',
-          r.page_number || '',
-          r.body || '',
-        ]);
-
-        const csvContent = [
-          headers.join(','),
-          ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-        ].join('\n');
-
-        // Trigger download
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `concordance_${searchContext.concordanceQuery.slice(0, 20)}.csv`;
-        link.click();
-        URL.revokeObjectURL(link.href);
-
-        console.log('Exported concordance results');
-      } else {
-        // Desktop: Use Tauri export
-        const { exportConcordance } = await import('../api/tauri');
-        const filePath = await exportConcordance(
-          searchContext.concordanceQuery,
-          searchContext.concordanceMode || 'lemma',
-          searchContext.concordanceIgnoreClitics || false,
-          filters,
-          CONCORDANCE_MAX_RESULTS
-        );
-
-        console.log('Exported to:', filePath);
-        alert(`Exported to: ${filePath}`);
-      }
-    } catch (err) {
-      updateTab(activeTab.id, { errorMessage: `Export failed: ${err}` });
-      console.error('Export failed:', err);
-    }
-  }, [activeTab, getFilters, updateTab, api]);
-
   // Result click handler
   const handleResultClick = useCallback(async (result: SearchResult) => {
     if (!activeTab) return;
@@ -484,10 +370,8 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
     handleSearch,
     handleProximitySearch,
     handleNameSearch,
-    handleConcordanceSearch,
     handleLoadMore,
     handleExportResults,
-    handleConcordanceExport,
     handleResultClick,
   };
 }

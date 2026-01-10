@@ -202,35 +202,6 @@ export class OnlineAPI implements SearchAPI {
     return fetchAPI<SearchResults>(`/search/wildcard?${params}`);
   }
 
-  async concordanceSearch(
-    query: string,
-    mode: SearchMode,
-    ignoreClitics: boolean,
-    filters: SearchFilters,
-    limit: number,
-    offset: number
-  ): Promise<SearchResults> {
-    // Build search terms based on mode and ignoreClitics
-    const searchQueries: string[] = mode === 'surface' && ignoreClitics
-      ? expandWithClitics(query)
-      : [query];
-
-    const orTerms = searchQueries.map(q => ({ query: q, mode }));
-
-    return fetchAPI<SearchResults>('/search/combined', {
-      method: 'POST',
-      body: JSON.stringify({
-        and_terms: [],
-        or_terms: orTerms,
-        filters: {
-          book_ids: filters.book_ids || [],
-        },
-        limit,
-        offset,
-      }),
-    });
-  }
-
   async getPage(
     id: number,
     partIndex: number,

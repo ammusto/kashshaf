@@ -82,17 +82,6 @@ export class OfflineAPI implements SearchAPI {
     return tauri.wildcardSearch(query, filters, limit, offset);
   }
 
-  async concordanceSearch(
-    query: string,
-    mode: SearchMode,
-    ignoreClitics: boolean,
-    filters: SearchFilters,
-    limit: number,
-    offset: number
-  ): Promise<SearchResults> {
-    return tauri.concordanceSearch(query, mode, ignoreClitics, filters, limit, offset);
-  }
-
   async getPage(
     id: number,
     partIndex: number,

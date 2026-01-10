@@ -2,14 +2,15 @@ name: Deploy API
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+    paths:
+      - 'api/**'
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Deploy to server
         uses: appleboy/ssh-action@v1
@@ -18,26 +19,7 @@ jobs:
           username: kashshaf
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            set -euo pipefail
-
             cd /opt/kashshaf/api
-            git fetch --tags origin
-
-            TAG=$(git describe --tags --abbrev=0)
-            echo "Deploying $TAG"
-
-            git reset --hard $TAG
-
-            cd api
-
+            git pull origin main
             ~/.cargo/bin/cargo build --release
-
-            # atomic swap
-            install -m 755 target/release/kashshaf-api /opt/kashshaf/bin/kashshaf-api.new
-            mv /opt/kashshaf/bin/kashshaf-api /opt/kashshaf/bin/kashshaf-api.old || true
-            mv /opt/kashshaf/bin/kashshaf-api.new /opt/kashshaf/bin/kashshaf-api
-
             sudo systemctl restart kashshaf-api
-
-            sleep 2
-            sudo systemctl is-active --quiet kashshaf-api

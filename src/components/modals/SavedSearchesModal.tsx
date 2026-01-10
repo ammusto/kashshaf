@@ -34,8 +34,6 @@ function getSearchTypeBadge(searchType: string): { label: string; color: string 
       return { label: 'Name', color: 'bg-green-100 text-green-700' };
     case 'wildcard':
       return { label: 'Wildcard', color: 'bg-orange-100 text-orange-700' };
-    case 'concordance':
-      return { label: 'Concordance', color: 'bg-teal-100 text-teal-700' };
     default:
       return { label: searchType, color: 'bg-gray-100 text-gray-700' };
   }

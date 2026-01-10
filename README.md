@@ -11,7 +11,6 @@ Desktop application for searching medieval Arabic texts (pre-750/1350) with toke
 - **Name Search** - Search Arabic personal names with pattern generation for kunyas, nasab, nisbas
 - **Wildcard Search** - Prefix and infix patterns (e.g., `أب*`, `أح*مد`)
 - **Boolean Queries** - Combine terms with AND/OR logic
-- **Concordance Mode** - KWIC (keyword in context) display
 - **Token Overlay** - Click any word to see morphological analysis (lemma, root, POS, features)
 - **Filtering** - By period, author, genre, or specific texts
 - **Export** - Results and metadata to CSV/Excel
@@ -22,12 +21,12 @@ The application uses a dual-mode architecture with an API abstraction layer that
 
 | Layer | Technology |
 |-------|------------|
-| UI | React 18, TailwindCSS, TanStack Virtual |
+| UI | React 18, TailwindCSS |
 | Desktop Runtime | Tauri 2.x (Rust) |
 | Search Engine | Tantivy (local) / REST API (remote) |
 | Database | SQLite (tokens, metadata, history) |
 
-**Offline Mode** - Full corpus stored locally (~8 GB). Best performance, no internet required.
+**Offline Mode** - Full corpus stored locally (~16 GB). Best performance, no internet required.
 
 **Online Mode** - Query remote API. No download required, but needs internet connection.
 

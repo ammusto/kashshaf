@@ -1,15 +1,12 @@
-import type { SearchResults, Token, SearchMode } from './index';
+import type { SearchResults, Token } from './index';
 
 // Search context stored per tab for load-more and export
 export interface SearchContext {
-  type: 'combined' | 'proximity' | 'name' | 'concordance' | 'wildcard';
+  type: 'combined' | 'proximity' | 'name' | 'wildcard';
   combinedQuery?: CombinedSearchQuery;
   proximityQuery?: ProximitySearchQuery;
   namePatterns?: string[][];
   displayPatterns?: string[][];
-  concordanceQuery?: string;
-  concordanceMode?: SearchMode;
-  concordanceIgnoreClitics?: boolean;
   wildcardQuery?: string;
 }
 
@@ -27,7 +24,7 @@ export interface SearchTab {
   id: string;
   label: string;
   fullQuery: string;
-  tabType: 'terms' | 'names' | 'concordance';
+  tabType: 'terms' | 'names';
 
   // Results state
   searchResults: SearchResults | null;
@@ -48,7 +45,7 @@ export interface SearchTab {
 }
 
 // App-level search mode
-export type AppSearchMode = 'terms' | 'names' | 'concordance';
+export type AppSearchMode = 'terms' | 'names';
 
 // Re-export types used by SearchContext
 export interface CombinedSearchQuery {

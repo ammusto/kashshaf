@@ -89,15 +89,6 @@ export interface SearchAPI {
     offset: number
   ): Promise<SearchResults>;
 
-  concordanceSearch(
-    query: string,
-    mode: SearchMode,
-    ignoreClitics: boolean,
-    filters: SearchFilters,
-    limit: number,
-    offset: number
-  ): Promise<SearchResults>;
-
   // Page operations
   getPage(
     id: number,

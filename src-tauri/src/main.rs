@@ -61,8 +61,6 @@ fn main() {
             commands::get_page_with_matches,
             commands::get_name_match_positions,
             commands::wildcard_search,
-            commands::concordance_search,
-            commands::export_concordance,
             commands::show_app_menu,
             // Search history commands
             commands::add_to_history,

@@ -39,10 +39,6 @@ function getSearchTermsFromContext(context: SearchContext): SearchTerm[] | null 
     ];
   }
 
-  if (context.type === 'concordance' && context.concordanceQuery) {
-    return [{ query: context.concordanceQuery, mode: context.concordanceMode || 'lemma' }];
-  }
-
   if (context.type === 'wildcard' && context.wildcardQuery) {
     return [{ query: context.wildcardQuery, mode: 'surface' }];
   }

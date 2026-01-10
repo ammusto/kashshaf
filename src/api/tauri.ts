@@ -243,34 +243,6 @@ export async function getNameMatchPositions(
 }
 
 /**
- * Concordance search - returns SearchResults (same format as regular search)
- */
-export async function concordanceSearch(
-  query: string,
-  mode: 'surface' | 'lemma' | 'root',
-  ignoreClitics: boolean,
-  filters: SearchFilters,
-  limit: number,
-  offset: number
-): Promise<SearchResults> {
-  return invoke('concordance_search', { query, mode, ignoreClitics, filters, limit, offset });
-}
-
-/**
- * Export concordance results to CSV
- * Returns the file path of the generated CSV
- */
-export async function exportConcordance(
-  query: string,
-  mode: 'surface' | 'lemma' | 'root',
-  ignoreClitics: boolean,
-  filters: SearchFilters,
-  maxResults: number
-): Promise<string> {
-  return invoke('export_concordance', { query, mode, ignoreClitics, filters, maxResults });
-}
-
-/**
  * Wildcard search - search for Arabic text with * wildcards
  * Only works in Surface mode
  * Rules:

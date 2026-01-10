@@ -1,9 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { SearchMode } from '../types';
 import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from '../types/search';
 import type { NameFormData } from '../utils/namePatterns';
 import { NameSearchForm } from './name-search';
-import { ConcordanceSidebar } from './ConcordanceSidebar';
 import { Toast } from './ui';
 import { BooleanSearchPanel } from './sidebar/BooleanSearchPanel';
 import { ProximitySearchPanel } from './sidebar/ProximitySearchPanel';
@@ -25,18 +23,6 @@ interface SidebarProps {
   nameFormData: NameFormData[];
   onNameFormDataChange: (forms: NameFormData[]) => void;
   generatedPatterns: string[][];
-  // Concordance props
-  concordanceQuery: string;
-  onConcordanceQueryChange: (query: string) => void;
-  concordanceMode: SearchMode;
-  onConcordanceModeChange: (mode: SearchMode) => void;
-  concordanceIgnoreClitics: boolean;
-  onConcordanceIgnoreCliticsChange: (ignore: boolean) => void;
-  onConcordanceSearch: () => void;
-  onConcordanceExport: () => void;
-  concordanceLoading: boolean;
-  concordanceHasResults: boolean;
-  concordanceTotalHits: number;
 }
 
 const MIN_WIDTH = SIDEBAR_MIN_WIDTH;
@@ -57,18 +43,6 @@ export function Sidebar({
   nameFormData,
   onNameFormDataChange,
   generatedPatterns,
-  // Concordance props
-  concordanceQuery,
-  onConcordanceQueryChange,
-  concordanceMode,
-  onConcordanceModeChange,
-  concordanceIgnoreClitics,
-  onConcordanceIgnoreCliticsChange,
-  onConcordanceSearch,
-  onConcordanceExport,
-  concordanceLoading,
-  concordanceHasResults,
-  concordanceTotalHits,
 }: SidebarProps) {
   // Term search mode: 'boolean' or 'proximity' (only used when appSearchMode === 'terms')
   const [termSearchMode, setTermSearchMode] = useState<'boolean' | 'proximity'>('boolean');
@@ -240,23 +214,6 @@ export function Sidebar({
               generatedPatterns={generatedPatterns}
             />
           </div>
-        )}
-
-        {/* Concordance Search Section */}
-        {appSearchMode === 'concordance' && (
-          <ConcordanceSidebar
-            query={concordanceQuery}
-            onQueryChange={onConcordanceQueryChange}
-            mode={concordanceMode}
-            onModeChange={onConcordanceModeChange}
-            ignoreClitics={concordanceIgnoreClitics}
-            onIgnoreCliticsChange={onConcordanceIgnoreCliticsChange}
-            onSearch={onConcordanceSearch}
-            onExport={onConcordanceExport}
-            loading={concordanceLoading}
-            hasResults={concordanceHasResults}
-            totalHits={concordanceTotalHits}
-          />
         )}
 
         <div className="h-px bg-app-border-light flex-shrink-0" />

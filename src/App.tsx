@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
-import type { SearchMode, SearchHistoryEntry, SavedSearchEntry, CorpusStatus } from './types';
+import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus } from './types';
 import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from './types/search';
-import { MAX_RESULTS, CONCORDANCE_MAX_RESULTS } from './constants/search';
+import { MAX_RESULTS } from './constants/search';
 import { useSearchTabsContext } from './contexts/SearchTabsContext';
 import { useOperatingMode, saveOnlineModePreference } from './contexts/OperatingModeContext';
 import { BooksProvider } from './contexts/BooksContext';
 import { useSearch } from './hooks/useSearch';
 import { useReaderNavigation } from './hooks/useReaderNavigation';
 import { Sidebar } from './components/Sidebar';
-import { ReaderPanel, ResultsPanel, ConcordancePanel, HelpPanel } from './components/panels';
+import { ReaderPanel, ResultsPanel, HelpPanel } from './components/panels';
 import { DraggableSplitter, UpdateBanner } from './components/ui';
 import { TextSelectionModal, MetadataBrowser, SavedSearchesModal, SearchHistoryModal } from './components/modals';
 import { Toolbar } from './components/Toolbar';
@@ -50,11 +50,6 @@ function App() {
 
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
 
-  // Concordance sidebar state
-  const [concordanceQuery, setConcordanceQuery] = useState('');
-  const [concordanceMode, setConcordanceMode] = useState<SearchMode>('lemma');
-  const [concordanceIgnoreClitics, setConcordanceIgnoreClitics] = useState(false);
-
   const [splitterRatio, setSplitterRatio] = useState(() => {
     const saved = localStorage.getItem('splitterRatio');
     return saved ? parseFloat(saved) : 0.6;
@@ -75,10 +70,8 @@ function App() {
     handleSearch,
     handleProximitySearch,
     handleNameSearch: handleNameSearchFromHook,
-    handleConcordanceSearch: handleConcordanceSearchFromHook,
     handleLoadMore,
     handleExportResults,
-    handleConcordanceExport,
     handleResultClick,
   } = useSearch({ selectedBookIds, loadResultIntoTab, api });
 
@@ -87,11 +80,6 @@ function App() {
     const { displayPatterns } = await handleNameSearchFromHook(nameFormData);
     setGeneratedPatterns(displayPatterns);
   }, [handleNameSearchFromHook, nameFormData]);
-
-  // Wrap concordance search to use local state
-  const handleConcordanceSearch = useCallback(async () => {
-    await handleConcordanceSearchFromHook(concordanceQuery, concordanceMode, concordanceIgnoreClitics);
-  }, [handleConcordanceSearchFromHook, concordanceQuery, concordanceMode, concordanceIgnoreClitics]);
 
   // Check corpus status on mount (only when mode is pending or offline)
   useEffect(() => {
@@ -177,9 +165,6 @@ function App() {
     label: tab.label,
     fullQuery: tab.fullQuery,
   }));
-
-  // Determine if current tab is concordance
-  const isConcordanceTab = activeTab?.tabType === 'concordance';
 
   // Handle download complete - reload app state and recheck status (desktop only)
   const handleDownloadComplete = useCallback(async () => {
@@ -372,18 +357,6 @@ function App() {
           nameFormData={nameFormData}
           onNameFormDataChange={setNameFormData}
           generatedPatterns={generatedPatterns}
-          // Concordance props
-          concordanceQuery={concordanceQuery}
-          onConcordanceQueryChange={setConcordanceQuery}
-          concordanceMode={concordanceMode}
-          onConcordanceModeChange={setConcordanceMode}
-          concordanceIgnoreClitics={concordanceIgnoreClitics}
-          onConcordanceIgnoreCliticsChange={setConcordanceIgnoreClitics}
-          onConcordanceSearch={handleConcordanceSearch}
-          onConcordanceExport={handleConcordanceExport}
-          concordanceLoading={activeTab?.loading ?? false}
-          concordanceHasResults={isConcordanceTab && activeTab?.searchResults !== null && (activeTab?.searchResults?.results.length ?? 0) > 0}
-          concordanceTotalHits={isConcordanceTab ? (activeTab?.searchResults?.total_hits ?? 0) : 0}
         />
 
         <div className="flex-1 flex flex-col overflow-hidden p-4">
@@ -415,28 +388,16 @@ function App() {
               <DraggableSplitter ratio={splitterRatio} onDrag={setSplitterRatio} />
 
               <div style={{ flex: 1 - splitterRatio }} className="overflow-hidden rounded-xl shadow-app-md">
-                {isConcordanceTab ? (
-                  <ConcordancePanel
-                    results={activeTab?.searchResults ?? null}
-                    onResultClick={handleResultClick}
-                    onLoadMore={handleLoadMore}
-                    loading={activeTab?.loading ?? false}
-                    loadingMore={activeTab?.loadingMore ?? false}
-                    errorMessage={activeTab?.errorMessage ?? ''}
-                    maxResults={CONCORDANCE_MAX_RESULTS}
-                  />
-                ) : (
-                  <ResultsPanel
-                    results={activeTab?.searchResults ?? null}
-                    onResultClick={handleResultClick}
-                    onLoadMore={handleLoadMore}
-                    onExport={handleExportResults}
-                    loading={activeTab?.loading ?? false}
-                    loadingMore={activeTab?.loadingMore ?? false}
-                    errorMessage={activeTab?.errorMessage ?? ''}
-                    maxResults={MAX_RESULTS}
-                  />
-                )}
+                <ResultsPanel
+                  results={activeTab?.searchResults ?? null}
+                  onResultClick={handleResultClick}
+                  onLoadMore={handleLoadMore}
+                  onExport={handleExportResults}
+                  loading={activeTab?.loading ?? false}
+                  loadingMore={activeTab?.loadingMore ?? false}
+                  errorMessage={activeTab?.errorMessage ?? ''}
+                  maxResults={MAX_RESULTS}
+                />
               </div>
             </>
           )}
