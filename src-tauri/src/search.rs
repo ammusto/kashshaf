@@ -376,7 +376,7 @@ impl SearchEngine {
                         doc_address.doc_id,
                         search_field,
                         &phrase_terms,
-                        20,
+                        5,
                     )
                 } else {
                     self.get_matched_positions_limited(
@@ -384,7 +384,7 @@ impl SearchEngine {
                         doc_address.doc_id,
                         search_field,
                         &query_terms,
-                        20,
+                        5,
                     )
                 }
             } else {
@@ -671,7 +671,7 @@ impl SearchEngine {
         field: Field,
         query_terms: &HashSet<String>,
     ) -> Vec<u32> {
-        self.get_matched_positions_limited(segment_reader, doc_id, field, query_terms, 20)
+        self.get_matched_positions_limited(segment_reader, doc_id, field, query_terms, 5)
     }
 
     pub fn get_page(&self, id: u64, part_index: u64, page_id: u64) -> Result<Option<SearchResult>> {
@@ -1374,7 +1374,7 @@ impl SearchEngine {
             // Batch process non-phrase terms
             let mut positions_by_doc: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
             for (field, query_terms) in &terms_by_field {
-                let field_positions = self.get_matched_positions_batch(segment_reader, &doc_ids, *field, query_terms, 20);
+                let field_positions = self.get_matched_positions_batch(segment_reader, &doc_ids, *field, query_terms, 5);
                 for (doc_id, positions) in field_positions {
                     positions_by_doc.entry(doc_id).or_insert_with(Vec::new).extend(positions);
                 }
@@ -1390,7 +1390,7 @@ impl SearchEngine {
                         doc_id,
                         field,
                         &phrase_words,
-                        20,
+                        5,
                     );
                     positions_by_doc.entry(doc_id).or_insert_with(Vec::new).extend(phrase_positions);
                 }
@@ -1858,7 +1858,7 @@ impl SearchEngine {
                     doc_address.doc_id,
                     surface_field,
                     patterns,
-                    20,
+                    5,
                 )
             } else {
                 Vec::new()
@@ -2168,7 +2168,7 @@ impl SearchEngine {
                     doc_address.doc_id,
                     surface_field,
                     &query_info,
-                    20,
+                    5,
                 );
 
                 // Verify adjacency - all terms must appear consecutively
@@ -2194,7 +2194,7 @@ impl SearchEngine {
                 doc_address.doc_id,
                 surface_field,
                 &query_info,
-                20,
+                5,
             );
 
             let result = SearchResult {
