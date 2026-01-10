@@ -30,27 +30,35 @@ function escapeCSV(value: string | number | undefined | null): string {
 /**
  * Generate CSV content from books metadata
  */
-export function generateBooksCSV(books: BookMetadata[]): string {
+export function generateBooksCSV(
+  books: BookMetadata[],
+  authorsMap?: Map<number, string>,
+  genresMap?: Map<number, string>
+): string {
   const headers = [
     'ID', 'Title', 'Author', 'Author ID', 'Death Year (AH)', 'Century (AH)',
-    'Genre', 'Page Count', 'Token Count', 'Corpus', 'Original ID', 'Date', 'Paginated'
+    'Genre', 'Genre ID', 'Page Count', 'Token Count', 'Corpus', 'Original ID', 'Paginated'
   ];
 
-  const rows = books.map(book => [
-    escapeCSV(book.id),
-    escapeCSV(book.title),
-    escapeCSV(book.author),
-    escapeCSV(book.author_id),
-    escapeCSV(book.death_ah),
-    escapeCSV(book.century_ah),
-    escapeCSV(book.genre),
-    escapeCSV(book.page_count),
-    escapeCSV(book.token_count),
-    escapeCSV(book.corpus),
-    escapeCSV(book.original_id),
-    escapeCSV(book.date),
-    escapeCSV(book.paginated ? 'Yes' : 'No')
-  ].join(','));
+  const rows = books.map(book => {
+    const authorName = book.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
+    const genreName = book.genre_id !== undefined && genresMap ? genresMap.get(book.genre_id) : undefined;
+    return [
+      escapeCSV(book.id),
+      escapeCSV(book.title),
+      escapeCSV(authorName),
+      escapeCSV(book.author_id),
+      escapeCSV(book.death_ah),
+      escapeCSV(book.century_ah),
+      escapeCSV(genreName),
+      escapeCSV(book.genre_id),
+      escapeCSV(book.page_count),
+      escapeCSV(book.token_count),
+      escapeCSV(book.corpus),
+      escapeCSV(book.original_id),
+      escapeCSV(book.paginated ? 'Yes' : 'No')
+    ].join(',');
+  });
 
   return UTF8_BOM + [headers.join(','), ...rows].join('\n');
 }
@@ -78,24 +86,34 @@ export function generateAuthorsCSV(authors: AuthorInfo[]): string {
 /**
  * Generate CSV content from search results
  */
-export function generateSearchResultsCSV(results: SearchResult[]): string {
+export function generateSearchResultsCSV(
+  results: SearchResult[],
+  booksMap?: Map<number, BookMetadata>,
+  authorsMap?: Map<number, string>,
+  genresMap?: Map<number, string>
+): string {
   const headers = [
     'Book ID', 'Title', 'Author', 'Death Year (AH)', 'Century (AH)', 'Genre',
     'Volume', 'Page', 'Score', 'Context'
   ];
 
-  const rows = results.map(result => [
-    escapeCSV(result.id),
-    escapeCSV(result.title),
-    escapeCSV(result.author),
-    escapeCSV(result.death_ah),
-    escapeCSV(result.century_ah),
-    escapeCSV(result.genre),
-    escapeCSV(result.part_label),
-    escapeCSV(result.page_number),
-    escapeCSV(result.score.toFixed(2)),
-    escapeCSV(stripHtmlForExport(result.body || '').slice(0, 500)) // Limit context to 500 chars
-  ].join(','));
+  const rows = results.map(result => {
+    const book = booksMap?.get(result.id);
+    const authorName = book?.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
+    const genreName = book?.genre_id !== undefined && genresMap ? genresMap.get(book.genre_id) : undefined;
+    return [
+      escapeCSV(result.id),
+      escapeCSV(book?.title),
+      escapeCSV(authorName),
+      escapeCSV(result.death_ah),
+      escapeCSV(result.century_ah),
+      escapeCSV(genreName),
+      escapeCSV(result.part_label),
+      escapeCSV(result.page_number),
+      escapeCSV(result.score.toFixed(2)),
+      escapeCSV(stripHtmlForExport(result.body || '').slice(0, 500)) // Limit context to 500 chars
+    ].join(',');
+  });
 
   return UTF8_BOM + [headers.join(','), ...rows].join('\n');
 }
@@ -122,22 +140,30 @@ function workbookToUint8Array(workbook: XLSX.WorkBook): Uint8Array {
 /**
  * Generate XLSX workbook from books metadata using SheetJS
  */
-export function generateBooksXLSX(books: BookMetadata[]): Uint8Array {
-  const data = books.map(book => ({
-    'ID': book.id,
-    'Title': book.title,
-    'Author': book.author ?? '',
-    'Author ID': book.author_id ?? '',
-    'Death Year (AH)': book.death_ah ?? '',
-    'Century (AH)': book.century_ah ?? '',
-    'Genre': book.genre ?? '',
-    'Page Count': book.page_count ?? '',
-    'Token Count': book.token_count ?? '',
-    'Corpus': book.corpus ?? '',
-    'Original ID': book.original_id ?? '',
-    'Date': book.date ?? '',
-    'Paginated': book.paginated ? 'Yes' : 'No'
-  }));
+export function generateBooksXLSX(
+  books: BookMetadata[],
+  authorsMap?: Map<number, string>,
+  genresMap?: Map<number, string>
+): Uint8Array {
+  const data = books.map(book => {
+    const authorName = book.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
+    const genreName = book.genre_id !== undefined && genresMap ? genresMap.get(book.genre_id) : undefined;
+    return {
+      'ID': book.id,
+      'Title': book.title,
+      'Author': authorName ?? '',
+      'Author ID': book.author_id ?? '',
+      'Death Year (AH)': book.death_ah ?? '',
+      'Century (AH)': book.century_ah ?? '',
+      'Genre': genreName ?? '',
+      'Genre ID': book.genre_id ?? '',
+      'Page Count': book.page_count ?? '',
+      'Token Count': book.token_count ?? '',
+      'Corpus': book.corpus ?? '',
+      'Original ID': book.original_id ?? '',
+      'Paginated': book.paginated ? 'Yes' : 'No'
+    };
+  });
 
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();
@@ -169,19 +195,29 @@ export function generateAuthorsXLSX(authors: AuthorInfo[]): Uint8Array {
 /**
  * Generate XLSX workbook for search results using SheetJS
  */
-export function generateSearchResultsXLSX(results: SearchResult[]): Uint8Array {
-  const data = results.map(result => ({
-    'Book ID': result.id,
-    'Title': result.title,
-    'Author': result.author,
-    'Death Year (AH)': result.death_ah ?? '',
-    'Century (AH)': result.century_ah ?? '',
-    'Genre': result.genre ?? '',
-    'Volume': result.part_label,
-    'Page': result.page_number,
-    'Score': result.score.toFixed(2),
-    'Context': stripHtmlForExport(result.body || '').slice(0, 500)
-  }));
+export function generateSearchResultsXLSX(
+  results: SearchResult[],
+  booksMap?: Map<number, BookMetadata>,
+  authorsMap?: Map<number, string>,
+  genresMap?: Map<number, string>
+): Uint8Array {
+  const data = results.map(result => {
+    const book = booksMap?.get(result.id);
+    const authorName = book?.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
+    const genreName = book?.genre_id !== undefined && genresMap ? genresMap.get(book.genre_id) : undefined;
+    return {
+      'Book ID': result.id,
+      'Title': book?.title ?? '',
+      'Author': authorName ?? '',
+      'Death Year (AH)': result.death_ah ?? '',
+      'Century (AH)': result.century_ah ?? '',
+      'Genre': genreName ?? '',
+      'Volume': result.part_label,
+      'Page': result.page_number,
+      'Score': result.score.toFixed(2),
+      'Context': stripHtmlForExport(result.body || '').slice(0, 500)
+    };
+  });
 
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();
@@ -272,17 +308,19 @@ async function exportXLSXWithDialog(
  */
 export async function exportBooks(
   books: BookMetadata[],
-  format: ExportFormat
+  format: ExportFormat,
+  authorsMap?: Map<number, string>,
+  genresMap?: Map<number, string>
 ): Promise<boolean> {
   const date = new Date().toISOString().split('T')[0];
 
   if (format === 'csv') {
     const fileName = `texts_metadata_${date}.csv`;
-    const content = generateBooksCSV(books);
+    const content = generateBooksCSV(books, authorsMap, genresMap);
     return exportCSVWithDialog(content, fileName);
   } else {
     const fileName = `texts_metadata_${date}.xlsx`;
-    const data = generateBooksXLSX(books);
+    const data = generateBooksXLSX(books, authorsMap, genresMap);
     return exportXLSXWithDialog(data, fileName);
   }
 }
@@ -312,17 +350,20 @@ export async function exportAuthors(
  */
 export async function exportSearchResults(
   results: SearchResult[],
-  format: ExportFormat
+  format: ExportFormat,
+  booksMap?: Map<number, BookMetadata>,
+  authorsMap?: Map<number, string>,
+  genresMap?: Map<number, string>
 ): Promise<boolean> {
   const date = new Date().toISOString().split('T')[0];
 
   if (format === 'csv') {
     const fileName = `search_results_${date}.csv`;
-    const content = generateSearchResultsCSV(results);
+    const content = generateSearchResultsCSV(results, booksMap, authorsMap, genresMap);
     return exportCSVWithDialog(content, fileName);
   } else {
     const fileName = `search_results_${date}.xlsx`;
-    const data = generateSearchResultsXLSX(results);
+    const data = generateSearchResultsXLSX(results, booksMap, authorsMap, genresMap);
     return exportXLSXWithDialog(data, fileName);
   }
 }

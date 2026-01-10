@@ -204,9 +204,7 @@ pub struct SearchTerm {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchFilters {
     pub author_id: Option<u64>,
-    pub author: Option<String>,
-    pub genre: Option<String>,
-    pub corpus: Option<String>,
+    pub genre_id: Option<u64>,
     pub death_ah_min: Option<u64>,
     pub death_ah_max: Option<u64>,
     pub century_ah: Option<u64>,
@@ -219,12 +217,9 @@ pub struct SearchResult {
     pub part_index: u64,
     pub page_id: u64,
     pub author_id: Option<u64>,
-    pub corpus: String,
-    pub author: String,
-    pub title: String,
+    pub genre_id: Option<u64>,
     pub death_ah: Option<u64>,
     pub century_ah: Option<u64>,
-    pub genre: Option<String>,
     pub part_label: String,
     pub page_number: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -244,8 +239,7 @@ pub struct SearchResults {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageWithMatches {
-    pub title: String,
-    pub author: String,
+    pub id: u64,
     pub part_label: String,
     pub page_number: String,
     pub body: String,
@@ -318,7 +312,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 text_query
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids
                     .iter()
                     .map(|&id| {
@@ -339,26 +333,25 @@ impl SearchEngine {
             text_query
         };
 
-        let (total_hits, top_docs) =
-            searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset)))?;
-
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
         let author_id_field = self.schema.get_field("author_id").unwrap();
-        let corpus_field = self.schema.get_field("corpus").unwrap();
-        let author_field = self.schema.get_field("author").unwrap();
-        let title_field = self.schema.get_field("title").unwrap();
+        let genre_id_field = self.schema.get_field("genre_id").unwrap();
         let death_ah_field = self.schema.get_field("death_ah").unwrap();
         let century_ah_field = self.schema.get_field("century_ah").unwrap();
-        let genre_field = self.schema.get_field("genre").unwrap();
         let part_label_field = self.schema.get_field("part_label").unwrap();
         let page_number_field = self.schema.get_field("page_number").unwrap();
         let body_field = self.schema.get_field("body").unwrap();
 
-        // Extract all results first, then sort by death_ah
+        // Sort by death_ah at the index level to ensure proper sorting
+        // across ALL matching documents, not just the top N by relevance score
+        let (total_hits, top_docs) =
+            searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset).order_by_u64_field("death_ah", tantivy::Order::Asc)))?;
+
+        // Extract all results (already sorted by death_ah from the collector)
         let mut results = Vec::new();
-        for (score, doc_address) in top_docs.into_iter() {
+        for (_sort_value, doc_address) in top_docs.into_iter() {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
 
             let body = doc
@@ -405,27 +398,9 @@ impl SearchEngine {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0),
                 author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
-                corpus: doc
-                    .get_first(corpus_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                author: doc
-                    .get_first(author_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                title: doc
-                    .get_first(title_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                genre_id: doc.get_first(genre_id_field).and_then(|v| v.as_u64()),
                 death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
                 century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
-                genre: doc
-                    .get_first(genre_field)
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
                 part_label: doc
                     .get_first(part_label_field)
                     .and_then(|v| v.as_str())
@@ -437,24 +412,15 @@ impl SearchEngine {
                     .unwrap_or("")
                     .to_string(),
                 body,
-                score,
+                score: 0.0, // Relevance score not used when sorting by death_ah
                 matched_token_indices,
             };
 
             results.push(result);
         }
 
-        // Sort by death_ah (author death year), earliest first. Documents without death_ah go last.
-        results.sort_by(|a, b| {
-            match (a.death_ah, b.death_ah) {
-                (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        });
-
-        // Apply offset and limit after sorting
+        // Results are already sorted by death_ah from TopDocsByField collector
+        // Apply offset and limit
         let results: Vec<SearchResult> = results.into_iter().skip(offset).take(limit).collect();
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -682,7 +648,7 @@ impl SearchEngine {
             .try_into()?;
 
         let searcher = reader.searcher();
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
 
@@ -707,12 +673,9 @@ impl SearchEngine {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
 
             let author_id_field = self.schema.get_field("author_id").unwrap();
-            let corpus_field = self.schema.get_field("corpus").unwrap();
-            let author_field = self.schema.get_field("author").unwrap();
-            let title_field = self.schema.get_field("title").unwrap();
+            let genre_id_field = self.schema.get_field("genre_id").unwrap();
             let death_ah_field = self.schema.get_field("death_ah").unwrap();
             let century_ah_field = self.schema.get_field("century_ah").unwrap();
-            let genre_field = self.schema.get_field("genre").unwrap();
             let part_label_field = self.schema.get_field("part_label").unwrap();
             let page_number_field = self.schema.get_field("page_number").unwrap();
             let body_field = self.schema.get_field("body").unwrap();
@@ -722,27 +685,9 @@ impl SearchEngine {
                 part_index,
                 page_id,
                 author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
-                corpus: doc
-                    .get_first(corpus_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                author: doc
-                    .get_first(author_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                title: doc
-                    .get_first(title_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                genre_id: doc.get_first(genre_id_field).and_then(|v| v.as_u64()),
                 death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
                 century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
-                genre: doc
-                    .get_first(genre_field)
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
                 part_label: doc
                     .get_first(part_label_field)
                     .and_then(|v| v.as_str())
@@ -816,7 +761,7 @@ impl SearchEngine {
             return Ok(Vec::new());
         }
 
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
 
@@ -885,7 +830,7 @@ impl SearchEngine {
             .try_into()?;
 
         let searcher = reader.searcher();
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
 
@@ -917,22 +862,14 @@ impl SearchEngine {
 
         if let Some((_score, doc_address)) = top_docs.into_iter().next() {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
-            let title_field = self.schema.get_field("title").unwrap();
-            let author_field = self.schema.get_field("author").unwrap();
             let part_label_field = self.schema.get_field("part_label").unwrap();
             let page_number_field = self.schema.get_field("page_number").unwrap();
             let body_field = self.schema.get_field("body").unwrap();
 
-            let title = doc
-                .get_first(title_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let author = doc
-                .get_first(author_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let result_id = doc
+                .get_first(id_field)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let part_label = doc
                 .get_first(part_label_field)
                 .and_then(|v| v.as_str())
@@ -996,8 +933,7 @@ impl SearchEngine {
             };
 
             Ok(Some(PageWithMatches {
-                title,
-                author,
+                id: result_id,
                 part_label,
                 page_number,
                 body,
@@ -1106,7 +1042,7 @@ impl SearchEngine {
             .try_into()?;
 
         let searcher = reader.searcher();
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
 
@@ -1195,7 +1131,7 @@ impl SearchEngine {
             .try_into()?;
 
         let searcher = reader.searcher();
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
 
@@ -1306,7 +1242,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 text_query
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids
                     .iter()
                     .map(|&id| {
@@ -1327,27 +1263,23 @@ impl SearchEngine {
             text_query
         };
 
-        let (total_hits, top_docs) =
-            searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset)))?;
-
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
         let author_id_field = self.schema.get_field("author_id").unwrap();
-        let corpus_field = self.schema.get_field("corpus").unwrap();
-        let author_field = self.schema.get_field("author").unwrap();
-        let title_field = self.schema.get_field("title").unwrap();
+        let genre_id_field = self.schema.get_field("genre_id").unwrap();
         let death_ah_field = self.schema.get_field("death_ah").unwrap();
         let century_ah_field = self.schema.get_field("century_ah").unwrap();
-        let genre_field = self.schema.get_field("genre").unwrap();
         let part_label_field = self.schema.get_field("part_label").unwrap();
         let page_number_field = self.schema.get_field("page_number").unwrap();
         let body_field = self.schema.get_field("body").unwrap();
 
-        let mut by_segment: std::collections::HashMap<u32, Vec<(f32, DocAddress)>> = std::collections::HashMap::new();
-        for (score, addr) in top_docs.into_iter().skip(offset).take(limit) {
-            by_segment.entry(addr.segment_ord).or_default().push((score, addr));
-        }
+        // Sort by death_ah at Tantivy level - this is the ONLY correct way to get global ordering
+        let (total_hits, top_docs) =
+            searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset).order_by_u64_field("death_ah", tantivy::Order::Asc)))?;
+
+        // Collect docs to process, preserving the death_ah order from Tantivy
+        let docs_to_process: Vec<(u64, DocAddress)> = top_docs.into_iter().skip(offset).take(limit).collect();
 
         // Collect phrase search terms separately for special handling
         let phrase_terms: Vec<&SearchTerm> = and_terms.iter().chain(or_terms.iter())
@@ -1357,120 +1289,83 @@ impl SearchEngine {
             .filter(|t| !self.is_phrase_search(t))
             .collect();
 
-        // Build terms_by_field only for non-phrase terms
-        let mut terms_by_field: std::collections::HashMap<Field, HashSet<String>> = std::collections::HashMap::new();
-        for term in &non_phrase_terms {
-            let field = self.get_search_field(term.mode);
-            let query_terms = self.extract_query_terms(term);
-            terms_by_field.entry(field).or_default().extend(query_terms);
-        }
-
+        // Process docs in order (already sorted by death_ah from Tantivy)
         let mut results = Vec::new();
-        for (segment_ord, mut docs) in by_segment {
-            docs.sort_by_key(|(_, addr)| addr.doc_id);
-            let segment_reader = searcher.segment_reader(segment_ord);
-            let doc_ids: Vec<u32> = docs.iter().map(|(_, addr)| addr.doc_id).collect();
+        for (_sort_value, doc_address) in docs_to_process {
+            let doc: TantivyDocument = searcher.doc(doc_address)?;
+            let segment_reader = searcher.segment_reader(doc_address.segment_ord);
 
-            // Batch process non-phrase terms
-            let mut positions_by_doc: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
-            for (field, query_terms) in &terms_by_field {
-                let field_positions = self.get_matched_positions_batch(segment_reader, &doc_ids, *field, query_terms, 5);
-                for (doc_id, positions) in field_positions {
-                    positions_by_doc.entry(doc_id).or_insert_with(Vec::new).extend(positions);
-                }
+            // Get positions for non-phrase terms
+            let mut matched: Vec<u32> = Vec::new();
+            for term in &non_phrase_terms {
+                let field = self.get_search_field(term.mode);
+                let query_terms = self.extract_query_terms(term);
+                let positions = self.get_matched_positions_limited(
+                    segment_reader,
+                    doc_address.doc_id,
+                    field,
+                    &query_terms,
+                    5,
+                );
+                matched.extend(positions);
             }
 
-            // Process phrase terms individually for each doc
-            for &doc_id in &doc_ids {
-                for term in &phrase_terms {
-                    let field = self.get_search_field(term.mode);
-                    let phrase_words = self.extract_phrase_terms(term);
-                    let phrase_positions = self.get_phrase_positions_limited(
-                        segment_reader,
-                        doc_id,
-                        field,
-                        &phrase_words,
-                        5,
-                    );
-                    positions_by_doc.entry(doc_id).or_insert_with(Vec::new).extend(phrase_positions);
-                }
+            // Get positions for phrase terms
+            for term in &phrase_terms {
+                let field = self.get_search_field(term.mode);
+                let phrase_words = self.extract_phrase_terms(term);
+                let phrase_positions = self.get_phrase_positions_limited(
+                    segment_reader,
+                    doc_address.doc_id,
+                    field,
+                    &phrase_words,
+                    5,
+                );
+                matched.extend(phrase_positions);
             }
 
-            for (score, doc_address) in docs {
-                let doc: TantivyDocument = searcher.doc(doc_address)?;
+            matched.sort_unstable();
+            matched.dedup();
 
-                let mut matched = positions_by_doc
-                    .remove(&doc_address.doc_id)
-                    .unwrap_or_default();
-                matched.sort_unstable();
-                matched.dedup();
-
-                let result = SearchResult {
-                    id: doc
-                        .get_first(id_field)
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    part_index: doc
-                        .get_first(part_index_field)
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    page_id: doc
-                        .get_first(page_id_field)
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
-                    corpus: doc
-                        .get_first(corpus_field)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    author: doc
-                        .get_first(author_field)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    title: doc
-                        .get_first(title_field)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
-                    century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
-                    genre: doc
-                        .get_first(genre_field)
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    part_label: doc
-                        .get_first(part_label_field)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    page_number: doc
-                        .get_first(page_number_field)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    body: doc
-                        .get_first(body_field)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    score,
-                    matched_token_indices: matched,
-                };
-                results.push(result);
-            }
+            let result = SearchResult {
+                id: doc
+                    .get_first(id_field)
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                part_index: doc
+                    .get_first(part_index_field)
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                page_id: doc
+                    .get_first(page_id_field)
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
+                genre_id: doc.get_first(genre_id_field).and_then(|v| v.as_u64()),
+                death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
+                century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
+                part_label: doc
+                    .get_first(part_label_field)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                page_number: doc
+                    .get_first(page_number_field)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                body: doc
+                    .get_first(body_field)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                score: 0.0, // Not using relevance score when sorting by death_ah
+                matched_token_indices: matched,
+            };
+            results.push(result);
         }
 
-        // Sort by death_ah (author death year), earliest first. Documents without death_ah go last.
-        results.sort_by(|a, b| {
-            match (a.death_ah, b.death_ah) {
-                (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        });
+        // Results already sorted by death_ah from Tantivy - no post-sort needed
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -1537,7 +1432,7 @@ impl SearchEngine {
 
         // Overfetch significantly to account for proximity filtering.
         // Many candidates won't pass the distance check, so we need a high cap.
-        let overfetch_limit = ((limit + offset) * 20).max(5000);
+        let overfetch_limit = ((limit + offset) * 50).max(5000);
         let term1_query = self.build_term_query(term1)?;
         let term2_query = self.build_term_query(term2)?;
         let text_query = BooleanQuery::new(vec![(Occur::Must, term1_query), (Occur::Must, term2_query)]);
@@ -1546,7 +1441,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 Box::new(text_query)
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids
                     .iter()
                     .map(|&id| {
@@ -1568,31 +1463,30 @@ impl SearchEngine {
             Box::new(text_query)
         };
 
-        let top_docs = searcher.search(&*final_query, &TopDocs::with_limit(overfetch_limit))?;
         let field1 = self.get_search_field(term1.mode);
         let field2 = self.get_search_field(term2.mode);
         let query_terms1 = self.extract_query_terms(term1);
         let query_terms2 = self.extract_query_terms(term2);
 
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
         let author_id_field = self.schema.get_field("author_id").unwrap();
-        let corpus_field = self.schema.get_field("corpus").unwrap();
-        let author_field = self.schema.get_field("author").unwrap();
-        let title_field = self.schema.get_field("title").unwrap();
+        let genre_id_field = self.schema.get_field("genre_id").unwrap();
         let death_ah_field = self.schema.get_field("death_ah").unwrap();
         let century_ah_field = self.schema.get_field("century_ah").unwrap();
-        let genre_field = self.schema.get_field("genre").unwrap();
         let part_label_field = self.schema.get_field("part_label").unwrap();
         let page_number_field = self.schema.get_field("page_number").unwrap();
         let body_field = self.schema.get_field("body").unwrap();
+
+        // Sort by death_ah at Tantivy level - candidates come in chronological order
+        let top_docs = searcher.search(&*final_query, &TopDocs::with_limit(overfetch_limit).order_by_u64_field("death_ah", tantivy::Order::Asc))?;
 
         let mut results = Vec::new();
         let mut skipped = 0;
         let mut total_matches = 0;
 
-        for (score, doc_address) in top_docs {
+        for (_sort_value, doc_address) in top_docs {
             let segment_reader = searcher.segment_reader(doc_address.segment_ord);
             let pos1 = self.get_matched_positions_limited(
                 segment_reader,
@@ -1654,27 +1548,9 @@ impl SearchEngine {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0),
                 author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
-                corpus: doc
-                    .get_first(corpus_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                author: doc
-                    .get_first(author_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                title: doc
-                    .get_first(title_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                genre_id: doc.get_first(genre_id_field).and_then(|v| v.as_u64()),
                 death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
                 century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
-                genre: doc
-                    .get_first(genre_field)
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
                 part_label: doc
                     .get_first(part_label_field)
                     .and_then(|v| v.as_str())
@@ -1690,22 +1566,14 @@ impl SearchEngine {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                score,
+                score: 0.0, // Not using relevance score when sorting by death_ah
                 matched_token_indices: matched_positions,
             };
 
             results.push(result);
         }
 
-        // Sort by death_ah (author death year), earliest first. Documents without death_ah go last.
-        results.sort_by(|a, b| {
-            match (a.death_ah, b.death_ah) {
-                (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        });
+        // Results already in death_ah order from Tantivy - no post-sort needed
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -1809,7 +1677,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 text_query
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids
                     .iter()
                     .map(|&id| {
@@ -1830,25 +1698,23 @@ impl SearchEngine {
             text_query
         };
 
-        let (total_hits, top_docs) =
-            searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset)))?;
-
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
         let author_id_field = self.schema.get_field("author_id").unwrap();
-        let corpus_field = self.schema.get_field("corpus").unwrap();
-        let author_field = self.schema.get_field("author").unwrap();
-        let title_field = self.schema.get_field("title").unwrap();
+        let genre_id_field = self.schema.get_field("genre_id").unwrap();
         let death_ah_field = self.schema.get_field("death_ah").unwrap();
         let century_ah_field = self.schema.get_field("century_ah").unwrap();
-        let genre_field = self.schema.get_field("genre").unwrap();
         let part_label_field = self.schema.get_field("part_label").unwrap();
         let page_number_field = self.schema.get_field("page_number").unwrap();
         let body_field = self.schema.get_field("body").unwrap();
 
+        // Sort by death_ah at Tantivy level - the ONLY correct way to get global ordering
+        let (total_hits, top_docs) =
+            searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset).order_by_u64_field("death_ah", tantivy::Order::Asc)))?;
+
         let mut results = Vec::new();
-        for (score, doc_address) in top_docs.into_iter() {
+        for (_sort_value, doc_address) in top_docs.into_iter().skip(offset).take(limit) {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
 
             // Get token positions for highlighting (using first form's patterns)
@@ -1878,27 +1744,9 @@ impl SearchEngine {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0),
                 author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
-                corpus: doc
-                    .get_first(corpus_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                author: doc
-                    .get_first(author_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                title: doc
-                    .get_first(title_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                genre_id: doc.get_first(genre_id_field).and_then(|v| v.as_u64()),
                 death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
                 century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
-                genre: doc
-                    .get_first(genre_field)
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
                 part_label: doc
                     .get_first(part_label_field)
                     .and_then(|v| v.as_str())
@@ -1914,25 +1762,14 @@ impl SearchEngine {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                score,
+                score: 0.0, // Not using relevance score when sorting by death_ah
                 matched_token_indices,
             };
 
             results.push(result);
         }
 
-        // Sort by death_ah (author death year), earliest first
-        results.sort_by(|a, b| {
-            match (a.death_ah, b.death_ah) {
-                (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        });
-
-        // Apply offset and limit after sorting
-        let results: Vec<SearchResult> = results.into_iter().skip(offset).take(limit).collect();
+        // Results already sorted by death_ah from Tantivy - no post-sort needed
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -2021,7 +1858,7 @@ impl SearchEngine {
             .try_into()?;
         let searcher = reader.searcher();
 
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
         let surface_field = self.schema.get_field("surface_text").unwrap();
@@ -2113,7 +1950,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 wildcard_query
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids
                     .iter()
                     .map(|&id| {
@@ -2134,30 +1971,27 @@ impl SearchEngine {
             wildcard_query
         };
 
-        // Phase 1: Execute query to get candidate documents
-        // We overfetch to account for Phase 2 filtering
-        let overfetch = if query_info.terms.len() > 1 { 10 } else { 1 };
-        let (total_hits, top_docs) =
-            searcher.search(&*final_query, &(Count, TopDocs::with_limit((limit + offset) * overfetch)))?;
-
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
         let author_id_field = self.schema.get_field("author_id").unwrap();
-        let corpus_field = self.schema.get_field("corpus").unwrap();
-        let author_field = self.schema.get_field("author").unwrap();
-        let title_field = self.schema.get_field("title").unwrap();
+        let genre_id_field = self.schema.get_field("genre_id").unwrap();
         let death_ah_field = self.schema.get_field("death_ah").unwrap();
         let century_ah_field = self.schema.get_field("century_ah").unwrap();
-        let genre_field = self.schema.get_field("genre").unwrap();
         let part_label_field = self.schema.get_field("part_label").unwrap();
         let page_number_field = self.schema.get_field("page_number").unwrap();
         let body_field = self.schema.get_field("body").unwrap();
 
+        // Phase 1: Execute query to get candidate documents sorted by death_ah
+        // We overfetch to account for Phase 2 filtering
+        let overfetch = if query_info.terms.len() > 1 { 10 } else { 1 };
+        let (total_hits, top_docs) =
+            searcher.search(&*final_query, &(Count, TopDocs::with_limit((limit + offset) * overfetch).order_by_u64_field("death_ah", tantivy::Order::Asc)))?;
+
         let mut results = Vec::new();
         let mut verified_count = 0;
 
-        for (score, doc_address) in top_docs.into_iter() {
+        for (_sort_value, doc_address) in top_docs.into_iter() {
             // Phase 2: For multi-word queries, verify adjacency
             if query_info.terms.len() > 1 {
                 let segment_reader = searcher.segment_reader(doc_address.segment_ord);
@@ -2211,27 +2045,9 @@ impl SearchEngine {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0),
                 author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
-                corpus: doc
-                    .get_first(corpus_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                author: doc
-                    .get_first(author_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                title: doc
-                    .get_first(title_field)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                genre_id: doc.get_first(genre_id_field).and_then(|v| v.as_u64()),
                 death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
                 century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
-                genre: doc
-                    .get_first(genre_field)
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
                 part_label: doc
                     .get_first(part_label_field)
                     .and_then(|v| v.as_str())
@@ -2247,22 +2063,14 @@ impl SearchEngine {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                score,
+                score: 0.0, // Not using relevance score when sorting by death_ah
                 matched_token_indices,
             };
 
             results.push(result);
         }
 
-        // Sort by death_ah
-        results.sort_by(|a, b| {
-            match (a.death_ah, b.death_ah) {
-                (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        });
+        // Results already sorted by death_ah from Tantivy - no post-sort needed
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 

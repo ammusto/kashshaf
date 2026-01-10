@@ -109,14 +109,12 @@ struct BookMetadata {
     corpus: Option<String>,
     title: String,
     author_id: Option<i64>,
-    author: Option<String>,
     death_ah: Option<i64>,
     century_ah: Option<i64>,
-    genre: Option<String>,
+    genre_id: Option<i64>,
     page_count: Option<i64>,
     token_count: Option<i64>,
     original_id: Option<String>,
-    date: Option<String>,
     paginated: Option<bool>,
     tags: Option<String>,
     book_meta: Option<String>,
@@ -252,8 +250,8 @@ async fn get_all_books(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, corpus, title, author_id, author, death_ah, century_ah, genre, page_count, token_count,
-                original_id, date, paginated, tags, book_meta, author_meta
+        "SELECT id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
+                original_id, paginated, tags, book_meta, author_meta
          FROM books ORDER BY death_ah ASC NULLS LAST, id ASC"
     ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
@@ -263,24 +261,58 @@ async fn get_all_books(
             corpus: row.get(1)?,
             title: row.get(2)?,
             author_id: row.get(3)?,
-            author: row.get(4)?,
-            death_ah: row.get(5)?,
-            century_ah: row.get(6)?,
-            genre: row.get(7)?,
-            page_count: row.get(8)?,
-            token_count: row.get(9)?,
-            original_id: row.get(10)?,
-            date: row.get(11)?,
-            paginated: row.get::<_, Option<i64>>(12)?.map(|v| v != 0),
-            tags: row.get(13)?,
-            book_meta: row.get(14)?,
-            author_meta: row.get(15)?,
+            death_ah: row.get(4)?,
+            century_ah: row.get(5)?,
+            genre_id: row.get(6)?,
+            page_count: row.get(7)?,
+            token_count: row.get(8)?,
+            original_id: row.get(9)?,
+            paginated: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
+            tags: row.get(11)?,
+            book_meta: row.get(12)?,
+            author_meta: row.get(13)?,
         })
     }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
         .filter_map(|r| r.ok())
         .collect();
 
     Ok(Json(books))
+}
+
+async fn get_all_authors(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<(i64, String)>>, (StatusCode, Json<ErrorResponse>)> {
+    let conn = rusqlite::Connection::open(&state.db_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+
+    let mut stmt = conn.prepare("SELECT id, author FROM authors ORDER BY id")
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+
+    let authors = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(Json(authors))
+}
+
+async fn get_all_genres(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<(i64, String)>>, (StatusCode, Json<ErrorResponse>)> {
+    let conn = rusqlite::Connection::open(&state.db_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+
+    let mut stmt = conn.prepare("SELECT id, genre FROM genres ORDER BY id")
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
+
+    let genres = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(Json(genres))
 }
 
 #[tokio::main]
@@ -315,6 +347,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/page/tokens", get(get_page_tokens))
         .route("/page/matches", get(get_match_positions))
         .route("/books", get(get_all_books))
+        .route("/authors", get(get_all_authors))
+        .route("/genres", get(get_all_genres))
         .layer(cors)
         .with_state(state);
 

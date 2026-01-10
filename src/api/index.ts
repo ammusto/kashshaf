@@ -126,19 +126,8 @@ export interface SearchAPI {
 
   // Metadata operations
   getAllBooks(): Promise<BookMetadata[]>;
-  getGenres(): Promise<[string, number][]>;
-}
-
-/**
- * Page with matches for navigation
- */
-export interface PageWithMatches {
-  title: string;
-  author: string;
-  part_label: string;
-  page_number: string;
-  body: string;
-  matched_token_indices: number[];
+  getAuthors(): Promise<[number, string][]>;
+  getGenres(): Promise<[number, string][]>;
 }
 
 // Re-export for convenience

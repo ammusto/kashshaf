@@ -39,7 +39,7 @@ function normalizeArabicForSearch(text: string): string {
 const ROW_HEIGHT = 56;
 
 export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
-  const { books: allBooks, genres, loading } = useBooks();
+  const { books: allBooks, genres, authorsMap, genresMap, loading } = useBooks();
 
   // Tab state
   const [activeTab, setActiveTab] = useState<BrowserTab>('texts');
@@ -53,7 +53,7 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
   // Filters (shared between tabs)
   const [deathAhMin, setDeathAhMin] = useState<string>('');
   const [deathAhMax, setDeathAhMax] = useState<string>('');
-  const [selectedGenres, setSelectedGenres] = useState<Set<string>>(new Set());
+  const [selectedGenreIds, setSelectedGenreIds] = useState<Set<number>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
 
   // Genre dropdown
@@ -97,13 +97,13 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
     }
   }, [activeTab]);
 
-  const toggleGenre = useCallback((genre: string) => {
-    setSelectedGenres(prev => {
+  const toggleGenre = useCallback((genreId: number) => {
+    setSelectedGenreIds(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(genre)) {
-        newSet.delete(genre);
+      if (newSet.has(genreId)) {
+        newSet.delete(genreId);
       } else {
-        newSet.add(genre);
+        newSet.add(genreId);
       }
       return newSet;
     });
@@ -112,11 +112,11 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
   const clearFilters = useCallback(() => {
     setDeathAhMin('');
     setDeathAhMax('');
-    setSelectedGenres(new Set());
+    setSelectedGenreIds(new Set());
     setSearchQuery('');
   }, []);
 
-  const hasActiveFilters = deathAhMin || deathAhMax || selectedGenres.size > 0 || searchQuery;
+  const hasActiveFilters = deathAhMin || deathAhMax || selectedGenreIds.size > 0 || searchQuery;
 
   // Filter books - ALL client-side
   const filteredBooks = useMemo(() => {
@@ -130,32 +130,34 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
       const max = parseInt(deathAhMax, 10);
       result = result.filter(book => book.death_ah !== undefined && book.death_ah <= max);
     }
-    if (selectedGenres.size > 0) {
-      result = result.filter(book => book.genre && selectedGenres.has(book.genre));
+    if (selectedGenreIds.size > 0) {
+      result = result.filter(book => book.genre_id !== undefined && selectedGenreIds.has(book.genre_id));
     }
     if (searchQuery.trim()) {
       const normalized = normalizeArabicForSearch(searchQuery);
       result = result.filter(book => {
         const normalizedTitle = normalizeArabicForSearch(book.title);
-        const normalizedAuthor = book.author ? normalizeArabicForSearch(book.author) : '';
+        const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+        const normalizedAuthor = authorName ? normalizeArabicForSearch(authorName) : '';
         return normalizedTitle.includes(normalized) || normalizedAuthor.includes(normalized);
       });
     }
 
     return result;
-  }, [allBooks, deathAhMin, deathAhMax, selectedGenres, searchQuery]);
+  }, [allBooks, deathAhMin, deathAhMax, selectedGenreIds, searchQuery, authorsMap]);
 
   // Get unique authors from filtered books
   const filteredAuthors = useMemo(() => {
-    const authorMap = new Map<string, AuthorInfo>();
+    const authorIdMap = new Map<number, AuthorInfo>();
 
     for (const book of filteredBooks) {
-      const authorKey = book.author || 'Unknown';
+      const authorId = book.author_id ?? -1; // -1 for unknown
+      const authorName = authorId >= 0 ? authorsMap.get(authorId) ?? 'Unknown' : 'Unknown';
 
-      if (!authorMap.has(authorKey)) {
-        authorMap.set(authorKey, {
-          author: authorKey,
-          author_id: book.author_id,
+      if (!authorIdMap.has(authorId)) {
+        authorIdMap.set(authorId, {
+          author: authorName,
+          author_id: authorId >= 0 ? authorId : undefined,
           death_ah: book.death_ah,
           bookCount: 0,
           totalPages: 0,
@@ -163,11 +165,14 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
         });
       }
 
-      const info = authorMap.get(authorKey)!;
+      const info = authorIdMap.get(authorId)!;
       info.bookCount++;
       info.totalPages += book.page_count || 0;
-      if (book.genre) {
-        info.genres.add(book.genre);
+      if (book.genre_id !== undefined) {
+        const genreName = genresMap.get(book.genre_id);
+        if (genreName) {
+          info.genres.add(genreName);
+        }
       }
       // Use the death_ah from the first book if not set
       if (info.death_ah === undefined && book.death_ah !== undefined) {
@@ -176,16 +181,21 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
     }
 
     // Convert to array and sort by death date ascending (unknown dates at end)
-    return Array.from(authorMap.values()).sort((a, b) => {
+    return Array.from(authorIdMap.values()).sort((a, b) => {
       const aDate = a.death_ah ?? Infinity;
       const bDate = b.death_ah ?? Infinity;
       return aDate - bDate;
     });
-  }, [filteredBooks]);
+  }, [filteredBooks, authorsMap, genresMap]);
 
   // Get books for a specific author
-  const getAuthorBooks = useCallback((authorName: string) => {
-    return filteredBooks.filter(book => (book.author || 'Unknown') === authorName);
+  const getAuthorBooks = useCallback((authorId: number | undefined) => {
+    return filteredBooks.filter(book => {
+      if (authorId === undefined) {
+        return book.author_id === undefined;
+      }
+      return book.author_id === authorId;
+    });
   }, [filteredBooks]);
 
   const handleBookClick = useCallback((book: BookMetadata, source: DetailSource = 'list') => {
@@ -222,14 +232,14 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
     setExportDropdownOpen(false);
     try {
       if (activeTab === 'texts') {
-        await exportBooks(filteredBooks, format);
+        await exportBooks(filteredBooks, format, authorsMap, genresMap);
       } else {
         await exportAuthors(filteredAuthors, format);
       }
     } catch (err) {
       console.error('Export failed:', err);
     }
-  }, [activeTab, filteredBooks, filteredAuthors]);
+  }, [activeTab, filteredBooks, filteredAuthors, authorsMap, genresMap]);
 
   // Text virtualizer
   const textVirtualizer = useVirtualizer({
@@ -271,6 +281,8 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
         book={selectedBook}
         onBack={handleBack}
         onClose={onClose}
+        authorsMap={authorsMap}
+        genresMap={genresMap}
       />
     );
   }
@@ -280,10 +292,12 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
     return (
       <AuthorBooksView
         author={selectedAuthor}
-        books={getAuthorBooks(selectedAuthor.author)}
+        books={getAuthorBooks(selectedAuthor.author_id)}
         onBack={handleBack}
         onClose={onClose}
         onBookClick={(book) => handleBookClick(book, 'authorBooks')}
+        authorsMap={authorsMap}
+        genresMap={genresMap}
       />
     );
   }
@@ -406,11 +420,11 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
                      bg-white cursor-pointer flex items-center gap-2 min-w-[140px]"
           >
             <span className="truncate">
-              {selectedGenres.size === 0
+              {selectedGenreIds.size === 0
                 ? 'All Genres'
-                : selectedGenres.size === 1
-                  ? Array.from(selectedGenres)[0]
-                  : `${selectedGenres.size} selected`}
+                : selectedGenreIds.size === 1
+                  ? genresMap.get(Array.from(selectedGenreIds)[0]) ?? 'Unknown'
+                  : `${selectedGenreIds.size} selected`}
             </span>
             <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -418,20 +432,19 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
           </button>
           {genreDropdownOpen && (
             <div className="absolute top-full left-0 mt-1 bg-white border border-app-border-medium rounded-lg shadow-lg z-20 min-w-[220px] max-h-[350px] overflow-auto">
-              {genres.map(([genre, count]) => (
+              {genres.map(([genreId, genreName]) => (
                 <label
-                  key={genre}
+                  key={genreId}
                   className="flex items-center gap-3 px-4 py-2.5 hover:bg-app-surface-variant cursor-pointer"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <input
                     type="checkbox"
-                    checked={selectedGenres.has(genre)}
-                    onChange={() => toggleGenre(genre)}
+                    checked={selectedGenreIds.has(genreId)}
+                    onChange={() => toggleGenre(genreId)}
                     className="w-4 h-4 rounded accent-app-accent cursor-pointer"
                   />
-                  <span className="text-sm text-app-text-primary capitalize flex-1">{genre}</span>
-                  <span className="text-sm text-app-text-tertiary">({count})</span>
+                  <span className="text-sm text-app-text-primary capitalize flex-1">{genreName}</span>
                 </label>
               ))}
             </div>
@@ -502,6 +515,8 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
                     <BookListRow
                       book={book}
                       onClick={() => handleBookClick(book)}
+                      authorsMap={authorsMap}
+                      genresMap={genresMap}
                     />
                   </div>
                 );
@@ -555,10 +570,17 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
 function BookListRow({
   book,
   onClick,
+  authorsMap,
+  genresMap,
 }: {
   book: BookMetadata;
   onClick: () => void;
+  authorsMap: Map<number, string>;
+  genresMap: Map<number, string>;
 }) {
+  const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+  const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;
+
   return (
     <div
       onClick={onClick}
@@ -572,7 +594,7 @@ function BookListRow({
         </span>
         <span className="text-app-text-tertiary">—</span>
         <span className="text-lg text-app-text-secondary font-arabic truncate">
-          {book.author || 'Unknown'}
+          {authorName || 'Unknown'}
         </span>
         {book.death_ah !== undefined && book.death_ah !== 0 && (
           <span className="text-sm text-app-text-tertiary whitespace-nowrap">
@@ -582,9 +604,9 @@ function BookListRow({
       </div>
 
       {/* Genre */}
-      {book.genre && (
+      {genreName && (
         <span className="text-sm text-app-text-tertiary bg-app-surface-variant px-3 py-1 rounded-lg capitalize flex-shrink-0">
-          {book.genre}
+          {genreName}
         </span>
       )}
 
@@ -671,12 +693,16 @@ function AuthorBooksView({
   onBack,
   onClose,
   onBookClick,
+  authorsMap,
+  genresMap,
 }: {
   author: AuthorInfo;
   books: BookMetadata[];
   onBack: () => void;
   onClose: () => void;
   onBookClick: (book: BookMetadata) => void;
+  authorsMap: Map<number, string>;
+  genresMap: Map<number, string>;
 }) {
   const listParentRef = useRef<HTMLDivElement>(null);
 
@@ -762,6 +788,8 @@ function AuthorBooksView({
                 <BookListRow
                   book={book}
                   onClick={() => onBookClick(book)}
+                  authorsMap={authorsMap}
+                  genresMap={genresMap}
                 />
               </div>
             );
@@ -788,14 +816,20 @@ function BookDetailView({
   book,
   onBack,
   onClose,
+  authorsMap,
+  genresMap,
 }: {
   book: BookMetadata;
   onBack: () => void;
   onClose: () => void;
+  authorsMap: Map<number, string>;
+  genresMap: Map<number, string>;
 }) {
   const tags = parseJsonArray(book.tags);
   const bookMeta = parseJsonArray(book.book_meta);
   const authorMeta = parseJsonArray(book.author_meta);
+  const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+  const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;
 
   return (
     <div className="fixed inset-0 bg-app-bg z-50 flex flex-col">
@@ -831,7 +865,7 @@ function BookDetailView({
 
           {/* Author */}
           <div className="text-2xl text-app-text-secondary font-arabic" dir="rtl">
-            {book.author || 'Unknown Author'}
+            {authorName || 'Unknown Author'}
             {book.death_ah !== undefined && book.death_ah !== 0 && (
               <span className="text-app-text-tertiary"> (ت {book.death_ah})</span>
             )}
@@ -858,8 +892,8 @@ function BookDetailView({
               <MetadataField label="Kashshāf ID" value={book.id.toString()} />
               <MetadataField label="Source Corpus" value={book.corpus || '—'} />
               <MetadataField label="Source ID" value={book.original_id || '—'} />
-              <MetadataField label="Genre" value={book.genre || '—'} capitalize />
-              <MetadataField label="Date" value={book.date || '—'} />
+              <MetadataField label="Genre" value={genreName || '—'} capitalize />
+              <MetadataField label="Death" value={book.death_ah !== undefined ? `${book.death_ah} AH` : '—'} />
               <MetadataField
                 label="Century"
                 value={

@@ -220,27 +220,34 @@ export function useTooltip() {
 
 /**
  * Metadata tooltip for search results
- * Shows title, author (Arabic), death, genre, corpus
+ * Shows title, author (looked up by ID), death, genre, corpus
  */
 export function MetadataTooltip({
-  result,
-  position
+  book,
+  position,
+  authorsMap,
+  genresMap,
 }: {
-  result: {
+  book: {
     title?: string;
-    author?: string;
+    author_id?: number;
     death_ah?: number;
-    genre?: string;
+    genre_id?: number;
     corpus?: string;
   };
   position: { x: number; y: number };
+  authorsMap?: Map<number, string>;
+  genresMap?: Map<number, string>;
 }) {
+  const authorName = book.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
+  const genreName = book.genre_id !== undefined && genresMap ? genresMap.get(book.genre_id) : undefined;
+
   const rows: TooltipRow[] = [
-    { label: 'Title', value: result.title, parseArabic: true },
-    { label: 'Author', value: result.author, parseArabic: true },
-    { label: 'Death', value: result.death_ah ? `${result.death_ah} AH` : undefined },
-    { label: 'Genre', value: result.genre },
-    { label: 'Corpus', value: result.corpus },
+    { label: 'Title', value: book.title, parseArabic: true },
+    { label: 'Author', value: authorName, parseArabic: true },
+    { label: 'Death', value: book.death_ah ? `${book.death_ah} AH` : undefined },
+    { label: 'Genre', value: genreName },
+    { label: 'Corpus', value: book.corpus },
   ];
 
   return <TooltipContent rows={rows} position={position} width={320} />;

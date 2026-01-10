@@ -303,18 +303,12 @@ export class OnlineAPI implements SearchAPI {
     return fetchAPI<BookMetadata[]>('/books');
   }
 
-  async getGenres(): Promise<[string, number][]> {
-    // The API returns books, we need to aggregate genres client-side
-    const books = await this.getAllBooks();
-    const genreCounts = new Map<string, number>();
+  async getAuthors(): Promise<[number, string][]> {
+    return fetchAPI<[number, string][]>('/authors');
+  }
 
-    for (const book of books) {
-      if (book.genre) {
-        genreCounts.set(book.genre, (genreCounts.get(book.genre) || 0) + 1);
-      }
-    }
-
-    return Array.from(genreCounts.entries()).sort((a, b) => b[1] - a[1]);
+  async getGenres(): Promise<[number, string][]> {
+    return fetchAPI<[number, string][]>('/genres');
   }
 }
 

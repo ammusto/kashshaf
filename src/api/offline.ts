@@ -131,7 +131,11 @@ export class OfflineAPI implements SearchAPI {
     return tauri.getAllBooks();
   }
 
-  async getGenres(): Promise<[string, number][]> {
+  async getAuthors(): Promise<[number, string][]> {
+    return tauri.getAuthors();
+  }
+
+  async getGenres(): Promise<[number, string][]> {
     return tauri.getGenres();
   }
 }

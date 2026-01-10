@@ -12,8 +12,7 @@ export interface SearchContext {
 
 // Current page data for reader panel
 export interface PageData {
-  title: string;
-  author: string;
+  bookId: number;
   meta: string;
   body: string;
   loadTimeMs?: number;

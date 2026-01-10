@@ -2,11 +2,11 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import type { Token } from '../../types';
 import { stripHtml, buildCharToTokenMap, getHighlightRanges } from '../../utils/arabicTokenizer';
 import { TokenPopup } from '../ui/TokenPopup';
+import { useBooks } from '../../contexts/BooksContext';
 
 interface ReaderPanelProps {
   currentPage: {
-    title: string;
-    author: string;
+    bookId: number;
     meta: string;
     body: string;
     loadTimeMs?: number;
@@ -118,10 +118,16 @@ function BodyRenderer({
 }
 
 export function ReaderPanel({ currentPage, tokens, onNavigate, matchedTokenIndices = [] }: ReaderPanelProps) {
+  const { booksMap, authorsMap } = useBooks();
   const [selectedToken, setSelectedToken] = useState<Token | null>(null);
   const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
   const firstHighlightRef = useRef<HTMLSpanElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Look up book metadata from booksMap
+  const book = currentPage ? booksMap.get(currentPage.bookId) : null;
+  const title = book?.title ?? `Book ${currentPage?.bookId}`;
+  const author = book?.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
 
   const handleWordClick = (e: React.MouseEvent, token: Token) => {
     e.stopPropagation();
@@ -170,7 +176,7 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, matchedTokenIndic
       {/* Header */}
       <div className="h-20 border-b border-app-border-light px-8 flex items-center gap-4 flex-shrink-0 bg-app-surface">
         <h2 className="font-semibold text-app-text-primary flex-1 truncate font-arabic text-xl" dir="rtl">
-          {currentPage.title}
+          {title}{author ? ` - ${author}` : ''}
         </h2>
         {currentPage.loadTimeMs !== undefined && (
           <span className="text-xs text-app-text-tertiary flex-shrink-0">

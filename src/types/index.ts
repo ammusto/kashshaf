@@ -5,9 +5,7 @@ export type TokenField = 'surface' | 'lemma' | 'root';
 
 export interface SearchFilters {
   author_id?: number;
-  author?: string;
-  genre?: string;
-  corpus?: string;
+  genre_id?: number;
   death_ah_min?: number;
   death_ah_max?: number;
   century_ah?: number;
@@ -19,12 +17,9 @@ export interface SearchResult {
   part_index: number;
   page_id: number;
   author_id?: number;
-  corpus: string;
-  author: string;
-  title: string;
+  genre_id?: number;
   death_ah?: number;
   century_ah?: number;
-  genre?: string;
   part_label: string;
   page_number: string;
   /** Full body text - only present from get_page, not search results */
@@ -44,8 +39,7 @@ export interface SearchResults {
 
 // Combined page content with match positions (from single Tantivy query)
 export interface PageWithMatches {
-  title: string;
-  author: string;
+  id: number;
   part_label: string;
   page_number: string;
   body: string;
@@ -75,19 +69,28 @@ export interface BookMetadata {
   corpus?: string;
   title: string;
   author_id?: number;
-  author?: string;
   death_ah?: number;
   century_ah?: number;
-  genre?: string;
+  genre_id?: number;
   page_count?: number;
   token_count?: number;
-  // Additional metadata from JSON files
   original_id?: string;
-  date?: string;
   paginated?: boolean;
   tags?: string;       // JSON array as string
   book_meta?: string;  // JSON array as string
   author_meta?: string; // JSON array as string
+}
+
+// Author lookup table
+export interface Author {
+  id: number;
+  name: string;
+}
+
+// Genre lookup table
+export interface Genre {
+  id: number;
+  name: string;
 }
 
 // Stats

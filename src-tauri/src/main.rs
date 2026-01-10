@@ -49,6 +49,7 @@ fn main() {
             commands::search_authors,
             commands::get_book,
             commands::get_genres,
+            commands::get_authors,
             commands::get_centuries,
             commands::get_stats,
             commands::proximity_search,

@@ -3,6 +3,7 @@ import type { SearchResults, SearchResult } from '../../types';
 import { EXPORT_MAX_RESULTS } from '../../constants/search';
 import { VirtualizedResultsList } from '../shared/VirtualizedResultsList';
 import { exportSearchResults, type ExportFormat } from '../../utils/exportData';
+import { useBooks } from '../../contexts/BooksContext';
 
 interface ResultsPanelProps {
   results: SearchResults | null;
@@ -25,6 +26,7 @@ export function ResultsPanel({
   errorMessage,
   maxResults,
 }: ResultsPanelProps) {
+  const { booksMap, authorsMap, genresMap } = useBooks();
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
@@ -47,13 +49,13 @@ export function ResultsPanel({
     setExporting(true);
     try {
       const exportResults = await onExport();
-      await exportSearchResults(exportResults, format);
+      await exportSearchResults(exportResults, format, booksMap, authorsMap, genresMap);
     } catch (err) {
       console.error('Export failed:', err);
     } finally {
       setExporting(false);
     }
-  }, [results, onExport]);
+  }, [results, onExport, booksMap, authorsMap, genresMap]);
 
   const hasResults = results && results.results.length > 0;
   const exportCount = results ? Math.min(results.total_hits, EXPORT_MAX_RESULTS) : 0;

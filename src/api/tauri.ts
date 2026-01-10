@@ -39,13 +39,13 @@ export async function getAllBooks(): Promise<BookMetadata[]> {
 }
 
 export async function listBooks(
-  genre?: string,
+  genreId?: number,
   corpus?: string,
   centuryAh?: number,
   limit?: number,
   offset?: number
 ): Promise<BookMetadata[]> {
-  return invoke('list_books', { genre, corpus, centuryAh, limit, offset });
+  return invoke('list_books', { genreId, corpus, centuryAh, limit, offset });
 }
 
 export async function getBook(id: number): Promise<BookMetadata | null> {
@@ -55,8 +55,7 @@ export async function getBook(id: number): Promise<BookMetadata | null> {
 export interface ListBooksFilteredParams {
   deathAhMin?: number;
   deathAhMax?: number;
-  genres?: string[];
-  authorSearch?: string;
+  genreIds?: number[];
   limit?: number;
   offset?: number;
 }
@@ -65,12 +64,19 @@ export async function listBooksFiltered(params: ListBooksFilteredParams = {}): P
   return invoke('list_books_filtered', { ...params });
 }
 
-export async function searchAuthors(query: string): Promise<[string, number, number][]> {
+/** Search authors by name. Returns [author_id, author_name, earliest_death_ah, book_count] */
+export async function searchAuthors(query: string): Promise<[number, string, number, number][]> {
   return invoke('search_authors', { query });
 }
 
-export async function getGenres(): Promise<[string, number][]> {
+/** Get all genres. Returns [genre_id, genre_name] */
+export async function getGenres(): Promise<[number, string][]> {
   return invoke('get_genres');
+}
+
+/** Get all authors. Returns [author_id, author_name] */
+export async function getAuthors(): Promise<[number, string][]> {
+  return invoke('get_authors');
 }
 
 export async function getCenturies(): Promise<[number, number][]> {

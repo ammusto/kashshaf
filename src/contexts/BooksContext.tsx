@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useMemo, ReactNode, useCallback } from 'react';
-import type { BookMetadata } from '../types';
+import type { BookMetadata, Author, Genre } from '../types';
 import type { SearchAPI } from '../api';
 
 interface BooksContextValue {
@@ -7,8 +7,14 @@ interface BooksContextValue {
   books: BookMetadata[];
   /** Map of book ID to book metadata for O(1) lookups */
   booksMap: Map<number, BookMetadata>;
-  /** All genres with counts */
-  genres: [string, number][];
+  /** All authors as [id, name] pairs */
+  authors: [number, string][];
+  /** Map of author ID to author name for O(1) lookups */
+  authorsMap: Map<number, string>;
+  /** All genres as [id, name] pairs */
+  genres: [number, string][];
+  /** Map of genre ID to genre name for O(1) lookups */
+  genresMap: Map<number, string>;
   /** Loading state */
   loading: boolean;
   /** Error message if loading failed */
@@ -27,23 +33,28 @@ interface BooksProviderProps {
 
 export function BooksProvider({ children, api }: BooksProviderProps) {
   const [books, setBooks] = useState<BookMetadata[]>([]);
-  const [genres, setGenres] = useState<[string, number][]>([]);
+  const [authors, setAuthors] = useState<[number, string][]>([]);
+  const [genres, setGenres] = useState<[number, string][]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load all books and genres
+  // Load all books, authors, and genres
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const [booksData, genresData] = await Promise.all([
+      console.log('[BooksContext] Loading metadata from API...');
+      const [booksData, authorsData, genresData] = await Promise.all([
         api.getAllBooks(),
+        api.getAuthors(),
         api.getGenres(),
       ]);
+      console.log(`[BooksContext] Loaded ${booksData.length} books, ${authorsData.length} authors, ${genresData.length} genres`);
       setBooks(booksData);
+      setAuthors(authorsData);
       setGenres(genresData);
       setError(null);
     } catch (err) {
-      console.error('Failed to load books:', err);
+      console.error('[BooksContext] Failed to load books:', err);
       setError(`Failed to load books: ${err}`);
     } finally {
       setLoading(false);
@@ -64,10 +75,31 @@ export function BooksProvider({ children, api }: BooksProviderProps) {
     return map;
   }, [books]);
 
+  // Create author lookup map
+  const authorsMap = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const [id, name] of authors) {
+      map.set(id, name);
+    }
+    return map;
+  }, [authors]);
+
+  // Create genre lookup map
+  const genresMap = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const [id, name] of genres) {
+      map.set(id, name);
+    }
+    return map;
+  }, [genres]);
+
   const value: BooksContextValue = {
     books,
     booksMap,
+    authors,
+    authorsMap,
     genres,
+    genresMap,
     loading,
     error,
     reload: loadData,

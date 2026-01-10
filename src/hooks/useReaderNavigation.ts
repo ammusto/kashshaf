@@ -57,8 +57,7 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
 
     updateTab(tabId, {
       currentPage: {
-        title: result.title,
-        author: result.author,
+        bookId: result.id,
         meta: `${result.part_label}:${result.page_number}`,
         body: result.body ?? '',
       },
@@ -117,9 +116,8 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
         pageTokens: tokens,
         matchedTokenIndices: matchedIndices,
         currentPage: {
-          title: result.title,
-          author: result.author,
-          meta: ` ${result.part_label}:${result.page_number}`,
+          bookId: result.id,
+          meta: `${result.part_label}:${result.page_number}`,
           body: result.body ?? '',
           loadTimeMs,
         },
@@ -151,8 +149,7 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
       if (page) {
         updateTab(activeTab.id, {
           currentPage: {
-            title: page.title,
-            author: page.author,
+            bookId: page.id,
             meta: `${page.part_label}:${page.page_number}`,
             body: page.body ?? '',
             loadTimeMs,

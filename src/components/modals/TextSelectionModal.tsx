@@ -38,14 +38,14 @@ export function TextSelectionModal({
   onSelectionChange,
 }: TextSelectionModalProps) {
   // Get cached books from context - no loading needed!
-  const { books: allBooks, genres, loading } = useBooks();
+  const { books: allBooks, genres, authorsMap, genresMap, loading } = useBooks();
 
   const [activeTab, setActiveTab] = useState<'all' | 'selected'>('all');
 
   // Filters for All Texts (all client-side)
   const [deathAhMin, setDeathAhMin] = useState<string>('');
   const [deathAhMax, setDeathAhMax] = useState<string>('');
-  const [selectedGenres, setSelectedGenres] = useState<Set<string>>(new Set());
+  const [selectedGenreIds, setSelectedGenreIds] = useState<Set<number>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
 
   // Genre dropdown open state
@@ -71,13 +71,13 @@ export function TextSelectionModal({
   }, []);
 
   // Toggle genre in multi-select
-  const toggleGenre = useCallback((genre: string) => {
-    setSelectedGenres(prev => {
+  const toggleGenre = useCallback((genreId: number) => {
+    setSelectedGenreIds(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(genre)) {
-        newSet.delete(genre);
+      if (newSet.has(genreId)) {
+        newSet.delete(genreId);
       } else {
-        newSet.add(genre);
+        newSet.add(genreId);
       }
       return newSet;
     });
@@ -87,12 +87,12 @@ export function TextSelectionModal({
   const clearFilters = useCallback(() => {
     setDeathAhMin('');
     setDeathAhMax('');
-    setSelectedGenres(new Set());
+    setSelectedGenreIds(new Set());
     setSearchQuery('');
   }, []);
 
   // Check if any filters are active
-  const hasActiveFilters = deathAhMin || deathAhMax || selectedGenres.size > 0 || searchQuery;
+  const hasActiveFilters = deathAhMin || deathAhMax || selectedGenreIds.size > 0 || searchQuery;
 
   // Filter books - ALL client-side, instant!
   const filteredBooks = useMemo(() => {
@@ -109,8 +109,8 @@ export function TextSelectionModal({
     }
 
     // Genre filter
-    if (selectedGenres.size > 0) {
-      result = result.filter(book => book.genre && selectedGenres.has(book.genre));
+    if (selectedGenreIds.size > 0) {
+      result = result.filter(book => book.genre_id !== undefined && selectedGenreIds.has(book.genre_id));
     }
 
     // Search query (title/author)
@@ -118,13 +118,14 @@ export function TextSelectionModal({
       const normalized = normalizeArabicForSearch(searchQuery);
       result = result.filter(book => {
         const normalizedTitle = normalizeArabicForSearch(book.title);
-        const normalizedAuthor = book.author ? normalizeArabicForSearch(book.author) : '';
+        const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+        const normalizedAuthor = authorName ? normalizeArabicForSearch(authorName) : '';
         return normalizedTitle.includes(normalized) || normalizedAuthor.includes(normalized);
       });
     }
 
     return result;
-  }, [allBooks, deathAhMin, deathAhMax, selectedGenres, searchQuery]);
+  }, [allBooks, deathAhMin, deathAhMax, selectedGenreIds, searchQuery, authorsMap]);
 
   // Toggle book selection
   const toggleBook = useCallback((bookId: number) => {
@@ -159,10 +160,11 @@ export function TextSelectionModal({
     const normalized = normalizeArabicForSearch(selectedSearch);
     return selectedBooks.filter(book => {
       const normalizedTitle = normalizeArabicForSearch(book.title);
-      const normalizedAuthor = book.author ? normalizeArabicForSearch(book.author) : '';
+      const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+      const normalizedAuthor = authorName ? normalizeArabicForSearch(authorName) : '';
       return normalizedTitle.includes(normalized) || normalizedAuthor.includes(normalized);
     });
-  }, [selectedBooks, selectedSearch]);
+  }, [selectedBooks, selectedSearch, authorsMap]);
 
   // Virtualizers
   const allTextsVirtualizer = useVirtualizer({
@@ -265,11 +267,11 @@ export function TextSelectionModal({
                            bg-white cursor-pointer flex items-center gap-1 min-w-[100px]"
                 >
                   <span className="truncate">
-                    {selectedGenres.size === 0
+                    {selectedGenreIds.size === 0
                       ? 'All'
-                      : selectedGenres.size === 1
-                        ? Array.from(selectedGenres)[0]
-                        : `${selectedGenres.size} selected`}
+                      : selectedGenreIds.size === 1
+                        ? genresMap.get(Array.from(selectedGenreIds)[0]) ?? 'Unknown'
+                        : `${selectedGenreIds.size} selected`}
                   </span>
                   <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -277,20 +279,19 @@ export function TextSelectionModal({
                 </button>
                 {genreDropdownOpen && (
                   <div className="absolute top-full left-0 mt-1 bg-white border border-app-border-medium rounded shadow-lg z-20 min-w-[180px] max-h-[300px] overflow-auto">
-                    {genres.map(([genre, count]) => (
+                    {genres.map(([genreId, genreName]) => (
                       <label
-                        key={genre}
+                        key={genreId}
                         className="flex items-center gap-2 px-3 py-2 hover:bg-app-surface-variant cursor-pointer"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <input
                           type="checkbox"
-                          checked={selectedGenres.has(genre)}
-                          onChange={() => toggleGenre(genre)}
+                          checked={selectedGenreIds.has(genreId)}
+                          onChange={() => toggleGenre(genreId)}
                           className="w-3.5 h-3.5 rounded accent-app-accent cursor-pointer"
                         />
-                        <span className="text-xs text-app-text-primary capitalize flex-1">{genre}</span>
-                        <span className="text-xs text-app-text-tertiary">({count})</span>
+                        <span className="text-xs text-app-text-primary capitalize flex-1">{genreName}</span>
                       </label>
                     ))}
                   </div>
@@ -389,6 +390,8 @@ export function TextSelectionModal({
                           book={book}
                           isSelected={isSelected}
                           onToggle={() => toggleBook(book.id)}
+                          authorsMap={authorsMap}
+                          genresMap={genresMap}
                         />
                       </div>
                     );
@@ -463,6 +466,8 @@ export function TextSelectionModal({
                           book={book}
                           isSelected={true}
                           onToggle={() => toggleBook(book.id)}
+                          authorsMap={authorsMap}
+                          genresMap={genresMap}
                         />
                       </div>
                     );
@@ -482,13 +487,19 @@ function BookRow({
   book,
   isSelected,
   onToggle,
+  authorsMap,
+  genresMap,
 }: {
   book: BookMetadata;
   isSelected: boolean;
   onToggle: () => void;
+  authorsMap: Map<number, string>;
+  genresMap: Map<number, string>;
 }) {
   const titleTruncated = truncate(book.title, 75);
-  const authorTruncated = book.author ? truncate(book.author, 50) : 'Unknown';
+  const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+  const authorTruncated = authorName ? truncate(authorName, 50) : 'Unknown';
+  const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;
 
   return (
     <div
@@ -528,9 +539,9 @@ function BookRow({
       </div>
 
       {/* Genre */}
-      {book.genre && (
+      {genreName && (
         <span className="text-sm text-app-text-tertiary bg-app-surface-variant px-2 py-0.5 rounded capitalize flex-shrink-0">
-          {book.genre}
+          {genreName}
         </span>
       )}
     </div>

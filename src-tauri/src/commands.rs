@@ -35,22 +35,19 @@ pub struct BookMetadata {
     pub corpus: Option<String>,
     pub title: String,
     pub author_id: Option<i64>,
-    pub author: Option<String>,
     pub death_ah: Option<i64>,
     pub century_ah: Option<i64>,
-    pub genre: Option<String>,
+    pub genre_id: Option<i64>,
     pub page_count: Option<i64>,
     pub token_count: Option<i64>,
-    // New fields from JSON metadata
     pub original_id: Option<String>,
-    pub date: Option<String>,
     pub paginated: Option<bool>,
     pub tags: Option<String>,        // JSON array as string
     pub book_meta: Option<String>,   // JSON array as string
     pub author_meta: Option<String>, // JSON array as string
 }
 
-const BOOK_COLUMNS: &str = "id, corpus, title, author_id, author, death_ah, century_ah, genre, page_count, token_count, original_id, date, paginated, tags, book_meta, author_meta";
+const BOOK_COLUMNS: &str = "id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count, original_id, paginated, tags, book_meta, author_meta";
 
 fn row_to_book(row: &Row) -> rusqlite::Result<BookMetadata> {
     Ok(BookMetadata {
@@ -58,18 +55,16 @@ fn row_to_book(row: &Row) -> rusqlite::Result<BookMetadata> {
         corpus: row.get(1)?,
         title: row.get(2)?,
         author_id: row.get(3)?,
-        author: row.get(4)?,
-        death_ah: row.get(5)?,
-        century_ah: row.get(6)?,
-        genre: row.get(7)?,
-        page_count: row.get(8)?,
-        token_count: row.get(9)?,
-        original_id: row.get(10)?,
-        date: row.get(11)?,
-        paginated: row.get::<_, Option<i64>>(12)?.map(|v| v != 0),
-        tags: row.get(13)?,
-        book_meta: row.get(14)?,
-        author_meta: row.get(15)?,
+        death_ah: row.get(4)?,
+        century_ah: row.get(5)?,
+        genre_id: row.get(6)?,
+        page_count: row.get(7)?,
+        token_count: row.get(8)?,
+        original_id: row.get(9)?,
+        paginated: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
+        tags: row.get(11)?,
+        book_meta: row.get(12)?,
+        author_meta: row.get(13)?,
     })
 }
 
@@ -167,7 +162,7 @@ pub fn get_all_books(
 #[tauri::command]
 pub fn list_books(
     state: State<'_, ManagedAppState>,
-    genre: Option<String>,
+    genre_id: Option<i64>,
     corpus: Option<String>,
     century_ah: Option<i64>,
     limit: Option<i64>,
@@ -182,8 +177,8 @@ pub fn list_books(
 
     let mut sql = format!("SELECT {} FROM books WHERE 1=1", BOOK_COLUMNS);
 
-    if genre.is_some() {
-        sql.push_str(" AND genre = ?1");
+    if genre_id.is_some() {
+        sql.push_str(" AND genre_id = ?1");
     }
     if corpus.is_some() {
         sql.push_str(" AND corpus = ?2");
@@ -201,7 +196,7 @@ pub fn list_books(
     let books = stmt
         .query_map(
             rusqlite::params![
-                genre.as_deref(),
+                genre_id,
                 corpus.as_deref(),
                 century_ah,
                 limit,
@@ -221,8 +216,7 @@ pub fn list_books_filtered(
     state: State<'_, ManagedAppState>,
     death_ah_min: Option<i64>,
     death_ah_max: Option<i64>,
-    genres: Option<Vec<String>>,
-    author_search: Option<String>,
+    genre_ids: Option<Vec<i64>>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<BookMetadata>, KashshafError> {
@@ -250,19 +244,19 @@ pub fn list_books_filtered(
         param_idx += 1;
     }
 
-    // Genre filter (multiple genres with OR)
-    if let Some(ref genre_list) = genres {
-        if !genre_list.is_empty() {
-            let placeholders: Vec<String> = genre_list
+    // Genre filter (multiple genre IDs with OR)
+    if let Some(ref genre_id_list) = genre_ids {
+        if !genre_id_list.is_empty() {
+            let placeholders: Vec<String> = genre_id_list
                 .iter()
                 .enumerate()
                 .map(|(i, _)| format!("?{}", param_idx + i))
                 .collect();
-            sql.push_str(&format!(" AND genre IN ({})", placeholders.join(",")));
-            for g in genre_list {
-                params.push(Box::new(g.clone()));
+            sql.push_str(&format!(" AND genre_id IN ({})", placeholders.join(",")));
+            for g in genre_id_list {
+                params.push(Box::new(*g));
             }
-            param_idx += genre_list.len();
+            param_idx += genre_id_list.len();
         }
     }
 
@@ -286,27 +280,6 @@ pub fn list_books_filtered(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
-    let books = if let Some(ref search_term) = author_search {
-        if search_term.len() >= 3 {
-            let normalized_search = normalize_arabic_for_search(search_term).to_lowercase();
-            books
-                .into_iter()
-                .filter(|b| {
-                    if let Some(ref author) = b.author {
-                        let normalized_author = normalize_arabic_for_search(author).to_lowercase();
-                        normalized_author.contains(&normalized_search)
-                    } else {
-                        false
-                    }
-                })
-                .collect()
-        } else {
-            books
-        }
-    } else {
-        books
-    };
-
     Ok(books)
 }
 
@@ -314,7 +287,7 @@ pub fn list_books_filtered(
 pub fn search_authors(
     state: State<'_, ManagedAppState>,
     query: String,
-) -> Result<Vec<(String, i64, i64)>, KashshafError> {
+) -> Result<Vec<(i64, String, i64, i64)>, KashshafError> {
     let app_state = require_state(&state)?;
     if query.len() < 3 {
         return Ok(Vec::new());
@@ -324,23 +297,31 @@ pub fn search_authors(
         .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
 
+    // Join authors with books to get death_ah and book_count
     let mut stmt = conn
-        .prepare("SELECT author, MIN(death_ah) as earliest_death, COUNT(*) as book_count FROM books WHERE author IS NOT NULL GROUP BY author ORDER BY earliest_death ASC NULLS LAST")
+        .prepare(
+            "SELECT a.id, a.author, MIN(b.death_ah) as earliest_death, COUNT(b.id) as book_count
+             FROM authors a
+             LEFT JOIN books b ON b.author_id = a.id
+             GROUP BY a.id, a.author
+             ORDER BY earliest_death ASC NULLS LAST"
+        )
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     let normalized_query = normalize_arabic_for_search(&query).to_lowercase();
 
-    let authors: Vec<(String, i64, i64)> = stmt
+    let authors: Vec<(i64, String, i64, i64)> = stmt
         .query_map([], |row: &Row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                row.get::<_, i64>(3)?,
             ))
         })
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
         .filter_map(|r| r.ok())
-        .filter(|(author, _, _)| {
+        .filter(|(_, author, _, _)| {
             let normalized_author = normalize_arabic_for_search(author).to_lowercase();
             normalized_author.contains(&normalized_query)
         })
@@ -373,25 +354,47 @@ pub fn get_book(
 }
 
 #[tauri::command]
-pub fn get_genres(state: State<'_, ManagedAppState>) -> Result<Vec<(String, i64)>, KashshafError> {
+pub fn get_genres(state: State<'_, ManagedAppState>) -> Result<Vec<(i64, String)>, KashshafError> {
     let app_state = require_state(&state)?;
     let conn = app_state
         .get_db_connection()
         .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
 
     let mut stmt = conn
-        .prepare("SELECT genre, COUNT(*) as count FROM books WHERE genre IS NOT NULL GROUP BY genre ORDER BY count DESC")
+        .prepare("SELECT id, genre FROM genres ORDER BY id")
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     let genres = stmt
         .query_map([], |row: &Row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     Ok(genres)
+}
+
+#[tauri::command]
+pub fn get_authors(state: State<'_, ManagedAppState>) -> Result<Vec<(i64, String)>, KashshafError> {
+    let app_state = require_state(&state)?;
+    let conn = app_state
+        .get_db_connection()
+        .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, author FROM authors ORDER BY id")
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+
+    let authors = stmt
+        .query_map([], |row: &Row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+
+    Ok(authors)
 }
 
 #[tauri::command]

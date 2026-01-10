@@ -188,14 +188,12 @@ pub struct SearchResult {
     pub part_index: u64,
     pub page_id: u64,
     pub author_id: Option<u64>,
-    pub corpus: String,
-    pub author: String,
-    pub title: String,
+    pub genre_id: Option<u64>,
     pub death_ah: Option<u64>,
     pub century_ah: Option<u64>,
-    pub genre: Option<String>,
     pub part_label: String,
     pub page_number: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub body: String,
     pub score: f32,
     pub matched_token_indices: Vec<u32>,
@@ -358,16 +356,13 @@ impl SearchEngine {
     fn extract_result(&self, searcher: &tantivy::Searcher, doc_address: tantivy::DocAddress, score: f32, matched_token_indices: Vec<u32>) -> Result<SearchResult> {
         let doc: TantivyDocument = searcher.doc(doc_address)?;
 
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
         let author_id_field = self.schema.get_field("author_id").unwrap();
-        let corpus_field = self.schema.get_field("corpus").unwrap();
-        let author_field = self.schema.get_field("author").unwrap();
-        let title_field = self.schema.get_field("title").unwrap();
+        let genre_id_field = self.schema.get_field("genre_id").unwrap();
         let death_ah_field = self.schema.get_field("death_ah").unwrap();
         let century_ah_field = self.schema.get_field("century_ah").unwrap();
-        let genre_field = self.schema.get_field("genre").unwrap();
         let part_label_field = self.schema.get_field("part_label").unwrap();
         let page_number_field = self.schema.get_field("page_number").unwrap();
         let body_field = self.schema.get_field("body").unwrap();
@@ -377,12 +372,9 @@ impl SearchEngine {
             part_index: doc.get_first(part_index_field).and_then(|v| v.as_u64()).unwrap_or(0),
             page_id: doc.get_first(page_id_field).and_then(|v| v.as_u64()).unwrap_or(0),
             author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
-            corpus: doc.get_first(corpus_field).and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            author: doc.get_first(author_field).and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            title: doc.get_first(title_field).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            genre_id: doc.get_first(genre_id_field).and_then(|v| v.as_u64()),
             death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
             century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
-            genre: doc.get_first(genre_field).and_then(|v| v.as_str()).map(|s| s.to_string()),
             part_label: doc.get_first(part_label_field).and_then(|v| v.as_str()).unwrap_or("").to_string(),
             page_number: doc.get_first(page_number_field).and_then(|v| v.as_str()).unwrap_or("").to_string(),
             body: doc.get_first(body_field).and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -422,7 +414,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 text_query
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids.iter().map(|&id| {
                     let term = Term::from_field_u64(id_field, id);
                     (Occur::Should, Box::new(TermQuery::new(term, IndexRecordOption::Basic)) as Box<dyn Query>)
@@ -468,7 +460,7 @@ impl SearchEngine {
         let reader = self.index.reader_builder().reload_policy(ReloadPolicy::OnCommitWithDelay).try_into()?;
         let searcher = reader.searcher();
 
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
 
@@ -516,7 +508,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 text_query
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids.iter().map(|&id| {
                     (Occur::Should, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>)
                 }).collect();
@@ -603,7 +595,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 Box::new(text_query)
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids.iter().map(|&id| {
                     (Occur::Should, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>)
                 }).collect();
@@ -716,7 +708,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 text_query
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids.iter().map(|&id| {
                     (Occur::Should, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>)
                 }).collect();
@@ -804,7 +796,7 @@ impl SearchEngine {
             if book_ids.is_empty() {
                 wildcard_query
             } else {
-                let id_field = self.schema.get_field("id").unwrap();
+                let id_field = self.schema.get_field("text_id").unwrap();
                 let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids.iter().map(|&id| {
                     (Occur::Should, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>)
                 }).collect();
@@ -991,7 +983,7 @@ impl SearchEngine {
 
         if query_terms.is_empty() { return Ok(Vec::new()); }
 
-        let id_field = self.schema.get_field("id").unwrap();
+        let id_field = self.schema.get_field("text_id").unwrap();
         let part_index_field = self.schema.get_field("part_index").unwrap();
         let page_id_field = self.schema.get_field("page_id").unwrap();
 

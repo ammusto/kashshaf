@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { SearchResult } from '../../types';
 import { stripHtml, buildCharToTokenMap, getSnippetRange, getHighlightRanges } from '../../utils/arabicTokenizer';
 import { MetadataTooltip } from '../ui';
+import { useBooks } from '../../contexts/BooksContext';
 
 interface SearchResultRowProps {
   result: SearchResult;
@@ -15,6 +16,8 @@ export function SearchResultRow({
   onClick,
   style,
 }: SearchResultRowProps) {
+  const { booksMap, authorsMap, genresMap } = useBooks();
+  const book = booksMap.get(result.id);
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
 
@@ -121,13 +124,13 @@ export function SearchResultRow({
             dir="rtl"
             className="text-xl font-medium text-app-accent truncate text-right font-arabic"
           >
-            {result.title}
+            {book?.title ?? `Book ${result.id}`}
           </p>
         </div>
       </div>
 
-      {showTooltip && createPortal(
-        <MetadataTooltip result={result} position={tooltipPosition} />,
+      {showTooltip && book && createPortal(
+        <MetadataTooltip book={book} position={tooltipPosition} authorsMap={authorsMap} genresMap={genresMap} />,
         document.body
       )}
     </>

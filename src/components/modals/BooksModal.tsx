@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { BookMetadata } from '../../types';
 import { listBooks } from '../../api/tauri';
+import { useBooks } from '../../contexts/BooksContext';
 
 interface BooksModalProps {
   onClose: () => void;
@@ -8,6 +9,7 @@ interface BooksModalProps {
 }
 
 export function BooksModal({ onClose, onSelectBook }: BooksModalProps) {
+  const { authorsMap, genresMap } = useBooks();
   const [books, setBooks] = useState<BookMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -39,9 +41,10 @@ export function BooksModal({ onClose, onSelectBook }: BooksModalProps) {
   const filteredBooks = books.filter((book) => {
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
+    const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
     return (
       book.title.toLowerCase().includes(term) ||
-      (book.author && book.author.toLowerCase().includes(term))
+      (authorName && authorName.toLowerCase().includes(term))
     );
   });
 
@@ -108,44 +111,48 @@ export function BooksModal({ onClose, onSelectBook }: BooksModalProps) {
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-5">
-              {filteredBooks.map((book) => (
-                <div
-                  key={book.id}
-                  onClick={() => onSelectBook(book.id)}
-                  className="p-6 border border-app-border-light rounded-xl cursor-pointer
-                           hover:border-app-accent hover:bg-app-accent-light hover:shadow-sm transition-all"
-                >
-                  <h3
-                    dir="rtl"
-                    className="text-base font-semibold text-app-accent font-arabic truncate"
+              {filteredBooks.map((book) => {
+                const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+                const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;
+                return (
+                  <div
+                    key={book.id}
+                    onClick={() => onSelectBook(book.id)}
+                    className="p-6 border border-app-border-light rounded-xl cursor-pointer
+                             hover:border-app-accent hover:bg-app-accent-light hover:shadow-sm transition-all"
                   >
-                    {book.title}
-                  </h3>
-                  <p
-                    dir="rtl"
-                    className="text-sm text-app-text-secondary font-arabic mt-1.5 truncate"
-                  >
-                    {book.author || 'Unknown author'}
-                  </p>
-                  <div className="flex gap-4 mt-4 text-xs text-app-text-tertiary">
-                    {book.death_ah && (
-                      <span className="bg-app-surface-variant px-3 py-1 rounded">
-                        d. {book.death_ah} AH
-                      </span>
-                    )}
-                    {book.genre && (
-                      <span className="bg-app-surface-variant px-3 py-1 rounded capitalize">
-                        {book.genre}
-                      </span>
-                    )}
-                    {book.page_count && (
-                      <span className="bg-app-surface-variant px-3 py-1 rounded">
-                        {book.page_count} pages
-                      </span>
-                    )}
+                    <h3
+                      dir="rtl"
+                      className="text-base font-semibold text-app-accent font-arabic truncate"
+                    >
+                      {book.title}
+                    </h3>
+                    <p
+                      dir="rtl"
+                      className="text-sm text-app-text-secondary font-arabic mt-1.5 truncate"
+                    >
+                      {authorName || 'Unknown author'}
+                    </p>
+                    <div className="flex gap-4 mt-4 text-xs text-app-text-tertiary">
+                      {book.death_ah && (
+                        <span className="bg-app-surface-variant px-3 py-1 rounded">
+                          d. {book.death_ah} AH
+                        </span>
+                      )}
+                      {genreName && (
+                        <span className="bg-app-surface-variant px-3 py-1 rounded capitalize">
+                          {genreName}
+                        </span>
+                      )}
+                      {book.page_count && (
+                        <span className="bg-app-surface-variant px-3 py-1 rounded">
+                          {book.page_count} pages
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
