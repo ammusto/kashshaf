@@ -579,6 +579,7 @@ impl SearchEngine {
     }
 
     /// Batch position extraction for multiple docs in one segment pass
+    #[allow(dead_code)]
     fn get_matched_positions_batch(
         &self,
         segment_reader: &SegmentReader,

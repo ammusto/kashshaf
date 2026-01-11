@@ -167,3 +167,16 @@ export interface DownloadProgress {
   state: DownloadState;
 }
 
+// Re-export announcement types
+export type {
+  TargetPlatform,
+  AnnouncementType,
+  AnnouncementPriority,
+  AnnouncementBodyFormat,
+  AnnouncementAction,
+  Announcement,
+  AnnouncementsManifest,
+  DismissedAnnouncement,
+  AnnouncementsCache,
+} from './announcements';
+

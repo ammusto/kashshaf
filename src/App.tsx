@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
-import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus } from './types';
+import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement } from './types';
 import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from './types/search';
 import { MAX_RESULTS } from './constants/search';
 import { useSearchTabsContext } from './contexts/SearchTabsContext';
@@ -10,12 +10,14 @@ import { useReaderNavigation } from './hooks/useReaderNavigation';
 import { Sidebar } from './components/Sidebar';
 import { ReaderPanel, ResultsPanel, HelpPanel } from './components/panels';
 import { DraggableSplitter, UpdateBanner } from './components/ui';
-import { TextSelectionModal, MetadataBrowser, SavedSearchesModal, SearchHistoryModal } from './components/modals';
+import { TextSelectionModal, MetadataBrowser, SavedSearchesModal, SearchHistoryModal, AnnouncementsModal } from './components/modals';
 import { Toolbar } from './components/Toolbar';
 import { SearchTabs, type TabData } from './components/SearchTabs';
 import type { NameFormData } from './utils/namePatterns';
 import { createEmptyNameForm } from './utils/namePatterns';
 import { isWebTarget } from './utils/platform';
+import { getEligibleAnnouncements } from './utils/announcements';
+import { markMultipleAnnouncementsDismissed, setSkipAnnouncementPopups } from './utils/storage';
 
 // Lazy load DownloadModal only for desktop
 const DownloadModal = lazy(() => import('./components/modals/DownloadModal').then(m => ({ default: m.DownloadModal })));
@@ -29,6 +31,11 @@ function App() {
   const [checkingCorpus, setCheckingCorpus] = useState(true);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);
+
+  // Announcements state
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [showAnnouncementsModal, setShowAnnouncementsModal] = useState(false);
+  const [announcementsChecked, setAnnouncementsChecked] = useState(false);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -166,6 +173,77 @@ function App() {
     fullQuery: tab.fullQuery,
   }));
 
+  // Check and show announcements after download phase completes
+  const checkAndShowAnnouncements = useCallback(async () => {
+    if (announcementsChecked) return;
+
+    try {
+      // Get app version - use a default for web or if not available
+      let appVersion = '1.0.0';
+      if (!isWebTarget()) {
+        try {
+          const { getVersion } = await import('@tauri-apps/api/app');
+          appVersion = await getVersion();
+        } catch {
+          // Fallback if version API not available
+        }
+      }
+
+      const eligible = await getEligibleAnnouncements(appVersion);
+      setAnnouncementsChecked(true);
+
+      if (eligible.length > 0) {
+        setAnnouncements(eligible);
+        setShowAnnouncementsModal(true);
+      }
+    } catch (err) {
+      console.error('Failed to check announcements:', err);
+      setAnnouncementsChecked(true);
+    }
+  }, [announcementsChecked]);
+
+  // Handle announcements modal dismiss
+  const handleAnnouncementsDismiss = useCallback(async (skipFuturePopups: boolean, dismissedIds: string[]) => {
+    try {
+      // Save skip preference
+      if (skipFuturePopups) {
+        await setSkipAnnouncementPopups(true);
+      }
+
+      // Mark announcements as dismissed
+      if (dismissedIds.length > 0) {
+        await markMultipleAnnouncementsDismissed(dismissedIds);
+      }
+    } catch (err) {
+      console.error('Failed to save announcement preferences:', err);
+    }
+
+    setShowAnnouncementsModal(false);
+    setAnnouncements([]);
+  }, []);
+
+  // Check for announcements when download modal is not needed
+  // This covers: web target, corpus already ready, or online mode already selected
+  useEffect(() => {
+    // Skip if still loading or checking
+    if (modeLoading || checkingCorpus) return;
+    // Skip if download modal is showing (announcements checked after modal closes)
+    if (showDownloadModal) return;
+    // Skip if already checked
+    if (announcementsChecked) return;
+
+    // For web target: always check announcements (no download modal)
+    if (isWebTarget()) {
+      checkAndShowAnnouncements();
+      return;
+    }
+
+    // For desktop: check if we're in a ready state without download modal
+    if (mode === 'online' || (mode === 'offline' && corpusStatus?.ready)) {
+      checkAndShowAnnouncements();
+    }
+  }, [modeLoading, checkingCorpus, showDownloadModal, announcementsChecked, mode, corpusStatus?.ready, checkAndShowAnnouncements]);
+
   // Handle download complete - reload app state and recheck status (desktop only)
   const handleDownloadComplete = useCallback(async () => {
     // Skip for web target
@@ -186,11 +264,13 @@ function App() {
         await refreshCorpusStatus();
         // Reload stats with new data
         loadStats();
+        // Check for announcements after download completes
+        checkAndShowAnnouncements();
       }
     } catch (err) {
       console.error('Failed to reload app state:', err);
     }
-  }, [setMode, refreshCorpusStatus]);
+  }, [setMode, refreshCorpusStatus, checkAndShowAnnouncements]);
 
   // Handle online use selection from download modal
   const handleOnlineUse = useCallback(async (skipPromptNextTime: boolean) => {
@@ -201,7 +281,9 @@ function App() {
     // Switch to online mode
     setMode('online');
     setShowDownloadModal(false);
-  }, [setMode]);
+    // Check for announcements after choosing online mode
+    checkAndShowAnnouncements();
+  }, [setMode, checkAndShowAnnouncements]);
 
   // Handle download corpus from toolbar (when in online mode) - desktop only
   const handleDownloadCorpus = useCallback(async () => {
@@ -427,6 +509,13 @@ function App() {
           onClose={() => setSavedSearchesModalOpen(false)}
           onLoadSearch={handleLoadSearch}
         />
+
+        {showAnnouncementsModal && announcements.length > 0 && (
+          <AnnouncementsModal
+            announcements={announcements}
+            onDismiss={handleAnnouncementsDismiss}
+          />
+        )}
       </div>
     </BooksProvider>
   );

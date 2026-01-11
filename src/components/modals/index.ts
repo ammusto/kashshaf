@@ -4,3 +4,4 @@ export { SavedSearchesModal } from './SavedSearchesModal';
 export { BooksModal } from './BooksModal';
 export { MetadataBrowser } from './MetadataBrowser';
 export { DownloadModal } from './DownloadModal';
+export { AnnouncementsModal } from './AnnouncementsModal';
