@@ -310,7 +310,7 @@ export function Toolbar({
         {/* Web badge - show when running as web app */}
         {isWebTarget && (
           <span className="px-2 py-1 text-xs rounded bg-blue-100 text-blue-700 font-medium">
-            Web
+            Web v{import.meta.env.VITE_APP_VERSION}
           </span>
         )}
       </div>

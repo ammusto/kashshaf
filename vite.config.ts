@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import svgr from 'vite-plugin-svgr'
+import packageJson from './package.json'
 
 const isWebTarget = process.env.VITE_TARGET === 'web'
 
@@ -22,6 +23,8 @@ export default defineConfig({
   define: {
     // Make VITE_TARGET available in code
     'import.meta.env.VITE_TARGET': JSON.stringify(process.env.VITE_TARGET || 'desktop'),
+    // Make app version available in code
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(packageJson.version),
   },
   resolve: {
     alias: isWebTarget ? {

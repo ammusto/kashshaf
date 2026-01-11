@@ -463,10 +463,10 @@ export function TextSelectionModal({
                 <input
                   type="text"
                   dir="rtl"
-                  placeholder="Title or author..."
+                  placeholder="Title or author"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="flex-1 h-8 px-3 text-xs rounded border border-app-border-medium
+                  className="flex-1 h-8 px-3 text-lg rounded border border-app-border-medium
                            focus:outline-none focus:border-app-accent text-right font-arabic"
                 />
               </div>
@@ -568,10 +568,10 @@ export function TextSelectionModal({
                 <input
                   type="text"
                   dir="rtl"
-                  placeholder="Filter selected texts..."
+                  placeholder="Filter selected texts"
                   value={selectedSearch}
                   onChange={(e) => setSelectedSearch(e.target.value)}
-                  className="flex-1 h-8 px-3 text-xs rounded border border-app-border-medium
+                  className="flex-1 h-8 px-3 text-lg rounded border border-app-border-medium
                            focus:outline-none focus:border-app-accent text-right font-arabic"
                 />
               </div>
