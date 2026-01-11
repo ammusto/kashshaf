@@ -14,6 +14,7 @@ import type {
   AppUpdateStatus,
   CorpusStatus,
 } from '../types';
+import { stripPunctuation } from '../utils/sanitize';
 
 export async function search(
   query: string,
@@ -22,7 +23,8 @@ export async function search(
   limit?: number,
   offset?: number
 ): Promise<SearchResults> {
-  return invoke('search', { query, mode, filters, limit, offset });
+  const sanitizedQuery = stripPunctuation(query);
+  return invoke('search', { query: sanitizedQuery, mode, filters, limit, offset });
 }
 
 export async function getPage(
@@ -97,7 +99,9 @@ export async function proximitySearch(
   limit?: number,
   offset?: number
 ): Promise<SearchResults> {
-  return invoke('proximity_search', { term1, field1, term2, field2, distance, filters, limit, offset });
+  const sanitizedTerm1 = stripPunctuation(term1);
+  const sanitizedTerm2 = stripPunctuation(term2);
+  return invoke('proximity_search', { term1: sanitizedTerm1, field1, term2: sanitizedTerm2, field2, distance, filters, limit, offset });
 }
 
 export async function getPageTokens(
@@ -174,8 +178,9 @@ export interface CombinedSearchQuery {
 const PROCLITICS = ['و', 'ف', 'ب', 'ل', 'ك'];
 
 function expandWithClitics(query: string): string[] {
-  const words = query.trim().split(/\s+/);
-  if (words.length === 0) return [query];
+  const sanitized = stripPunctuation(query);
+  const words = sanitized.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [sanitized];
 
   if (words.length === 1) {
     const word = words[0];
@@ -184,7 +189,8 @@ function expandWithClitics(query: string): string[] {
 
   const [first, ...rest] = words;
   const restJoined = rest.join(' ');
-  return [query, ...PROCLITICS.map(p => `${p}${first} ${restJoined}`)];
+  const base = words.join(' ');
+  return [base, ...PROCLITICS.map(p => `${p}${first} ${restJoined}`)];
 }
 
 export async function combinedSearch(
@@ -198,21 +204,23 @@ export async function combinedSearch(
 
   for (const inp of combined.andInputs) {
     if (inp.mode === 'surface' && inp.cliticToggle) {
+      // expandWithClitics already sanitizes
       for (const variant of expandWithClitics(inp.query)) {
         orTerms.push({ query: variant, mode: 'surface' });
       }
     } else {
-      andTerms.push({ query: inp.query, mode: inp.mode });
+      andTerms.push({ query: stripPunctuation(inp.query), mode: inp.mode });
     }
   }
 
   for (const inp of combined.orInputs) {
     if (inp.mode === 'surface' && inp.cliticToggle) {
+      // expandWithClitics already sanitizes
       for (const variant of expandWithClitics(inp.query)) {
         orTerms.push({ query: variant, mode: 'surface' });
       }
     } else {
-      orTerms.push({ query: inp.query, mode: inp.mode });
+      orTerms.push({ query: stripPunctuation(inp.query), mode: inp.mode });
     }
   }
 
@@ -262,7 +270,8 @@ export async function wildcardSearch(
   limit: number,
   offset: number
 ): Promise<SearchResults> {
-  return invoke('wildcard_search', { query, filters, limit, offset });
+  const sanitizedQuery = stripPunctuation(query);
+  return invoke('wildcard_search', { query: sanitizedQuery, filters, limit, offset });
 }
 
 /**

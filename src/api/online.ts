@@ -14,6 +14,7 @@ import type {
   SearchResult,
   Token,
 } from '../types';
+import { stripPunctuation } from '../utils/sanitize';
 
 const API_BASE_URL = 'https://api.kashshaf.com';
 
@@ -21,8 +22,9 @@ const API_BASE_URL = 'https://api.kashshaf.com';
 const PROCLITICS = ['و', 'ف', 'ب', 'ل', 'ك'];
 
 function expandWithClitics(query: string): string[] {
-  const words = query.trim().split(/\s+/);
-  if (words.length === 0) return [query];
+  const sanitized = stripPunctuation(query);
+  const words = sanitized.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [sanitized];
 
   if (words.length === 1) {
     const word = words[0];
@@ -31,7 +33,8 @@ function expandWithClitics(query: string): string[] {
 
   const [first, ...rest] = words;
   const restJoined = rest.join(' ');
-  return [query, ...PROCLITICS.map(p => `${p}${first} ${restJoined}`)];
+  const base = words.join(' ');
+  return [base, ...PROCLITICS.map(p => `${p}${first} ${restJoined}`)];
 }
 
 /**
@@ -79,8 +82,9 @@ export class OnlineAPI implements SearchAPI {
     limit: number,
     offset: number
   ): Promise<SearchResults> {
+    const sanitizedQuery = stripPunctuation(query);
     const params = new URLSearchParams({
-      q: query,
+      q: sanitizedQuery,
       mode,
       limit: String(limit),
       offset: String(offset),
@@ -106,21 +110,23 @@ export class OnlineAPI implements SearchAPI {
 
     for (const inp of combined.andInputs) {
       if (inp.mode === 'surface' && inp.cliticToggle) {
+        // expandWithClitics already sanitizes
         for (const variant of expandWithClitics(inp.query)) {
           orTerms.push({ query: variant, mode: 'surface' });
         }
       } else {
-        andTerms.push({ query: inp.query, mode: inp.mode });
+        andTerms.push({ query: stripPunctuation(inp.query), mode: inp.mode });
       }
     }
 
     for (const inp of combined.orInputs) {
       if (inp.mode === 'surface' && inp.cliticToggle) {
+        // expandWithClitics already sanitizes
         for (const variant of expandWithClitics(inp.query)) {
           orTerms.push({ query: variant, mode: 'surface' });
         }
       } else {
-        orTerms.push({ query: inp.query, mode: inp.mode });
+        orTerms.push({ query: stripPunctuation(inp.query), mode: inp.mode });
       }
     }
 
@@ -148,11 +154,13 @@ export class OnlineAPI implements SearchAPI {
     limit: number,
     offset: number
   ): Promise<SearchResults> {
+    const sanitizedTerm1 = stripPunctuation(term1);
+    const sanitizedTerm2 = stripPunctuation(term2);
     return fetchAPI<SearchResults>('/search/proximity', {
       method: 'POST',
       body: JSON.stringify({
-        term1: { query: term1, mode: field1 },
-        term2: { query: term2, mode: field2 },
+        term1: { query: sanitizedTerm1, mode: field1 },
+        term2: { query: sanitizedTerm2, mode: field2 },
         distance,
         filters: {
           book_ids: filters.book_ids || [],
@@ -188,8 +196,9 @@ export class OnlineAPI implements SearchAPI {
     limit: number,
     offset: number
   ): Promise<SearchResults> {
+    const sanitizedQuery = stripPunctuation(query);
     const params = new URLSearchParams({
-      q: query,
+      q: sanitizedQuery,
       limit: String(limit),
       offset: String(offset),
     });

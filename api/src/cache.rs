@@ -215,6 +215,12 @@ impl TokenCache {
         (cache.len(), cache.cap().get())
     }
 
+    /// Find positions where a wildcard phrase matches.
+    /// For a query like "معر*فة الله", finds positions where:
+    /// 1. A token matches the wildcard pattern (prefix + optional suffix)
+    /// 2. Following tokens match the remaining terms in order
+    ///
+    /// Returns all token indices that are part of complete phrase matches.
     pub fn find_wildcard_phrase_positions(
         &self,
         key: &PageKey,
@@ -277,12 +283,16 @@ impl TokenCache {
     }
 }
 
+/// Normalize Arabic text for matching: removes diacritics, normalizes hamza/alif variants
 fn normalize_for_match(text: &str) -> String {
     text.chars()
         .filter_map(|c| {
             match c {
+                // Skip diacritics
                 '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{0671}' => None,
+                // Normalize alif variants
                 'أ' | 'إ' | 'آ' => Some('ا'),
+                // Normalize other variants
                 'ؤ' => Some('و'),
                 'ئ' | 'ى' => Some('ي'),
                 'ک' | 'گ' | 'ڭ' => Some('ك'),

@@ -104,7 +104,7 @@ export interface AppStats {
 // Search History Entry (auto-saved)
 export interface SearchHistoryEntry {
   id: number;
-  search_type: 'boolean' | 'proximity' | 'name' | 'wildcard' | 'concordance';
+  search_type: 'boolean' | 'proximity' | 'name' | 'wildcard';
   query_data: string;  // JSON string
   display_label: string;
   book_filter_count: number;
@@ -117,7 +117,7 @@ export interface SearchHistoryEntry {
 export interface SavedSearchEntry {
   id: number;
   history_id?: number;
-  search_type: 'boolean' | 'proximity' | 'name' | 'wildcard' | 'concordance';
+  search_type: 'boolean' | 'proximity' | 'name' | 'wildcard';
   query_data: string;  // JSON string
   display_label: string;
   book_filter_count: number;

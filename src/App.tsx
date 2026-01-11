@@ -41,7 +41,7 @@ function App() {
     closeTab,
   } = useSearchTabsContext();
 
-  // App-level search mode (terms, names, concordance)
+  // App-level search mode (terms, names)
   const [appSearchMode, setAppSearchMode] = useState<AppSearchMode>('terms');
 
   // Name search form state (kept in App for sidebar)

@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 use cache::TokenCache;
-use search::{SearchEngine, SearchFilters, SearchMode, SearchResults, SearchTerm};
+use search::{SearchEngine, SearchFilters, SearchMode, SearchResults, SearchTerm, PageWithMatches};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -97,6 +97,31 @@ struct MatchPositionsQuery {
     mode: Option<SearchMode>,
 }
 
+#[derive(Deserialize)]
+struct PageWithMatchesQuery {
+    id: u64,
+    part_index: u64,
+    page_id: u64,
+    q: String,
+    mode: Option<SearchMode>,
+}
+
+#[derive(Deserialize)]
+struct MatchPositionsCombinedRequest {
+    id: u64,
+    part_index: u64,
+    page_id: u64,
+    terms: Vec<SearchTerm>,
+}
+
+#[derive(Deserialize)]
+struct NameMatchPositionsRequest {
+    id: u64,
+    part_index: u64,
+    page_id: u64,
+    patterns: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct HealthResponse {
     status: String,
@@ -145,6 +170,11 @@ async fn simple_search(
     let offset = params.offset.unwrap_or(0);
 
     let filters = SearchFilters {
+        author_id: None,
+        genre_id: None,
+        death_ah_min: None,
+        death_ah_max: None,
+        century_ah: None,
         book_ids: params.book_ids.map(|s| {
             s.split(',').filter_map(|id| id.trim().parse().ok()).collect()
         }),
@@ -204,6 +234,11 @@ async fn wildcard_search(
     let offset = params.offset.unwrap_or(0);
 
     let filters = SearchFilters {
+        author_id: None,
+        genre_id: None,
+        death_ah_min: None,
+        death_ah_max: None,
+        century_ah: None,
         book_ids: params.book_ids.map(|s| {
             s.split(',').filter_map(|id| id.trim().parse().ok()).collect()
         }),
@@ -239,6 +274,34 @@ async fn get_match_positions(
 ) -> Result<Json<Vec<u32>>, (StatusCode, Json<ErrorResponse>)> {
     let mode = params.mode.unwrap_or(SearchMode::Lemma);
     state.search_engine.get_match_positions(params.id, params.part_index, params.page_id, &params.q, mode)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+}
+
+async fn get_page_with_matches(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<PageWithMatchesQuery>,
+) -> Result<Json<Option<PageWithMatches>>, (StatusCode, Json<ErrorResponse>)> {
+    let mode = params.mode.unwrap_or(SearchMode::Lemma);
+    state.search_engine.get_page_with_matches(params.id, params.part_index, params.page_id, &params.q, mode)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+}
+
+async fn get_match_positions_combined(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<MatchPositionsCombinedRequest>,
+) -> Result<Json<Vec<u32>>, (StatusCode, Json<ErrorResponse>)> {
+    state.search_engine.get_match_positions_combined(req.id, req.part_index, req.page_id, &req.terms)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+}
+
+async fn get_name_match_positions(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<NameMatchPositionsRequest>,
+) -> Result<Json<Vec<u32>>, (StatusCode, Json<ErrorResponse>)> {
+    state.search_engine.get_name_match_positions(req.id, req.part_index, req.page_id, &req.patterns)
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
 }
@@ -346,6 +409,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/page", get(get_page))
         .route("/page/tokens", get(get_page_tokens))
         .route("/page/matches", get(get_match_positions))
+        .route("/page/with-matches", get(get_page_with_matches))
+        .route("/page/matches/combined", post(get_match_positions_combined))
+        .route("/page/matches/name", post(get_name_match_positions))
         .route("/books", get(get_all_books))
         .route("/authors", get(get_all_authors))
         .route("/genres", get(get_all_genres))

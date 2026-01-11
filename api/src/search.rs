@@ -179,6 +179,11 @@ pub struct SearchTerm {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchFilters {
+    pub author_id: Option<u64>,
+    pub genre_id: Option<u64>,
+    pub death_ah_min: Option<u64>,
+    pub death_ah_max: Option<u64>,
+    pub century_ah: Option<u64>,
     pub book_ids: Option<Vec<u64>>,
 }
 
@@ -206,6 +211,15 @@ pub struct SearchResults {
     pub total_hits: usize,
     pub results: Vec<SearchResult>,
     pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageWithMatches {
+    pub id: u64,
+    pub part_label: String,
+    pub page_number: String,
+    pub body: String,
+    pub matched_token_indices: Vec<u32>,
 }
 
 pub struct SearchEngine {
@@ -1002,6 +1016,239 @@ impl SearchEngine {
             } else {
                 Ok(self.get_matched_positions_limited(searcher.segment_reader(doc_address.segment_ord), doc_address.doc_id, search_field, &query_terms, 100))
             }
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    pub fn get_page_with_matches(
+        &self,
+        id: u64,
+        part_index: u64,
+        page_id: u64,
+        query: &str,
+        mode: SearchMode,
+    ) -> Result<Option<PageWithMatches>> {
+        let reader = self.index.reader_builder().reload_policy(ReloadPolicy::OnCommitWithDelay).try_into()?;
+        let searcher = reader.searcher();
+
+        let id_field = self.schema.get_field("text_id").unwrap();
+        let part_index_field = self.schema.get_field("part_index").unwrap();
+        let page_id_field = self.schema.get_field("page_id").unwrap();
+
+        let page_query = BooleanQuery::new(vec![
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(part_index_field, part_index), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(page_id_field, page_id), IndexRecordOption::Basic)) as Box<dyn Query>),
+        ]);
+
+        let top_docs = searcher.search(&page_query, &TopDocs::with_limit(1))?;
+
+        if let Some((_score, doc_address)) = top_docs.into_iter().next() {
+            let doc: TantivyDocument = searcher.doc(doc_address)?;
+            let part_label_field = self.schema.get_field("part_label").unwrap();
+            let page_number_field = self.schema.get_field("page_number").unwrap();
+            let body_field = self.schema.get_field("body").unwrap();
+
+            let result_id = doc.get_first(id_field).and_then(|v| v.as_u64()).unwrap_or(0);
+            let part_label = doc.get_first(part_label_field).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let page_number = doc.get_first(page_number_field).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let body = doc.get_first(body_field).and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+            let matched_token_indices = if !query.is_empty() {
+                let search_field = self.get_search_field(mode);
+                let normalized_query = match mode {
+                    SearchMode::Root => normalize_root_query(query),
+                    SearchMode::Surface => normalize_arabic(query),
+                    SearchMode::Lemma => query.to_string(),
+                };
+
+                let mut tokenizer = self.index.tokenizers().get("whitespace").unwrap();
+                let mut token_stream = tokenizer.token_stream(&normalized_query);
+                let mut query_terms: HashSet<String> = HashSet::new();
+                while token_stream.advance() {
+                    query_terms.insert(token_stream.token().text.clone());
+                }
+
+                if !query_terms.is_empty() {
+                    if query_terms.len() > 1 {
+                        let phrase_terms: Vec<String> = normalized_query.split_whitespace().map(|s| s.to_string()).collect();
+                        self.get_phrase_positions_limited(searcher.segment_reader(doc_address.segment_ord), doc_address.doc_id, search_field, &phrase_terms, 100)
+                    } else {
+                        self.get_matched_positions_limited(searcher.segment_reader(doc_address.segment_ord), doc_address.doc_id, search_field, &query_terms, 100)
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            Ok(Some(PageWithMatches {
+                id: result_id,
+                part_label,
+                page_number,
+                body,
+                matched_token_indices,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check if a SearchTerm represents a phrase search (multiple words)
+    fn is_phrase_search(&self, term: &SearchTerm) -> bool {
+        let normalized = match term.mode {
+            SearchMode::Root => normalize_root_query(&term.query),
+            SearchMode::Surface => normalize_arabic(&term.query),
+            SearchMode::Lemma => term.query.clone(),
+        };
+        normalized.split_whitespace().count() > 1
+    }
+
+    /// Extract ordered phrase terms from a SearchTerm
+    fn extract_phrase_terms(&self, term: &SearchTerm) -> Vec<String> {
+        let normalized = match term.mode {
+            SearchMode::Root => normalize_root_query(&term.query),
+            SearchMode::Surface => normalize_arabic(&term.query),
+            SearchMode::Lemma => term.query.clone(),
+        };
+        normalized.split_whitespace().map(|s| s.to_string()).collect()
+    }
+
+    pub fn get_match_positions_combined(
+        &self,
+        id: u64,
+        part_index: u64,
+        page_id: u64,
+        terms: &[SearchTerm],
+    ) -> Result<Vec<u32>> {
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let reader = self.index.reader_builder().reload_policy(ReloadPolicy::OnCommitWithDelay).try_into()?;
+        let searcher = reader.searcher();
+
+        let id_field = self.schema.get_field("text_id").unwrap();
+        let part_index_field = self.schema.get_field("part_index").unwrap();
+        let page_id_field = self.schema.get_field("page_id").unwrap();
+
+        let page_query = BooleanQuery::new(vec![
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(part_index_field, part_index), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(page_id_field, page_id), IndexRecordOption::Basic)) as Box<dyn Query>),
+        ]);
+
+        let top_docs = searcher.search(&page_query, &TopDocs::with_limit(1))?;
+
+        if let Some((_score, doc_address)) = top_docs.into_iter().next() {
+            let segment_reader = searcher.segment_reader(doc_address.segment_ord);
+            let mut positions: Vec<u32> = Vec::new();
+
+            for term in terms {
+                let field = self.get_search_field(term.mode);
+
+                if self.is_phrase_search(term) {
+                    let phrase_terms = self.extract_phrase_terms(term);
+                    let phrase_positions = self.get_phrase_positions_limited(segment_reader, doc_address.doc_id, field, &phrase_terms, 50);
+                    positions.extend(phrase_positions);
+                } else {
+                    let query_terms = self.extract_query_terms(term);
+                    if !query_terms.is_empty() {
+                        let field_positions = self.get_matched_positions_limited(segment_reader, doc_address.doc_id, field, &query_terms, 50);
+                        positions.extend(field_positions);
+                    }
+                }
+            }
+
+            positions.sort_unstable();
+            positions.dedup();
+            Ok(positions)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    pub fn get_match_positions_multi(
+        &self,
+        id: u64,
+        part_index: u64,
+        page_id: u64,
+        terms: &[SearchTerm],
+    ) -> Result<Vec<Vec<u32>>> {
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let reader = self.index.reader_builder().reload_policy(ReloadPolicy::OnCommitWithDelay).try_into()?;
+        let searcher = reader.searcher();
+
+        let id_field = self.schema.get_field("text_id").unwrap();
+        let part_index_field = self.schema.get_field("part_index").unwrap();
+        let page_id_field = self.schema.get_field("page_id").unwrap();
+
+        let page_query = BooleanQuery::new(vec![
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(part_index_field, part_index), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(page_id_field, page_id), IndexRecordOption::Basic)) as Box<dyn Query>),
+        ]);
+
+        let top_docs = searcher.search(&page_query, &TopDocs::with_limit(1))?;
+
+        if let Some((_score, doc_address)) = top_docs.into_iter().next() {
+            let segment_reader = searcher.segment_reader(doc_address.segment_ord);
+            let mut all_positions = Vec::with_capacity(terms.len());
+
+            for term in terms {
+                let field = self.get_search_field(term.mode);
+
+                let positions = if self.is_phrase_search(term) {
+                    let phrase_terms = self.extract_phrase_terms(term);
+                    self.get_phrase_positions_limited(segment_reader, doc_address.doc_id, field, &phrase_terms, 100)
+                } else {
+                    let query_terms = self.extract_query_terms(term);
+                    if query_terms.is_empty() {
+                        Vec::new()
+                    } else {
+                        self.get_matched_positions_limited(segment_reader, doc_address.doc_id, field, &query_terms, 100)
+                    }
+                };
+                all_positions.push(positions);
+            }
+
+            Ok(all_positions)
+        } else {
+            Ok(vec![Vec::new(); terms.len()])
+        }
+    }
+
+    pub fn get_name_match_positions(
+        &self,
+        id: u64,
+        part_index: u64,
+        page_id: u64,
+        patterns: &[String],
+    ) -> Result<Vec<u32>> {
+        let reader = self.index.reader_builder().reload_policy(ReloadPolicy::OnCommitWithDelay).try_into()?;
+        let searcher = reader.searcher();
+
+        let id_field = self.schema.get_field("text_id").unwrap();
+        let part_index_field = self.schema.get_field("part_index").unwrap();
+        let page_id_field = self.schema.get_field("page_id").unwrap();
+        let surface_field = self.schema.get_field("surface_text").unwrap();
+
+        let doc_query = BooleanQuery::new(vec![
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(part_index_field, part_index), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(page_id_field, page_id), IndexRecordOption::Basic)) as Box<dyn Query>),
+        ]);
+
+        let top_docs = searcher.search(&doc_query, &TopDocs::with_limit(1))?;
+
+        if let Some((_, doc_address)) = top_docs.first() {
+            let segment_reader = searcher.segment_reader(doc_address.segment_ord);
+            Ok(self.get_name_pattern_positions(segment_reader, doc_address.doc_id, surface_field, patterns, 50))
         } else {
             Ok(Vec::new())
         }

@@ -1,3 +1,5 @@
+//! Error types for Kashshaf
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -16,6 +18,12 @@ pub enum KashshafError {
 
     #[error("Invalid query: {0}")]
     InvalidQuery(String),
+
+    #[error("Download error: {0}")]
+    Download(String),
+
+    #[error("Corpus not ready: {0}")]
+    CorpusNotReady(String),
 
     #[error("{0}")]
     Other(String),
