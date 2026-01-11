@@ -115,9 +115,8 @@ Tokens    Index
 
 | File | Size | Purpose |
 |------|------|---------|
-| corpus.db | ~5.2 GB | Token database (morphological data) |
+| corpus.db | ~5.2 GB | Token database (morphological data) and metadata content|
 | tantivy_index/ | ~10.9 GB | Full-text search index and text content |
-| metadata.db | ~50 MB | Books, authors, genres |
 
 
 ## License
