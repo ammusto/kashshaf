@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useMemo, ReactNode, useCallback } from 'react';
-import type { BookMetadata, Author, Genre } from '../types';
+import type { BookMetadata } from '../types';
 import type { SearchAPI } from '../api';
 
 interface BooksContextValue {

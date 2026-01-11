@@ -9,11 +9,11 @@ interface BooksModalProps {
 }
 
 export function BooksModal({ onClose, onSelectBook }: BooksModalProps) {
-  const { authorsMap, genresMap } = useBooks();
+  const { authorsMap, genres, genresMap } = useBooks();
   const [books, setBooks] = useState<BookMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedGenre, setSelectedGenre] = useState('');
+  const [selectedGenre, setSelectedGenre] = useState<number | null>(null);
 
   useEffect(() => {
     loadBooks();
@@ -23,7 +23,7 @@ export function BooksModal({ onClose, onSelectBook }: BooksModalProps) {
     setLoading(true);
     try {
       const result = await listBooks(
-        selectedGenre || undefined,
+        selectedGenre ?? undefined,
         undefined,
         undefined,
         100,
@@ -81,20 +81,15 @@ export function BooksModal({ onClose, onSelectBook }: BooksModalProps) {
                      focus:outline-none focus:border-app-accent focus:ring-2 focus:ring-app-accent-light bg-white"
           />
           <select
-            value={selectedGenre}
-            onChange={(e) => setSelectedGenre(e.target.value)}
+            value={selectedGenre ?? ''}
+            onChange={(e) => setSelectedGenre(e.target.value ? Number(e.target.value) : null)}
             className="h-12 px-5 rounded-lg border border-app-border-medium
                      focus:outline-none focus:border-app-accent bg-white cursor-pointer"
           >
             <option value="">All genres</option>
-            <option value="fiqh">Fiqh</option>
-            <option value="tasawwuf">Tasawwuf</option>
-            <option value="kalam">Kalam</option>
-            <option value="falsafa">Falsafa</option>
-            <option value="hadith">Hadith</option>
-            <option value="tafsir">Tafsir</option>
-            <option value="tarikh">Tarikh</option>
-            <option value="adab">Adab</option>
+            {genres.map(([id, name]) => (
+              <option key={id} value={id}>{name}</option>
+            ))}
           </select>
         </div>
 

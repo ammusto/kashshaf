@@ -52,10 +52,12 @@ export interface CombinedSearchQuery {
   orInputs: SearchInput[];
 }
 
+export type SearchInputMode = 'surface' | 'lemma' | 'root';
+
 export interface SearchInput {
   id: number;
   query: string;
-  mode: SearchMode;
+  mode: SearchInputMode;
   cliticToggle: boolean;
 }
 
