@@ -8,7 +8,7 @@ use tantivy::collector::{Count, TopDocs};
 use tantivy::postings::Postings;
 use tantivy::query::{BooleanQuery, Occur, PhraseQuery, Query, QueryParser, TermQuery, RegexQuery};
 use tantivy::schema::*;
-use tantivy::{DocSet, Index, ReloadPolicy, SegmentReader, Term};
+use tantivy::{DocAddress, DocSet, Index, ReloadPolicy, SegmentReader, Term};
 
 fn normalize_arabic(text: &str) -> String {
     text.chars()
@@ -440,10 +440,13 @@ impl SearchEngine {
             text_query
         };
 
-        let (total_hits, top_docs) = searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset)))?;
+        // Sort by death_ah at the index level to ensure proper sorting
+        // across ALL matching documents, not just the top N by relevance score
+        let (total_hits, top_docs) = searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset).order_by_u64_field("death_ah", tantivy::Order::Asc)))?;
 
+        // Extract all results (already sorted by death_ah from the collector)
         let mut results = Vec::new();
-        for (score, doc_address) in top_docs.into_iter() {
+        for (_sort_value, doc_address) in top_docs.into_iter() {
             let matched_token_indices = if !query_terms.is_empty() {
                 if query_terms.len() > 1 {
                     let phrase_terms: Vec<String> = normalized_query.split_whitespace().map(|s| s.to_string()).collect();
@@ -454,16 +457,11 @@ impl SearchEngine {
             } else {
                 Vec::new()
             };
-            results.push(self.extract_result(&searcher, doc_address, score, matched_token_indices)?);
+            results.push(self.extract_result(&searcher, doc_address, 0.0, matched_token_indices)?);
         }
 
-        results.sort_by(|a, b| match (a.death_ah, b.death_ah) {
-            (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
-
+        // Results are already sorted by death_ah from TopDocsByField collector
+        // Apply offset and limit
         let results: Vec<SearchResult> = results.into_iter().skip(offset).take(limit).collect();
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -532,53 +530,50 @@ impl SearchEngine {
             text_query
         };
 
-        let (total_hits, top_docs) = searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset)))?;
+        // Sort by death_ah at Tantivy level - this is the ONLY correct way to get global ordering
+        let (total_hits, top_docs) = searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset).order_by_u64_field("death_ah", tantivy::Order::Asc)))?;
 
-        // Collect all search terms for position matching
-        let all_terms: Vec<&SearchTerm> = and_terms.iter().chain(or_terms.iter()).collect();
+        // Collect docs to process, preserving the death_ah order from Tantivy
+        let docs_to_process: Vec<(u64, DocAddress)> = top_docs.into_iter().skip(offset).take(limit).collect();
 
+        // Collect phrase search terms separately for special handling
+        let phrase_terms: Vec<&SearchTerm> = and_terms.iter().chain(or_terms.iter())
+            .filter(|t| self.is_phrase_search(t))
+            .collect();
+        let non_phrase_terms: Vec<&SearchTerm> = and_terms.iter().chain(or_terms.iter())
+            .filter(|t| !self.is_phrase_search(t))
+            .collect();
+
+        // Process docs in order (already sorted by death_ah from Tantivy)
         let mut results = Vec::new();
-        for (score, doc_address) in top_docs.into_iter().skip(offset).take(limit) {
-            // Compute matched token indices for highlighting
-            let mut matched_token_indices: Vec<u32> = Vec::new();
+        for (_sort_value, doc_address) in docs_to_process {
             let segment_reader = searcher.segment_reader(doc_address.segment_ord);
 
-            for term in &all_terms {
+            // Get positions for non-phrase terms
+            let mut matched_token_indices: Vec<u32> = Vec::new();
+            for term in &non_phrase_terms {
                 let field = self.get_search_field(term.mode);
-                let normalized_query = match term.mode {
-                    SearchMode::Root => normalize_root_query(&term.query),
-                    SearchMode::Surface => normalize_arabic(&term.query),
-                    SearchMode::Lemma => term.query.clone(),
-                };
+                let query_terms = self.extract_query_terms(term);
+                let positions = self.get_matched_positions_limited(segment_reader, doc_address.doc_id, field, &query_terms, 20);
+                matched_token_indices.extend(positions);
+            }
 
-                let words: Vec<&str> = normalized_query.split_whitespace().collect();
-                if words.len() > 1 {
-                    // Phrase query - get consecutive positions
-                    let phrase_terms: Vec<String> = words.iter().map(|s| s.to_string()).collect();
-                    let positions = self.get_phrase_positions_limited(segment_reader, doc_address.doc_id, field, &phrase_terms, 20);
-                    matched_token_indices.extend(positions);
-                } else if !words.is_empty() {
-                    // Single term
-                    let mut query_terms = HashSet::new();
-                    query_terms.insert(words[0].to_string());
-                    let positions = self.get_matched_positions_limited(segment_reader, doc_address.doc_id, field, &query_terms, 20);
-                    matched_token_indices.extend(positions);
-                }
+            // Get positions for phrase terms
+            for term in &phrase_terms {
+                let field = self.get_search_field(term.mode);
+                let phrase_words = self.extract_phrase_terms(term);
+                let phrase_positions = self.get_phrase_positions_limited(segment_reader, doc_address.doc_id, field, &phrase_words, 20);
+                matched_token_indices.extend(phrase_positions);
             }
 
             matched_token_indices.sort_unstable();
             matched_token_indices.dedup();
             matched_token_indices.truncate(50);
 
-            results.push(self.extract_result(&searcher, doc_address, score, matched_token_indices)?);
+            results.push(self.extract_result(&searcher, doc_address, 0.0, matched_token_indices)?);
         }
 
-        results.sort_by(|a, b| match (a.death_ah, b.death_ah) {
-            (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        // Results already sorted by death_ah from Tantivy - no post-sort needed
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let query_display = if !and_terms.is_empty() && !or_terms.is_empty() {
@@ -600,7 +595,7 @@ impl SearchEngine {
 
         // Overfetch significantly to account for proximity filtering.
         // Many candidates won't pass the distance check, so we need a high cap.
-        let overfetch_limit = ((limit + offset) * 20).max(5000);
+        let overfetch_limit = ((limit + offset) * 50).max(5000);
         let term1_query = self.build_term_query(term1)?;
         let term2_query = self.build_term_query(term2)?;
         let text_query = BooleanQuery::new(vec![(Occur::Must, term1_query), (Occur::Must, term2_query)]);
@@ -619,7 +614,8 @@ impl SearchEngine {
             Box::new(text_query)
         };
 
-        let top_docs = searcher.search(&*final_query, &TopDocs::with_limit(overfetch_limit))?;
+        // Sort by death_ah at Tantivy level - candidates come in chronological order
+        let top_docs = searcher.search(&*final_query, &TopDocs::with_limit(overfetch_limit).order_by_u64_field("death_ah", tantivy::Order::Asc))?;
 
         let field1 = self.get_search_field(term1.mode);
         let field2 = self.get_search_field(term2.mode);
@@ -630,7 +626,7 @@ impl SearchEngine {
         let mut skipped = 0;
         let mut total_matches = 0;
 
-        for (score, doc_address) in top_docs {
+        for (_sort_value, doc_address) in top_docs {
             let segment_reader = searcher.segment_reader(doc_address.segment_ord);
             let pos1 = self.get_matched_positions_limited(segment_reader, doc_address.doc_id, field1, &query_terms1, 100);
             let pos2 = self.get_matched_positions_limited(segment_reader, doc_address.doc_id, field2, &query_terms2, 100);
@@ -656,15 +652,10 @@ impl SearchEngine {
             matched_positions.dedup();
             matched_positions.truncate(50);
 
-            results.push(self.extract_result(&searcher, doc_address, score, matched_positions)?);
+            results.push(self.extract_result(&searcher, doc_address, 0.0, matched_positions)?);
         }
 
-        results.sort_by(|a, b| match (a.death_ah, b.death_ah) {
-            (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        // Results already in death_ah order from Tantivy - no post-sort needed
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         Ok(SearchResults { query: format!("{} ~{} {}", term1.query, max_distance, term2.query), mode: term1.mode, total_hits: total_matches, results, elapsed_ms })
@@ -732,26 +723,20 @@ impl SearchEngine {
             text_query
         };
 
-        let (total_hits, top_docs) = searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset)))?;
+        // Sort by death_ah at Tantivy level - the ONLY correct way to get global ordering
+        let (total_hits, top_docs) = searcher.search(&*final_query, &(Count, TopDocs::with_limit(limit + offset).order_by_u64_field("death_ah", tantivy::Order::Asc)))?;
 
         let mut results = Vec::new();
-        for (score, doc_address) in top_docs.into_iter() {
+        for (_sort_value, doc_address) in top_docs.into_iter().skip(offset).take(limit) {
             let matched_token_indices = if let Some(patterns) = patterns_by_form.first() {
                 self.get_name_pattern_positions(searcher.segment_reader(doc_address.segment_ord), doc_address.doc_id, surface_field, patterns, 20)
             } else {
                 Vec::new()
             };
-            results.push(self.extract_result(&searcher, doc_address, score, matched_token_indices)?);
+            results.push(self.extract_result(&searcher, doc_address, 0.0, matched_token_indices)?);
         }
 
-        results.sort_by(|a, b| match (a.death_ah, b.death_ah) {
-            (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
-
-        let results: Vec<SearchResult> = results.into_iter().skip(offset).take(limit).collect();
+        // Results already sorted by death_ah from Tantivy - no post-sort needed
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
         let query_display = patterns_by_form.iter().filter(|p| !p.is_empty()).map(|p| p.first().map(|s| s.as_str()).unwrap_or("")).collect::<Vec<_>>().join(" AND ");
@@ -821,12 +806,13 @@ impl SearchEngine {
         };
 
         let overfetch = if query_info.terms.len() > 1 { 10 } else { 1 };
-        let (total_hits, top_docs) = searcher.search(&*final_query, &(Count, TopDocs::with_limit((limit + offset) * overfetch)))?;
+        // Sort by death_ah at Tantivy level
+        let (total_hits, top_docs) = searcher.search(&*final_query, &(Count, TopDocs::with_limit((limit + offset) * overfetch).order_by_u64_field("death_ah", tantivy::Order::Asc)))?;
 
         let mut results = Vec::new();
         let mut verified_count = 0;
 
-        for (score, doc_address) in top_docs.into_iter() {
+        for (_sort_value, doc_address) in top_docs.into_iter() {
             if query_info.terms.len() > 1 {
                 let segment_reader = searcher.segment_reader(doc_address.segment_ord);
                 let positions = self.get_wildcard_positions(segment_reader, doc_address.doc_id, surface_field, &query_info, 20);
@@ -840,15 +826,10 @@ impl SearchEngine {
             let segment_reader = searcher.segment_reader(doc_address.segment_ord);
             let matched_token_indices = self.get_wildcard_positions(segment_reader, doc_address.doc_id, surface_field, &query_info, 20);
 
-            results.push(self.extract_result(&searcher, doc_address, score, matched_token_indices)?);
+            results.push(self.extract_result(&searcher, doc_address, 0.0, matched_token_indices)?);
         }
 
-        results.sort_by(|a, b| match (a.death_ah, b.death_ah) {
-            (Some(a_year), Some(b_year)) => a_year.cmp(&b_year),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        // Results already sorted by death_ah from Tantivy - no post-sort needed
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         Ok(SearchResults { query: query.to_string(), mode: SearchMode::Surface, total_hits: if query_info.terms.len() > 1 { verified_count } else { total_hits }, results, elapsed_ms })
