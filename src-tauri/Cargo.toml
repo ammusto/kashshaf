@@ -1,6 +1,6 @@
 [package]
 name = "kashshaf"
-version = "0.2.0"
+version = "0.2.1"
 description = "Medieval Arabic Text Research Environment"
 authors = ["Kashshaf"]
 edition = "2021"
