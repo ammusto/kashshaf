@@ -495,3 +495,53 @@ interface TauriAnnouncement {
 export async function fetchAnnouncements(): Promise<TauriAnnouncementsManifest> {
   return invoke('fetch_announcements');
 }
+
+// ============ Collections API ============
+
+import type { Collection } from '../types/collections';
+
+/**
+ * Create a new collection
+ */
+export async function createCollection(
+  name: string,
+  bookIds: number[],
+  description?: string
+): Promise<Collection> {
+  return invoke('create_collection', { name, bookIds, description });
+}
+
+/**
+ * Get all collections
+ */
+export async function getCollections(): Promise<Collection[]> {
+  return invoke('get_collections');
+}
+
+/**
+ * Update collection's book IDs
+ */
+export async function updateCollectionBooks(id: number, bookIds: number[]): Promise<void> {
+  return invoke('update_collection_books', { id, bookIds });
+}
+
+/**
+ * Update collection's description
+ */
+export async function updateCollectionDescription(id: number, description: string | null): Promise<void> {
+  return invoke('update_collection_description', { id, description });
+}
+
+/**
+ * Rename a collection
+ */
+export async function renameCollection(id: number, name: string): Promise<void> {
+  return invoke('rename_collection', { id, name });
+}
+
+/**
+ * Delete a collection
+ */
+export async function deleteCollection(id: number): Promise<void> {
+  return invoke('delete_collection', { id });
+}

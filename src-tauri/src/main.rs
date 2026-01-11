@@ -92,6 +92,13 @@ fn main() {
             commands::delete_local_data,
             // Announcements command
             commands::fetch_announcements,
+            // Collections commands
+            commands::create_collection,
+            commands::get_collections,
+            commands::update_collection_books,
+            commands::update_collection_description,
+            commands::rename_collection,
+            commands::delete_collection,
         ])
         .on_menu_event(|app, event| {
             match event.id().as_ref() {

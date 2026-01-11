@@ -292,6 +292,26 @@ function FeaturesTab() {
         </p>
       </Section>
 
+      <Section title="Collections">
+        <p className="text-app-text-secondary leading-relaxed mb-2">
+          Collections let you save named groups of texts (mini-corpora) that persist across sessions:
+        </p>
+        <ul className="list-disc list-inside text-app-text-secondary space-y-2">
+          <li><strong>Create a collection:</strong> Select texts, then click the save icon in the sidebar or "Save Collection" button in the text selection modal</li>
+          <li><strong>Name and description:</strong> Give your collection a name (required) and optional description (up to 150 characters)</li>
+          <li><strong>Manage collections:</strong> Click <strong>Collections</strong> in the toolbar to view, edit, or delete your saved collections</li>
+          <li><strong>Edit texts:</strong> Click "Edit Texts" on any collection to add or remove texts from it</li>
+          <li><strong>Filter by collection:</strong> In the text selection modal, use the Collection filter to quickly select texts from one or more saved collections</li>
+        </ul>
+        <div className="mt-3 p-3 bg-app-surface-variant rounded-lg">
+          <p className="text-sm font-medium text-app-text-primary mb-1">Tip:</p>
+          <p className="text-sm text-app-text-secondary">
+            Use collections to organize research projects - for example, create collections for "Sufi texts",
+            "4th century authors", or "Hadith commentaries" to quickly switch between different research contexts.
+          </p>
+        </div>
+      </Section>
+
       <Section title="Exporting Search Results">
         <p className="text-app-text-secondary leading-relaxed mb-2">
           Export your search results for external analysis:

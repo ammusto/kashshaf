@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement } from './types';
 import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from './types/search';
+import type { Collection } from './types/collections';
 import { MAX_RESULTS } from './constants/search';
 import { useSearchTabsContext } from './contexts/SearchTabsContext';
 import { useOperatingMode, saveOnlineModePreference } from './contexts/OperatingModeContext';
@@ -10,7 +11,16 @@ import { useReaderNavigation } from './hooks/useReaderNavigation';
 import { Sidebar } from './components/Sidebar';
 import { ReaderPanel, ResultsPanel, HelpPanel } from './components/panels';
 import { DraggableSplitter, UpdateBanner } from './components/ui';
-import { TextSelectionModal, MetadataBrowser, SavedSearchesModal, SearchHistoryModal, AnnouncementsModal } from './components/modals';
+import {
+  TextSelectionModal,
+  MetadataBrowser,
+  SavedSearchesModal,
+  SearchHistoryModal,
+  AnnouncementsModal,
+  CollectionsModal,
+  SaveCollectionModal,
+  type TextSelectionMode,
+} from './components/modals';
 import { Toolbar } from './components/Toolbar';
 import { SearchTabs, type TabData } from './components/SearchTabs';
 import type { NameFormData } from './utils/namePatterns';
@@ -18,6 +28,11 @@ import { createEmptyNameForm } from './utils/namePatterns';
 import { isWebTarget } from './utils/platform';
 import { getEligibleAnnouncements } from './utils/announcements';
 import { markMultipleAnnouncementsDismissed, setSkipAnnouncementPopups } from './utils/storage';
+import {
+  getCollections,
+  createCollection,
+  updateCollectionBooks,
+} from './utils/collections';
 
 // Lazy load DownloadModal only for desktop
 const DownloadModal = lazy(() => import('./components/modals/DownloadModal').then(m => ({ default: m.DownloadModal })));
@@ -68,6 +83,13 @@ function App() {
   const [savedSearchesModalOpen, setSavedSearchesModalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [stats, setStats] = useState<{ indexed_pages: number; total_books: number } | null>(null);
+
+  // Collections state
+  const [collectionsModalOpen, setCollectionsModalOpen] = useState(false);
+  const [saveCollectionModalOpen, setSaveCollectionModalOpen] = useState(false);
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [textSelectionMode, setTextSelectionMode] = useState<TextSelectionMode>('select');
+  const [editingCollection, setEditingCollection] = useState<Collection | undefined>(undefined);
 
   // Reader navigation hook
   const { handleNavigatePage, loadResultIntoTab } = useReaderNavigation({ api });
@@ -364,6 +386,64 @@ function App() {
     }
   }, [handleSearch, handleProximitySearch, handleNameSearch]);
 
+  const loadCollections = useCallback(async () => {
+    try {
+      const loaded = await getCollections();
+      setCollections(loaded);
+    } catch (err) {
+      console.error('Failed to load collections:', err);
+    }
+  }, []);
+
+  // Load collections on mount
+  useEffect(() => {
+    loadCollections();
+  }, [loadCollections]);
+
+  // Handle opening save collection modal
+  const handleOpenSaveCollectionModal = useCallback(() => {
+    setSaveCollectionModalOpen(true);
+  }, []);
+
+  // Handle saving a new collection
+  const handleSaveCollection = useCallback(async (name: string, description: string | null) => {
+    await createCollection(name, Array.from(selectedBookIds), description ?? undefined);
+    await loadCollections();
+  }, [selectedBookIds, loadCollections]);
+
+  // Handle opening collections modal
+  const handleOpenCollectionsModal = useCallback(() => {
+    setCollectionsModalOpen(true);
+  }, []);
+
+  // Handle editing a collection (opens TextSelectionModal in edit mode)
+  const handleEditCollection = useCallback((collection: Collection) => {
+    setEditingCollection(collection);
+    setSelectedBookIds(new Set(collection.book_ids));
+    setTextSelectionMode('edit-collection');
+    setTextSelectionModalOpen(true);
+  }, []);
+
+  // Handle creating a new collection from CollectionsModal
+  const handleCreateCollectionFromModal = useCallback(() => {
+    setTextSelectionMode('create-collection');
+    setSelectedBookIds(new Set());
+    setTextSelectionModalOpen(true);
+  }, []);
+
+  // Handle updating collection books
+  const handleUpdateCollectionBooks = useCallback(async (id: number, bookIds: number[]) => {
+    await updateCollectionBooks(id, bookIds);
+    await loadCollections();
+  }, [loadCollections]);
+
+  // Handle closing TextSelectionModal - reset mode
+  const handleCloseTextSelectionModal = useCallback(() => {
+    setTextSelectionModalOpen(false);
+    setTextSelectionMode('select');
+    setEditingCollection(undefined);
+  }, []);
+
   // Show loading screen while checking mode or corpus status
   if (modeLoading || (mode !== 'online' && checkingCorpus)) {
     return (
@@ -416,6 +496,7 @@ function App() {
           onBrowseTexts={() => setTextBrowserOpen(true)}
           onSearchHistory={() => setSearchHistoryModalOpen(true)}
           onSavedSearches={() => setSavedSearchesModalOpen(true)}
+          onCollections={handleOpenCollectionsModal}
           onHelp={() => setHelpOpen(!helpOpen)}
           helpActive={helpOpen}
           isOnlineMode={mode === 'online'}
@@ -430,7 +511,11 @@ function App() {
           onSearch={handleSearch}
           onProximitySearch={handleProximitySearch}
           onNameSearch={handleNameSearch}
-          onOpenTextSelection={() => setTextSelectionModalOpen(true)}
+          onOpenTextSelection={() => {
+            setTextSelectionMode('select');
+            setTextSelectionModalOpen(true);
+          }}
+          onSaveCollection={selectedBookIds.size > 0 ? handleOpenSaveCollectionModal : undefined}
           loading={activeTab?.loading ?? false}
           indexedPages={stats?.indexed_pages ?? 0}
           selectedTextsCount={selectedBookIds.size}
@@ -488,9 +573,14 @@ function App() {
 
         {textSelectionModalOpen && (
           <TextSelectionModal
-            onClose={() => setTextSelectionModalOpen(false)}
+            onClose={handleCloseTextSelectionModal}
             selectedBookIds={selectedBookIds}
             onSelectionChange={setSelectedBookIds}
+            mode={textSelectionMode}
+            editingCollection={editingCollection}
+            collections={collections}
+            onSaveCollection={handleOpenSaveCollectionModal}
+            onUpdateCollection={handleUpdateCollectionBooks}
           />
         )}
 
@@ -516,6 +606,22 @@ function App() {
             onDismiss={handleAnnouncementsDismiss}
           />
         )}
+
+        {/* Collections Modal */}
+        <CollectionsModal
+          isOpen={collectionsModalOpen}
+          onClose={() => setCollectionsModalOpen(false)}
+          onEditCollection={handleEditCollection}
+          onCreateCollection={handleCreateCollectionFromModal}
+        />
+
+        {/* Save Collection Modal */}
+        <SaveCollectionModal
+          isOpen={saveCollectionModalOpen}
+          onClose={() => setSaveCollectionModalOpen(false)}
+          onSave={handleSaveCollection}
+          existingNames={collections.map(c => c.name)}
+        />
       </div>
     </BooksProvider>
   );

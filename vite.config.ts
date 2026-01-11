@@ -1,10 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import svgr from 'vite-plugin-svgr'
 
 const isWebTarget = process.env.VITE_TARGET === 'web'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), svgr()],
   clearScreen: false,
   server: {
     port: 5173,

@@ -1,12 +1,21 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { BookMetadata } from '../../types';
+import type { Collection } from '../../types/collections';
 import { useBooks } from '../../contexts/BooksContext';
+
+export type TextSelectionMode = 'select' | 'create-collection' | 'edit-collection';
 
 interface TextSelectionModalProps {
   onClose: () => void;
   selectedBookIds: Set<number>;
   onSelectionChange: (selectedIds: Set<number>) => void;
+  // New props for collection modes
+  mode?: TextSelectionMode;
+  editingCollection?: Collection;
+  collections?: Collection[];
+  onSaveCollection?: () => void;
+  onUpdateCollection?: (id: number, bookIds: number[]) => Promise<void>;
 }
 
 // Normalize Arabic text for search matching
@@ -36,6 +45,11 @@ export function TextSelectionModal({
   onClose,
   selectedBookIds,
   onSelectionChange,
+  mode = 'select',
+  editingCollection,
+  collections = [],
+  onSaveCollection,
+  onUpdateCollection,
 }: TextSelectionModalProps) {
   // Get cached books from context - no loading needed!
   const { books: allBooks, genres, authorsMap, genresMap, loading } = useBooks();
@@ -52,6 +66,26 @@ export function TextSelectionModal({
   const [genreDropdownOpen, setGenreDropdownOpen] = useState(false);
   const genreDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Collection filter dropdown state
+  const [collectionDropdownOpen, setCollectionDropdownOpen] = useState(false);
+  const [selectedCollectionIds, setSelectedCollectionIds] = useState<Set<number>>(new Set());
+  const collectionDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Track if changes were made in edit mode
+  const [initialBookIds] = useState(() =>
+    editingCollection ? new Set(editingCollection.book_ids) : new Set<number>()
+  );
+  const hasChanges = useMemo(() => {
+    if (mode !== 'edit-collection' || !editingCollection) return false;
+    if (selectedBookIds.size !== initialBookIds.size) return true;
+    for (const id of selectedBookIds) {
+      if (!initialBookIds.has(id)) return true;
+    }
+    return false;
+  }, [mode, editingCollection, selectedBookIds, initialBookIds]);
+
+  const [updating, setUpdating] = useState(false);
+
   // Selected Texts tab search
   const [selectedSearch, setSelectedSearch] = useState('');
 
@@ -59,11 +93,14 @@ export function TextSelectionModal({
   const allTextsParentRef = useRef<HTMLDivElement>(null);
   const selectedTextsParentRef = useRef<HTMLDivElement>(null);
 
-  // Close genre dropdown when clicking outside
+  // Close dropdowns when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (genreDropdownRef.current && !genreDropdownRef.current.contains(event.target as Node)) {
         setGenreDropdownOpen(false);
+      }
+      if (collectionDropdownRef.current && !collectionDropdownRef.current.contains(event.target as Node)) {
+        setCollectionDropdownOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -83,16 +120,42 @@ export function TextSelectionModal({
     });
   }, []);
 
+  // Toggle collection in multi-select
+  const toggleCollection = useCallback((collectionId: number) => {
+    setSelectedCollectionIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(collectionId)) {
+        newSet.delete(collectionId);
+      } else {
+        newSet.add(collectionId);
+      }
+      return newSet;
+    });
+  }, []);
+
   // Clear all filters
   const clearFilters = useCallback(() => {
     setDeathAhMin('');
     setDeathAhMax('');
     setSelectedGenreIds(new Set());
+    setSelectedCollectionIds(new Set());
     setSearchQuery('');
   }, []);
 
   // Check if any filters are active
-  const hasActiveFilters = deathAhMin || deathAhMax || selectedGenreIds.size > 0 || searchQuery;
+  const hasActiveFilters = deathAhMin || deathAhMax || selectedGenreIds.size > 0 || selectedCollectionIds.size > 0 || searchQuery;
+
+  // Get book IDs from selected collections (union/OR logic)
+  const collectionBookIds = useMemo(() => {
+    if (selectedCollectionIds.size === 0) return null;
+    const ids = new Set<number>();
+    for (const collection of collections) {
+      if (selectedCollectionIds.has(collection.id)) {
+        collection.book_ids.forEach(id => ids.add(id));
+      }
+    }
+    return ids;
+  }, [collections, selectedCollectionIds]);
 
   // Filter books - ALL client-side, instant!
   const filteredBooks = useMemo(() => {
@@ -113,6 +176,11 @@ export function TextSelectionModal({
       result = result.filter(book => book.genre_id !== undefined && selectedGenreIds.has(book.genre_id));
     }
 
+    // Collection filter (OR logic between collections, AND with other filters)
+    if (collectionBookIds) {
+      result = result.filter(book => collectionBookIds.has(book.id));
+    }
+
     // Search query (title/author)
     if (searchQuery.trim()) {
       const normalized = normalizeArabicForSearch(searchQuery);
@@ -125,7 +193,7 @@ export function TextSelectionModal({
     }
 
     return result;
-  }, [allBooks, deathAhMin, deathAhMax, selectedGenreIds, searchQuery, authorsMap]);
+  }, [allBooks, deathAhMin, deathAhMax, selectedGenreIds, collectionBookIds, searchQuery, authorsMap]);
 
   // Toggle book selection
   const toggleBook = useCallback((bookId: number) => {
@@ -149,6 +217,32 @@ export function TextSelectionModal({
   const clearAllSelected = useCallback(() => {
     onSelectionChange(new Set());
   }, [onSelectionChange]);
+
+  // Handle update collection in edit mode
+  const handleUpdateCollection = useCallback(async () => {
+    if (!editingCollection || !onUpdateCollection) return;
+    try {
+      setUpdating(true);
+      await onUpdateCollection(editingCollection.id, Array.from(selectedBookIds));
+      onClose();
+    } catch (err) {
+      console.error('Failed to update collection:', err);
+    } finally {
+      setUpdating(false);
+    }
+  }, [editingCollection, onUpdateCollection, selectedBookIds, onClose]);
+
+  // Get header title based on mode
+  const headerTitle = useMemo(() => {
+    switch (mode) {
+      case 'create-collection':
+        return 'Create Collection';
+      case 'edit-collection':
+        return editingCollection ? `Edit: ${editingCollection.name}` : 'Edit Collection';
+      default:
+        return 'Select Texts';
+    }
+  }, [mode, editingCollection]);
 
   // Filter selected books by search term
   const selectedBooks = useMemo(() => {
@@ -192,7 +286,7 @@ export function TextSelectionModal({
       >
         {/* Header */}
         <div className="px-8 py-5 border-b border-app-border-light flex items-center gap-5">
-          <h2 className="text-xl font-semibold text-app-text-primary">Select Texts</h2>
+          <h2 className="text-xl font-semibold text-app-text-primary">{headerTitle}</h2>
           <div className="flex-1" />
           <button
             onClick={onClose}
@@ -225,6 +319,23 @@ export function TextSelectionModal({
           >
             Selected Texts ({selectedBookIds.size})
           </button>
+
+          {/* Save Collection button - only visible when texts selected and in select/create mode */}
+          {selectedBookIds.size > 0 && (mode === 'select' || mode === 'create-collection') && onSaveCollection && (
+            <>
+              <div className="flex-1" />
+              <button
+                onClick={onSaveCollection}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 transition-colors flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                </svg>
+                Save Collection
+              </button>
+            </>
+          )}
         </div>
 
         {/* Tab Content */}
@@ -297,6 +408,52 @@ export function TextSelectionModal({
                   </div>
                 )}
               </div>
+
+              {/* Collection Multi-Select Dropdown */}
+              {collections.length > 0 && (
+                <div className="flex items-center gap-1.5 relative" ref={collectionDropdownRef}>
+                  <label className="text-xs text-app-text-secondary font-medium whitespace-nowrap">
+                    Collection:
+                  </label>
+                  <button
+                    onClick={() => setCollectionDropdownOpen(!collectionDropdownOpen)}
+                    className="h-8 px-2 text-xs rounded border border-app-border-medium
+                             bg-white cursor-pointer flex items-center gap-1 min-w-[100px]"
+                  >
+                    <span className="truncate">
+                      {selectedCollectionIds.size === 0
+                        ? 'All'
+                        : selectedCollectionIds.size === 1
+                          ? collections.find(c => c.id === Array.from(selectedCollectionIds)[0])?.name ?? 'Unknown'
+                          : `${selectedCollectionIds.size} selected`}
+                    </span>
+                    <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {collectionDropdownOpen && (
+                    <div className="absolute top-full left-0 mt-1 bg-white border border-app-border-medium rounded shadow-lg z-20 min-w-[200px] max-h-[300px] overflow-auto">
+                      {collections.map((collection) => (
+                        <label
+                          key={collection.id}
+                          className="flex items-center gap-2 px-3 py-2 hover:bg-app-surface-variant cursor-pointer"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedCollectionIds.has(collection.id)}
+                            onChange={() => toggleCollection(collection.id)}
+                            className="w-3.5 h-3.5 rounded accent-app-accent cursor-pointer"
+                          />
+                          <span className="text-xs text-app-text-primary flex-1 truncate">
+                            {collection.name} ({collection.book_ids.length})
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Search (Title/Author) */}
               <div className="flex-1 flex items-center gap-1.5">
@@ -475,6 +632,39 @@ export function TextSelectionModal({
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Footer for collection modes */}
+        {(mode === 'create-collection' || mode === 'edit-collection') && (
+          <div className="px-8 py-4 border-t border-app-border-light flex items-center justify-end gap-3 bg-app-surface-variant">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-app-text-secondary hover:bg-white rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            {mode === 'create-collection' && onSaveCollection && (
+              <button
+                onClick={onSaveCollection}
+                disabled={selectedBookIds.size === 0}
+                className="px-4 py-2 text-sm font-medium bg-app-accent text-white rounded-lg hover:bg-app-accent-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Save Collection
+              </button>
+            )}
+            {mode === 'edit-collection' && (
+              <button
+                onClick={handleUpdateCollection}
+                disabled={!hasChanges || updating}
+                className="px-4 py-2 text-sm font-medium bg-app-accent text-white rounded-lg hover:bg-app-accent-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {updating && (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                )}
+                Update Collection
+              </button>
+            )}
           </div>
         )}
       </div>

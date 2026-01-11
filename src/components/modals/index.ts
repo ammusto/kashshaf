@@ -1,6 +1,9 @@
 export { TextSelectionModal } from './TextSelectionModal';
+export type { TextSelectionMode } from './TextSelectionModal';
 export { SearchHistoryModal } from './SearchHistoryModal';
 export { SavedSearchesModal } from './SavedSearchesModal';
+export { CollectionsModal } from './CollectionsModal';
+export { SaveCollectionModal } from './SaveCollectionModal';
 export { BooksModal } from './BooksModal';
 export { MetadataBrowser } from './MetadataBrowser';
 export { DownloadModal } from './DownloadModal';

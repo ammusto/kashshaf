@@ -1411,6 +1411,210 @@ pub struct AnnouncementAction {
 const ANNOUNCEMENTS_URL: &str = "https://cdn.kashshaf.com/announcements.json";
 const SUPPORTED_ANNOUNCEMENTS_SCHEMA: i64 = 1;
 
+// ============ Collections Commands ============
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Collection {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub book_ids: Vec<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Ensure collections table exists in settings DB
+fn ensure_collections_table(conn: &rusqlite::Connection) -> Result<(), KashshafError> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS collections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            book_ids TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )
+    .map_err(|e| KashshafError::Database(e.to_string()))?;
+    Ok(())
+}
+
+/// Create a new collection
+#[tauri::command]
+pub fn create_collection(
+    name: String,
+    book_ids: Vec<i64>,
+    description: Option<String>,
+) -> Result<Collection, KashshafError> {
+    let conn = get_settings_connection()?;
+    ensure_collections_table(&conn)?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let book_ids_json = serde_json::to_string(&book_ids)
+        .map_err(|e| KashshafError::Other(format!("Failed to serialize book_ids: {}", e)))?;
+
+    // Truncate description to 150 chars
+    let desc = description.map(|d| d.chars().take(150).collect::<String>());
+
+    conn.execute(
+        "INSERT INTO collections (name, description, book_ids, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![name, desc, book_ids_json, now, now],
+    )
+    .map_err(|e: rusqlite::Error| {
+        if e.to_string().contains("UNIQUE constraint failed") {
+            KashshafError::Database(format!("Collection \"{}\" already exists", name))
+        } else {
+            KashshafError::Database(e.to_string())
+        }
+    })?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(Collection {
+        id,
+        name,
+        description: desc,
+        book_ids,
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// Get all collections
+#[tauri::command]
+pub fn get_collections() -> Result<Vec<Collection>, KashshafError> {
+    let conn = get_settings_connection()?;
+    ensure_collections_table(&conn)?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, description, book_ids, created_at, updated_at
+             FROM collections
+             ORDER BY created_at DESC",
+        )
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+
+    let collections = stmt
+        .query_map([], |row: &Row| {
+            let book_ids_json: String = row.get(3)?;
+            let book_ids: Vec<i64> = serde_json::from_str(&book_ids_json).unwrap_or_default();
+            Ok(Collection {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                book_ids,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+
+    Ok(collections)
+}
+
+/// Update collection's book IDs
+#[tauri::command]
+pub fn update_collection_books(id: i64, book_ids: Vec<i64>) -> Result<(), KashshafError> {
+    let conn = get_settings_connection()?;
+    ensure_collections_table(&conn)?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let book_ids_json = serde_json::to_string(&book_ids)
+        .map_err(|e| KashshafError::Other(format!("Failed to serialize book_ids: {}", e)))?;
+
+    let rows_affected = conn
+        .execute(
+            "UPDATE collections SET book_ids = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![book_ids_json, now, id],
+        )
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+
+    if rows_affected == 0 {
+        return Err(KashshafError::Database(format!(
+            "Collection with id {} not found",
+            id
+        )));
+    }
+
+    Ok(())
+}
+
+/// Update collection's description
+#[tauri::command]
+pub fn update_collection_description(
+    id: i64,
+    description: Option<String>,
+) -> Result<(), KashshafError> {
+    let conn = get_settings_connection()?;
+    ensure_collections_table(&conn)?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let desc = description.map(|d| d.chars().take(150).collect::<String>());
+
+    let rows_affected = conn
+        .execute(
+            "UPDATE collections SET description = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![desc, now, id],
+        )
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+
+    if rows_affected == 0 {
+        return Err(KashshafError::Database(format!(
+            "Collection with id {} not found",
+            id
+        )));
+    }
+
+    Ok(())
+}
+
+/// Rename a collection
+#[tauri::command]
+pub fn rename_collection(id: i64, name: String) -> Result<(), KashshafError> {
+    let conn = get_settings_connection()?;
+    ensure_collections_table(&conn)?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let rows_affected = conn
+        .execute(
+            "UPDATE collections SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![name, now, id],
+        )
+        .map_err(|e: rusqlite::Error| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                KashshafError::Database(format!("Collection \"{}\" already exists", name))
+            } else {
+                KashshafError::Database(e.to_string())
+            }
+        })?;
+
+    if rows_affected == 0 {
+        return Err(KashshafError::Database(format!(
+            "Collection with id {} not found",
+            id
+        )));
+    }
+
+    Ok(())
+}
+
+/// Delete a collection
+#[tauri::command]
+pub fn delete_collection(id: i64) -> Result<(), KashshafError> {
+    let conn = get_settings_connection()?;
+    ensure_collections_table(&conn)?;
+
+    conn.execute("DELETE FROM collections WHERE id = ?1", [id])
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+
+    Ok(())
+}
+
 /// Fetch announcements from CDN using reqwest (no CORS restrictions)
 /// Returns the manifest or an error
 #[tauri::command]

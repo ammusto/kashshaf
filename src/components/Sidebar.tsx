@@ -15,6 +15,7 @@ interface SidebarProps {
   onProximitySearch: (query: ProximitySearchQuery) => void;
   onNameSearch: () => void;
   onOpenTextSelection: () => void;
+  onSaveCollection?: () => void;
   loading: boolean;
   indexedPages: number;
   selectedTextsCount: number;
@@ -35,6 +36,7 @@ export function Sidebar({
   onProximitySearch,
   onNameSearch,
   onOpenTextSelection,
+  onSaveCollection,
   loading,
   indexedPages: _indexedPages,
   selectedTextsCount,
@@ -222,6 +224,7 @@ export function Sidebar({
         <CorpusSelector
           selectedTextsCount={selectedTextsCount}
           onOpenTextSelection={onOpenTextSelection}
+          onSaveCollection={onSaveCollection}
         />
       </div>
 
