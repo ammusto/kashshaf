@@ -1371,3 +1371,81 @@ pub fn delete_local_data(state: State<'_, ManagedAppState>) -> Result<u32, Kashs
     println!("Local data deletion complete. {} items deleted.", deleted_count);
     Ok(deleted_count)
 }
+
+// ============ Announcements Commands ============
+
+/// Announcements manifest structure from CDN
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnouncementsManifest {
+    pub schema_version: i64,
+    pub announcements: Vec<Announcement>,
+}
+
+/// Announcement entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Announcement {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub body_format: String,
+    #[serde(rename = "type")]
+    pub announcement_type: String,
+    pub priority: String,
+    pub target: String,
+    pub min_app_version: Option<String>,
+    pub max_app_version: Option<String>,
+    pub starts_at: String,
+    pub expires_at: Option<String>,
+    pub dismissible: bool,
+    pub show_once: bool,
+    pub action: Option<AnnouncementAction>,
+}
+
+/// Announcement action button
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnouncementAction {
+    pub label: String,
+    pub url: String,
+}
+
+const ANNOUNCEMENTS_URL: &str = "https://cdn.kashshaf.com/announcements.json";
+const SUPPORTED_ANNOUNCEMENTS_SCHEMA: i64 = 1;
+
+/// Fetch announcements from CDN using reqwest (no CORS restrictions)
+/// Returns the manifest or an error
+#[tauri::command]
+pub async fn fetch_announcements() -> Result<AnnouncementsManifest, KashshafError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| KashshafError::Network(format!("Failed to create HTTP client: {}", e)))?;
+
+    let response = client
+        .get(ANNOUNCEMENTS_URL)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| KashshafError::Network(format!("Failed to fetch announcements: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err(KashshafError::Network(format!(
+            "Failed to fetch announcements: HTTP {}",
+            response.status()
+        )));
+    }
+
+    let manifest: AnnouncementsManifest = response
+        .json()
+        .await
+        .map_err(|e| KashshafError::Network(format!("Failed to parse announcements JSON: {}", e)))?;
+
+    // Validate schema version
+    if manifest.schema_version != SUPPORTED_ANNOUNCEMENTS_SCHEMA {
+        return Err(KashshafError::Other(format!(
+            "Unsupported announcements schema version: {}",
+            manifest.schema_version
+        )));
+    }
+
+    Ok(manifest)
+}

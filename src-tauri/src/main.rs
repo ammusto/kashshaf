@@ -90,6 +90,8 @@ fn main() {
             commands::set_user_setting,
             commands::corpus_exists,
             commands::delete_local_data,
+            // Announcements command
+            commands::fetch_announcements,
         ])
         .on_menu_event(|app, event| {
             match event.id().as_ref() {

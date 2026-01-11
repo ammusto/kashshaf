@@ -459,3 +459,39 @@ export async function corpusExists(): Promise<boolean> {
 export async function deleteLocalData(): Promise<number> {
   return invoke('delete_local_data');
 }
+
+// ============ Announcements API ============
+
+/**
+ * Announcements manifest returned from Tauri command
+ * Note: The 'type' field is renamed to 'announcement_type' in Rust for serde
+ */
+interface TauriAnnouncementsManifest {
+  schema_version: number;
+  announcements: TauriAnnouncement[];
+}
+
+interface TauriAnnouncement {
+  id: string;
+  title: string;
+  body: string;
+  body_format: string;
+  announcement_type: string; // Renamed from 'type' in Rust
+  priority: string;
+  target: string;
+  min_app_version: string | null;
+  max_app_version: string | null;
+  starts_at: string;
+  expires_at: string | null;
+  dismissible: boolean;
+  show_once: boolean;
+  action: { label: string; url: string } | null;
+}
+
+/**
+ * Fetch announcements from CDN via Tauri (uses reqwest, no CORS)
+ * Returns the manifest with announcements array
+ */
+export async function fetchAnnouncements(): Promise<TauriAnnouncementsManifest> {
+  return invoke('fetch_announcements');
+}

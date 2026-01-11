@@ -22,6 +22,9 @@ pub enum KashshafError {
     #[error("Download error: {0}")]
     Download(String),
 
+    #[error("Network error: {0}")]
+    Network(String),
+
     #[error("Corpus not ready: {0}")]
     CorpusNotReady(String),
 

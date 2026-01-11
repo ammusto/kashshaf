@@ -2,6 +2,7 @@
  * Announcements Utility
  *
  * Handles fetching, caching, and filtering announcements from CDN.
+ * Desktop apps use Tauri/reqwest (no CORS), web uses browser fetch.
  */
 
 import type { Announcement, AnnouncementsManifest } from '../types';
@@ -19,10 +20,10 @@ const SUPPORTED_SCHEMA_VERSION = 1;
 const FETCH_TIMEOUT_MS = 5000; // 5 seconds
 
 /**
- * Fetch announcements from CDN with timeout
+ * Fetch announcements via browser fetch (for web target)
  * Returns null on failure (network error, timeout, invalid response)
  */
-export async function fetchAnnouncementsFromCDN(): Promise<AnnouncementsManifest | null> {
+async function fetchAnnouncementsWeb(): Promise<AnnouncementsManifest | null> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -62,6 +63,56 @@ export async function fetchAnnouncementsFromCDN(): Promise<AnnouncementsManifest
       console.warn('Failed to fetch announcements:', err);
     }
     return null;
+  }
+}
+
+/**
+ * Fetch announcements via Tauri/reqwest (for desktop targets)
+ * Returns null on failure
+ */
+async function fetchAnnouncementsDesktop(): Promise<AnnouncementsManifest | null> {
+  try {
+    const { fetchAnnouncements } = await import('../api/tauri');
+    const manifest = await fetchAnnouncements();
+
+    // Transform Tauri response: rename announcement_type -> type
+    const transformedAnnouncements: Announcement[] = manifest.announcements.map(ann => ({
+      id: ann.id,
+      title: ann.title,
+      body: ann.body,
+      body_format: ann.body_format as Announcement['body_format'],
+      type: ann.announcement_type as Announcement['type'],
+      priority: ann.priority as Announcement['priority'],
+      target: ann.target as Announcement['target'],
+      min_app_version: ann.min_app_version,
+      max_app_version: ann.max_app_version,
+      starts_at: ann.starts_at,
+      expires_at: ann.expires_at,
+      dismissible: ann.dismissible,
+      show_once: ann.show_once,
+      action: ann.action,
+    }));
+
+    return {
+      schema_version: manifest.schema_version,
+      announcements: transformedAnnouncements,
+    };
+  } catch (err) {
+    console.warn('Failed to fetch announcements via Tauri:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetch announcements from CDN
+ * Uses Tauri/reqwest for desktop (no CORS), browser fetch for web
+ * Returns null on failure (network error, timeout, invalid response)
+ */
+export async function fetchAnnouncementsFromCDN(): Promise<AnnouncementsManifest | null> {
+  if (isWebTarget) {
+    return fetchAnnouncementsWeb();
+  } else {
+    return fetchAnnouncementsDesktop();
   }
 }
 
