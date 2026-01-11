@@ -1,6 +1,6 @@
 # Kashshāf
 
-Desktop application for searching medieval Arabic texts (pre-750/1350) with token-level morphological data.
+Desktop application for searching medieval Arabic texts (pre-750/1350) with token-level morphological data. For more info on features and other documentation, see the [Kashshāf website](https://www.kashshaf.com/)
 
 ## Features
 
