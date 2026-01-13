@@ -231,10 +231,12 @@ export class OnlineAPI implements SearchAPI {
 
   async getPageTokens(
     id: number,
+    partIndex: number,
     pageId: number
   ): Promise<Token[]> {
     const params = new URLSearchParams({
       id: String(id),
+      part_index: String(partIndex),
       page_id: String(pageId),
     });
 

@@ -106,8 +106,10 @@ export async function proximitySearch(
 
 export async function getPageTokens(
   id: number,
+  partIndex: number,
   pageId: number
 ): Promise<Token[]> {
+  // Note: Tauri backend doesn't use partIndex, but we accept it for API consistency
   return invoke('get_page_tokens', { id, pageId });
 }
 

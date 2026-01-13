@@ -68,8 +68,8 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
       const startTime = performance.now();
 
       // Fetch tokens
-      console.log('[TokenDebug] Fetching tokens for:', { bookId: result.id, pageId: result.page_id });
-      const tokens = await api.getPageTokens(result.id, result.page_id);
+      console.log('[TokenDebug] Fetching tokens for:', { bookId: result.id, partIndex: result.part_index, pageId: result.page_id });
+      const tokens = await api.getPageTokens(result.id, result.part_index, result.page_id);
       console.log('[TokenDebug] Fetched tokens:', { count: tokens.length, firstFew: tokens.slice(0, 5), lastFew: tokens.slice(-3) });
 
       // Use matched_token_indices from result if available
@@ -160,7 +160,7 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
 
       try {
         console.log('[NavDebug] Calling api.getPageTokens...');
-        tokens = await api.getPageTokens(activeTab.currentBookId, newPageId);
+        tokens = await api.getPageTokens(activeTab.currentBookId, activeTab.currentPartIndex, newPageId);
         console.log('[NavDebug] api.getPageTokens returned:', { count: tokens.length });
       } catch (tokenErr) {
         console.error('[NavDebug] api.getPageTokens FAILED:', tokenErr);

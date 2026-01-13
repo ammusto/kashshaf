@@ -93,9 +93,10 @@ export class OfflineAPI implements SearchAPI {
 
   async getPageTokens(
     id: number,
+    partIndex: number,
     pageId: number
   ): Promise<Token[]> {
-    return tauri.getPageTokens(id, pageId);
+    return tauri.getPageTokens(id, partIndex, pageId);
   }
 
   async getMatchPositions(
