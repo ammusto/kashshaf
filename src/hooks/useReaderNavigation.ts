@@ -56,11 +56,7 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
     updateTab(tabId, { errorMessage: '' });
 
     updateTab(tabId, {
-      currentPage: {
-        bookId: result.id,
-        meta: `${result.part_label}:${result.page_number}`,
-        body: result.body ?? '',
-      },
+      currentPage: null, // Clear page until tokens are loaded to avoid mismatched render
       pageTokens: [],
       matchedTokenIndices: [],
       currentBookId: result.id,
@@ -72,7 +68,9 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
       const startTime = performance.now();
 
       // Fetch tokens
-      const tokens = await api.getPageTokens(result.id, result.part_index, result.page_id);
+      console.log('[TokenDebug] Fetching tokens for:', { bookId: result.id, pageId: result.page_id });
+      const tokens = await api.getPageTokens(result.id, result.page_id);
+      console.log('[TokenDebug] Fetched tokens:', { count: tokens.length, firstFew: tokens.slice(0, 5), lastFew: tokens.slice(-3) });
 
       // Use matched_token_indices from result if available
       let matchedIndices = result.matched_token_indices || [];
@@ -139,10 +137,35 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
 
     try {
       const startTime = performance.now();
-      const [page, tokens] = await Promise.all([
-        api.getPage(activeTab.currentBookId, activeTab.currentPartIndex, newPageId),
-        api.getPageTokens(activeTab.currentBookId, activeTab.currentPartIndex, newPageId)
-      ]);
+      console.log('[NavDebug] Navigating to page:', {
+        bookId: activeTab.currentBookId,
+        partIndex: activeTab.currentPartIndex,
+        currentPageId: activeTab.currentPageId,
+        newPageId,
+        direction
+      });
+
+      // Fetch page and tokens separately to identify which call fails
+      let page = null;
+      let tokens: any[] = [];
+
+      try {
+        console.log('[NavDebug] Calling api.getPage...');
+        page = await api.getPage(activeTab.currentBookId, activeTab.currentPartIndex, newPageId);
+        console.log('[NavDebug] api.getPage returned:', page ? { id: page.id, part_label: page.part_label, page_number: page.page_number } : null);
+      } catch (pageErr) {
+        console.error('[NavDebug] api.getPage FAILED:', pageErr);
+        throw pageErr;
+      }
+
+      try {
+        console.log('[NavDebug] Calling api.getPageTokens...');
+        tokens = await api.getPageTokens(activeTab.currentBookId, newPageId);
+        console.log('[NavDebug] api.getPageTokens returned:', { count: tokens.length });
+      } catch (tokenErr) {
+        console.error('[NavDebug] api.getPageTokens FAILED:', tokenErr);
+        throw tokenErr;
+      }
 
       const loadTimeMs = Math.round(performance.now() - startTime);
 

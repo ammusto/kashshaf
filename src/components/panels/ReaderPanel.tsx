@@ -41,6 +41,24 @@ function BodyRenderer({
     const charToToken = buildCharToTokenMap(plainText);
     const highlightRanges = getHighlightRanges(charToToken, matchedIndicesSet);
 
+    // Build a map from token index to token for O(1) lookup
+    const tokenByIdx = new Map<number, Token>();
+    for (const token of tokens) {
+      tokenByIdx.set(token.idx, token);
+    }
+
+    // Debug: Log token mapping info
+    const maxCharTokenIdx = Math.max(...charToToken.filter((x): x is number => x !== null));
+    const tokenIdxRange = tokens.length > 0 ? { min: Math.min(...tokens.map(t => t.idx)), max: Math.max(...tokens.map(t => t.idx)) } : null;
+    console.log('[TokenDebug] BodyRenderer mapping:', {
+      plainTextLength: plainText.length,
+      tokensCount: tokens.length,
+      tokenByIdxSize: tokenByIdx.size,
+      maxCharTokenIdx,
+      tokenIdxRange,
+      sampleTokens: tokens.slice(0, 3).map(t => ({ idx: t.idx, surface: t.surface })),
+    });
+
     // Build a set of highlighted character positions for quick lookup
     const highlightedChars = new Set<number>();
     for (const range of highlightRanges) {
@@ -72,8 +90,14 @@ function BodyRenderer({
       const text = plainText.slice(i, end);
 
       if (tokenIdx !== null) {
-        // This is part of a token - make it clickable
-        const token = tokens.find(t => (t.idx ?? tokens.indexOf(t)) === tokenIdx);
+        // This is part of a token - make it clickable (O(1) lookup via Map)
+        const token = tokenByIdx.get(tokenIdx);
+        if (!token && tokenIdx <= maxCharTokenIdx) {
+          // Only log once per missing token (at the start of that token's chars)
+          if (i === 0 || charToToken[i - 1] !== tokenIdx) {
+            console.warn('[TokenDebug] Missing token for idx:', tokenIdx, 'text:', text, 'availableIdxs:', [...tokenByIdx.keys()].slice(0, 20));
+          }
+        }
         const shouldAttachRef = isHighlighted && isFirstHighlight;
         if (shouldAttachRef) {
           isFirstHighlight = false;
@@ -131,6 +155,13 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, matchedTokenIndic
 
   const handleWordClick = (e: React.MouseEvent, token: Token) => {
     e.stopPropagation();
+    console.log('[TokenDebug] Token clicked:', {
+      idx: token.idx,
+      surface: token.surface,
+      lemma: token.lemma,
+      root: token.root,
+      pos: token.pos,
+    });
     setSelectedToken(token);
     setPopupPosition({
       x: e.clientX,

@@ -111,8 +111,8 @@ impl TokenCache {
 
         let token_ids_blob: Option<Vec<u8>> = conn
             .query_row(
-                "SELECT token_ids FROM page_tokens WHERE book_id = ?1 AND part_index = ?2 AND page_id = ?3",
-                rusqlite::params![key.id as i64, key.part_index as i64, key.page_id as i64],
+                "SELECT token_ids FROM page_tokens WHERE book_id = ?1 AND page_id = ?2",
+                rusqlite::params![key.id as i64, key.page_id as i64],
                 |row| row.get(0),
             )
             .ok();
@@ -167,29 +167,57 @@ impl TokenCache {
             }
         }
 
+        // IMPORTANT: We must preserve the index from token_ids even if some lookups fail.
+        // The frontend's buildCharToTokenMap counts Arabic words sequentially and expects
+        // token.idx to match that position. If we skip tokens here, indices will be wrong.
         let tokens: Vec<Token> = token_ids
             .iter()
             .enumerate()
-            .filter_map(|(idx, &token_id)| {
+            .map(|(idx, &token_id)| {
+                // Get token definition, with fallback for missing data
                 let (surface, lemma_id, root_id, pos_id, feature_set_id, clitic_set_id) =
-                    token_defs.get(&token_id)?;
+                    match token_defs.get(&token_id) {
+                        Some(data) => data.clone(),
+                        None => {
+                            // Token definition missing - create placeholder with unknown surface
+                            return Token {
+                                idx,
+                                surface: String::from("�"),
+                                noclitic_surface: None,
+                                lemma: String::from("unknown"),
+                                root: None,
+                                pos: String::from("UNK"),
+                                features: Vec::new(),
+                                clitics: Vec::new(),
+                            };
+                        }
+                    };
 
-                let lemma = self.lookups.lemmas.get(lemma_id)?.clone();
+                // Get lemma with fallback
+                let lemma = self.lookups.lemmas.get(&lemma_id)
+                    .cloned()
+                    .unwrap_or_else(|| String::from("unknown"));
+
                 let root = root_id.and_then(|rid| self.lookups.roots.get(&rid).cloned());
-                let pos = self.lookups.pos_types.get(pos_id)?.clone();
-                let features = self.lookups.feature_sets.get(feature_set_id).cloned().unwrap_or_default();
-                let clitics = self.lookups.clitic_sets.get(clitic_set_id).cloned().unwrap_or_default();
 
-                Some(Token {
+                // Get POS with fallback
+                let pos = self.lookups.pos_types.get(&pos_id)
+                    .cloned()
+                    .unwrap_or_else(|| String::from("UNK"));
+
+                let features = self.lookups.feature_sets.get(&feature_set_id).cloned().unwrap_or_default();
+                let clitics = self.lookups.clitic_sets.get(&clitic_set_id).cloned().unwrap_or_default();
+
+                Token {
                     idx,
-                    surface: surface.clone(),
+                    surface,
                     noclitic_surface: None,
                     lemma,
                     root,
                     pos,
                     features,
                     clitics,
-                })
+                }
             })
             .collect();
 

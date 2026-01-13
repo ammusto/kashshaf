@@ -500,12 +500,11 @@ pub async fn proximity_search(
 pub fn get_page_tokens(
     state: State<'_, ManagedAppState>,
     id: u64,
-    part_index: u64,
     page_id: u64,
 ) -> Result<Vec<Token>, KashshafError> {
     use kashshaf_lib::tokens::PageKey;
     let app_state = require_state(&state)?;
-    let key = PageKey::new(id, part_index, page_id);
+    let key = PageKey::new(id, page_id);
     let tokens = app_state
         .token_cache
         .get(&key)
@@ -517,13 +516,12 @@ pub fn get_page_tokens(
 pub fn get_token_at(
     state: State<'_, ManagedAppState>,
     id: u64,
-    part_index: u64,
     page_id: u64,
     idx: usize,
 ) -> Result<Option<Token>, KashshafError> {
     use kashshaf_lib::tokens::PageKey;
     let app_state = require_state(&state)?;
-    let key = PageKey::new(id, part_index, page_id);
+    let key = PageKey::new(id, page_id);
     app_state
         .token_cache
         .get_token_at(&key, idx)
@@ -703,7 +701,7 @@ pub async fn wildcard_search(
         let query_info = parse_wildcard_query(&query_clone);
         if query_info.terms.len() > 1 {
             for result in &mut results.results {
-                let page_key = PageKey::new(result.id, result.part_index, result.page_id);
+                let page_key = PageKey::new(result.id, result.page_id);
                 if let Ok(positions) = token_cache.find_wildcard_phrase_positions(
                     &page_key,
                     &query_info.prefix,

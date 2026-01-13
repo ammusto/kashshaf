@@ -98,7 +98,6 @@ export interface SearchAPI {
 
   getPageTokens(
     id: number,
-    partIndex: number,
     pageId: number
   ): Promise<Token[]>;
 

@@ -106,19 +106,17 @@ export async function proximitySearch(
 
 export async function getPageTokens(
   id: number,
-  partIndex: number,
   pageId: number
 ): Promise<Token[]> {
-  return invoke('get_page_tokens', { id, partIndex, pageId });
+  return invoke('get_page_tokens', { id, pageId });
 }
 
 export async function getTokenAt(
   id: number,
-  partIndex: number,
   pageId: number,
   idx: number
 ): Promise<Token | null> {
-  return invoke('get_token_at', { id, partIndex, pageId, idx });
+  return invoke('get_token_at', { id, pageId, idx });
 }
 
 export async function getCacheStats(): Promise<[number, number]> {

@@ -24,13 +24,12 @@ pub struct Token {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct PageKey {
     pub id: u64,
-    pub part_index: u64,
     pub page_id: u64,
 }
 
 impl PageKey {
-    pub fn new(id: u64, part_index: u64, page_id: u64) -> Self {
-        Self { id, part_index, page_id }
+    pub fn new(id: u64, page_id: u64) -> Self {
+        Self { id, page_id }
     }
 }
 
