@@ -229,6 +229,24 @@ export class OnlineAPI implements SearchAPI {
     }
   }
 
+  async getPageByLabel(
+    id: number,
+    partLabel: string,
+    pageNumber: string
+  ): Promise<SearchResult | null> {
+    const params = new URLSearchParams({
+      id: String(id),
+      part_label: partLabel,
+      page_number: pageNumber,
+    });
+
+    try {
+      return await fetchAPI<SearchResult>(`/page/by-label?${params}`);
+    } catch {
+      return null;
+    }
+  }
+
   async getPageTokens(
     id: number,
     partIndex: number,

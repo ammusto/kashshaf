@@ -200,6 +200,9 @@ export function DownloadModal({
   };
 
   const msgInfo = getMessage();
+  // Allow dismissal whenever an onDismiss is supplied (caller decides), unless
+  // the message info itself forbids it (e.g., app-too-old) or a download is running.
+  const canDismiss = !!onDismiss && !msgInfo.requiresAppUpdate && !downloading;
   const filePercent = progress && progress.file_total_bytes > 0
     ? (progress.file_bytes_downloaded / progress.file_total_bytes) * 100
     : 0;
@@ -213,9 +216,10 @@ export function DownloadModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-app-border-light">
           <h2 className="text-lg font-semibold text-app-text-primary">{msgInfo.title}</h2>
-          {msgInfo.canDismiss && onDismiss && !downloading && (
+          {canDismiss && (
             <button
               onClick={onDismiss}
+              aria-label="Close"
               className="p-2 rounded-lg hover:bg-app-surface-variant transition-colors"
             >
               <svg className="w-5 h-5 text-app-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -343,12 +347,12 @@ export function DownloadModal({
                   Online Use
                 </button>
               )}
-              {msgInfo.canDismiss && onDismiss && (
+              {canDismiss && (
                 <button
                   onClick={onDismiss}
                   className="px-4 py-2 rounded-lg text-app-text-secondary hover:bg-app-surface-variant transition-colors"
                 >
-                  Later
+                  {msgInfo.canDismiss ? 'Later' : 'Cancel'}
                 </button>
               )}
               {msgInfo.requiresAppUpdate ? (

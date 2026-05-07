@@ -35,6 +35,14 @@ export async function getPage(
   return invoke('get_page', { id, partIndex, pageId });
 }
 
+export async function getPageByLabel(
+  id: number,
+  partLabel: string,
+  pageNumber: string
+): Promise<SearchResult | null> {
+  return invoke('get_page_by_label', { id, partLabel, pageNumber });
+}
+
 /** Load all book metadata at once - for caching in frontend */
 export async function getAllBooks(): Promise<BookMetadata[]> {
   return invoke('get_all_books');
@@ -106,7 +114,7 @@ export async function proximitySearch(
 
 export async function getPageTokens(
   id: number,
-  partIndex: number,
+  _partIndex: number,
   pageId: number
 ): Promise<Token[]> {
   // Note: Tauri backend doesn't use partIndex, but we accept it for API consistency

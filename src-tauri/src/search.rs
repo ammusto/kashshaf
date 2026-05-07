@@ -251,6 +251,13 @@ pub struct SearchEngine {
     schema: Schema,
 }
 
+/// Stable, deterministic ordering for displayed results.
+/// Tantivy already returns docs in death_ah ASC order; this adds reading-order
+/// tiebreakers so results within the same book/author appear vol-then-page ASC.
+fn sort_results_by_reading_order(results: &mut [SearchResult]) {
+    results.sort_by_key(|r| (r.death_ah.unwrap_or(u64::MAX), r.id, r.part_index, r.page_id));
+}
+
 impl SearchEngine {
     pub fn open(index_path: &Path) -> Result<Self> {
         let index = Index::open_in_dir(index_path)?;
@@ -419,8 +426,9 @@ impl SearchEngine {
             results.push(result);
         }
 
-        // Results are already sorted by death_ah from TopDocsByField collector
-        // Apply offset and limit
+        // Tantivy already sorted by death_ah; refine with reading-order tiebreakers
+        // before pagination so within-book results come back vol-then-page ASC.
+        sort_results_by_reading_order(&mut results);
         let results: Vec<SearchResult> = results.into_iter().skip(offset).take(limit).collect();
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -639,6 +647,96 @@ impl SearchEngine {
         query_terms: &HashSet<String>,
     ) -> Vec<u32> {
         self.get_matched_positions_limited(segment_reader, doc_id, field, query_terms, 5)
+    }
+
+    /// Look up a page by its human-readable (part_label, page_number) labels.
+    /// Used for "Go to vol:page" navigation in the reader.
+    pub fn get_page_by_label(
+        &self,
+        id: u64,
+        part_label: &str,
+        page_number: &str,
+    ) -> Result<Option<SearchResult>> {
+        let reader = self
+            .index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .try_into()?;
+
+        let searcher = reader.searcher();
+        let id_field = self.schema.get_field("text_id").unwrap();
+        let part_label_field = self.schema.get_field("part_label").unwrap();
+        let page_number_field = self.schema.get_field("page_number").unwrap();
+        let part_index_field = self.schema.get_field("part_index").unwrap();
+        let page_id_field = self.schema.get_field("page_id").unwrap();
+
+        let query = BooleanQuery::new(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(id_field, id),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(part_label_field, part_label),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(page_number_field, page_number),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+        ]);
+
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+
+        if let Some((score, doc_address)) = top_docs.into_iter().next() {
+            let doc: TantivyDocument = searcher.doc(doc_address)?;
+
+            let author_id_field = self.schema.get_field("author_id").unwrap();
+            let genre_id_field = self.schema.get_field("genre_id").unwrap();
+            let death_ah_field = self.schema.get_field("death_ah").unwrap();
+            let century_ah_field = self.schema.get_field("century_ah").unwrap();
+            let body_field = self.schema.get_field("body").unwrap();
+
+            let part_index = doc
+                .get_first(part_index_field)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let page_id = doc
+                .get_first(page_id_field)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            let result = SearchResult {
+                id,
+                part_index,
+                page_id,
+                author_id: doc.get_first(author_id_field).and_then(|v| v.as_u64()),
+                genre_id: doc.get_first(genre_id_field).and_then(|v| v.as_u64()),
+                death_ah: doc.get_first(death_ah_field).and_then(|v| v.as_u64()),
+                century_ah: doc.get_first(century_ah_field).and_then(|v| v.as_u64()),
+                part_label: part_label.to_string(),
+                page_number: page_number.to_string(),
+                body: doc
+                    .get_first(body_field)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                score,
+                matched_token_indices: Vec::new(),
+            };
+
+            Ok(Some(result))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn get_page(&self, id: u64, part_index: u64, page_id: u64) -> Result<Option<SearchResult>> {
@@ -1404,6 +1502,8 @@ impl SearchEngine {
             .map(|t| t.mode)
             .unwrap_or_default();
 
+        sort_results_by_reading_order(&mut results);
+
         Ok(SearchResults {
             query: query_display,
             mode,
@@ -1574,7 +1674,7 @@ impl SearchEngine {
             results.push(result);
         }
 
-        // Results already in death_ah order from Tantivy - no post-sort needed
+        sort_results_by_reading_order(&mut results);
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -1770,7 +1870,7 @@ impl SearchEngine {
             results.push(result);
         }
 
-        // Results already sorted by death_ah from Tantivy - no post-sort needed
+        sort_results_by_reading_order(&mut results);
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -2071,7 +2171,7 @@ impl SearchEngine {
             results.push(result);
         }
 
-        // Results already sorted by death_ah from Tantivy - no post-sort needed
+        sort_results_by_reading_order(&mut results);
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 

@@ -80,6 +80,7 @@ export interface BookMetadata {
   book_meta?: string;  // JSON array as string
   author_meta?: string; // JSON array as string
   in_corpus?: boolean; // Whether book is in the corpus
+  parts?: number;      // Number of parts/volumes in the book
 }
 
 // Author lookup table

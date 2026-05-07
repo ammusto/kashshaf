@@ -83,6 +83,13 @@ struct PageQuery {
 }
 
 #[derive(Deserialize)]
+struct PageByLabelQuery {
+    id: u64,
+    part_label: String,
+    page_number: String,
+}
+
+#[derive(Deserialize)]
 struct TokensQuery {
     id: u64,
     part_index: u64,
@@ -146,6 +153,7 @@ struct BookMetadata {
     book_meta: Option<String>,
     author_meta: Option<String>,
     in_corpus: Option<bool>,
+    parts: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -260,6 +268,15 @@ async fn get_page(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
 }
 
+async fn get_page_by_label(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<PageByLabelQuery>,
+) -> Result<Json<Option<search::SearchResult>>, (StatusCode, Json<ErrorResponse>)> {
+    state.search_engine.get_page_by_label(params.id, &params.part_label, &params.page_number)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+}
+
 async fn get_page_tokens(
     State(state): State<Arc<AppState>>,
     Query(params): Query<TokensQuery>,
@@ -316,7 +333,7 @@ async fn get_all_books(
 
     let mut stmt = conn.prepare(
         "SELECT id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
-                original_id, paginated, tags, book_meta, author_meta, in_corpus
+                original_id, paginated, tags, book_meta, author_meta, in_corpus, parts
          FROM books ORDER BY death_ah ASC NULLS LAST, id ASC"
     ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
@@ -337,6 +354,7 @@ async fn get_all_books(
             book_meta: row.get(12)?,
             author_meta: row.get(13)?,
             in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
+            parts: row.get(15)?,
         })
     }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
         .filter_map(|r| r.ok())
@@ -412,6 +430,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/search/name", post(name_search))
         .route("/search/wildcard", get(wildcard_search))
         .route("/page", get(get_page))
+        .route("/page/by-label", get(get_page_by_label))
         .route("/page/tokens", get(get_page_tokens))
         .route("/page/matches", get(get_match_positions))
         .route("/page/with-matches", get(get_page_with_matches))

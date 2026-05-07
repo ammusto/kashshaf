@@ -96,6 +96,12 @@ export interface SearchAPI {
     pageId: number
   ): Promise<SearchResult | null>;
 
+  getPageByLabel(
+    id: number,
+    partLabel: string,
+    pageNumber: string
+  ): Promise<SearchResult | null>;
+
   getPageTokens(
     id: number,
     partIndex: number,

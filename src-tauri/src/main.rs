@@ -43,6 +43,7 @@ fn main() {
             commands::combined_search,
             commands::name_search,
             commands::get_page,
+            commands::get_page_by_label,
             commands::get_all_books,
             commands::list_books,
             commands::list_books_filtered,

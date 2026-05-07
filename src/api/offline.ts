@@ -91,6 +91,14 @@ export class OfflineAPI implements SearchAPI {
     return result;
   }
 
+  async getPageByLabel(
+    id: number,
+    partLabel: string,
+    pageNumber: string
+  ): Promise<SearchResult | null> {
+    return tauri.getPageByLabel(id, partLabel, pageNumber);
+  }
+
   async getPageTokens(
     id: number,
     partIndex: number,

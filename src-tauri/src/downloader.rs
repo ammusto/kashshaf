@@ -322,8 +322,12 @@ fn version_meets_minimum(app_version: &str, min_version: &str) -> bool {
 /// Check if essential corpus files exist (for manual installations without manifest.local.json)
 fn has_essential_files(data_dir: &Path) -> bool {
     let corpus_db = data_dir.join("corpus.db");
+    let metadata_db = data_dir.join("metadata.db");
     let tantivy_index = data_dir.join("tantivy_index");
-    corpus_db.exists() && tantivy_index.exists() && tantivy_index.is_dir()
+    corpus_db.exists()
+        && metadata_db.exists()
+        && tantivy_index.exists()
+        && tantivy_index.is_dir()
 }
 
 /// Check corpus status by comparing local and remote manifests

@@ -10,6 +10,8 @@ export interface UseReaderNavigationOptions {
 
 export interface UseReaderNavigationReturn {
   handleNavigatePage: (direction: number) => Promise<void>;
+  /** Jump to a specific part_label/page_number. Returns false if no such page exists. */
+  handleNavigateToLabel: (partLabel: string, pageNumber: string) => Promise<boolean>;
   loadResultIntoTab: (tabId: string, result: SearchResult) => Promise<void>;
 }
 
@@ -188,8 +190,43 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
     }
   }, [activeTab, updateTab, api]);
 
+  // Jump directly to a part_label/page_number (for the "Go to vol:page" input).
+  // Returns false when the lookup fails (caller shows a toast).
+  const handleNavigateToLabel = useCallback(async (partLabel: string, pageNumber: string): Promise<boolean> => {
+    if (!activeTab || activeTab.currentBookId === null) return false;
+
+    updateTab(activeTab.id, { errorMessage: '' });
+
+    try {
+      const startTime = performance.now();
+      const page = await api.getPageByLabel(activeTab.currentBookId, partLabel, pageNumber);
+      if (!page) return false;
+
+      const tokens = await api.getPageTokens(page.id, page.part_index, page.page_id);
+      const loadTimeMs = Math.round(performance.now() - startTime);
+
+      updateTab(activeTab.id, {
+        currentPage: {
+          bookId: page.id,
+          meta: `${page.part_label}:${page.page_number}`,
+          body: page.body ?? '',
+          loadTimeMs,
+        },
+        pageTokens: tokens,
+        currentPartIndex: page.part_index,
+        currentPageId: page.page_id,
+        matchedTokenIndices: [],
+      });
+      return true;
+    } catch (err) {
+      console.error('Failed to navigate to label:', err);
+      return false;
+    }
+  }, [activeTab, updateTab, api]);
+
   return {
     handleNavigatePage,
+    handleNavigateToLabel,
     loadResultIntoTab,
   };
 }

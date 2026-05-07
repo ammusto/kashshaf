@@ -46,9 +46,10 @@ pub struct BookMetadata {
     pub book_meta: Option<String>,   // JSON array as string
     pub author_meta: Option<String>, // JSON array as string
     pub in_corpus: Option<bool>,     // Whether book is in the corpus
+    pub parts: Option<i64>,          // Number of parts/volumes in the book
 }
 
-const BOOK_COLUMNS: &str = "id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count, original_id, paginated, tags, book_meta, author_meta, in_corpus";
+const BOOK_COLUMNS: &str = "id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count, original_id, paginated, tags, book_meta, author_meta, in_corpus, parts";
 
 fn row_to_book(row: &Row) -> rusqlite::Result<BookMetadata> {
     Ok(BookMetadata {
@@ -67,6 +68,7 @@ fn row_to_book(row: &Row) -> rusqlite::Result<BookMetadata> {
         book_meta: row.get(12)?,
         author_meta: row.get(13)?,
         in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
+        parts: row.get(15)?,
     })
 }
 
@@ -109,6 +111,20 @@ pub fn get_page(
     app_state
         .search_engine
         .get_page(id, part_index, page_id)
+        .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
+}
+
+#[tauri::command]
+pub fn get_page_by_label(
+    state: State<'_, ManagedAppState>,
+    id: u64,
+    part_label: String,
+    page_number: String,
+) -> Result<Option<SearchResult>, KashshafError> {
+    let app_state = require_state(&state)?;
+    app_state
+        .search_engine
+        .get_page_by_label(id, &part_label, &page_number)
         .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
 }
 

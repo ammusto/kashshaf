@@ -105,7 +105,17 @@ export function SearchResultRow({
                  hover:bg-app-surface-variant transition-colors border-b border-app-border-light"
       >
         <div className="w-16 flex-shrink-0 flex items-center justify-center gap-1 rounded py-2 px-3">
-          <span className="text-sm text-app-text-primary">{result.part_label}:{result.page_number}</span>
+          <span className="text-sm text-app-text-primary">
+            {(() => {
+              // Hide the volume + colon for single-part books OR when the
+              // part_label is missing/blank (e.g. "0", "" — these aren't useful
+              // to surface to the user).
+              const isMultiPart = book?.parts == null || book.parts > 1;
+              const trimmedLabel = result.part_label?.trim() ?? '';
+              const showVol = isMultiPart && trimmedLabel !== '' && trimmedLabel !== '0';
+              return showVol ? `${result.part_label}:${result.page_number}` : result.page_number;
+            })()}
+          </span>
         </div>
 
         <div className="flex-1 min-w-0">

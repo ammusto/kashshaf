@@ -92,7 +92,7 @@ function App() {
   const [editingCollection, setEditingCollection] = useState<Collection | undefined>(undefined);
 
   // Reader navigation hook
-  const { handleNavigatePage, loadResultIntoTab } = useReaderNavigation({ api });
+  const { handleNavigatePage, handleNavigateToLabel, loadResultIntoTab } = useReaderNavigation({ api });
 
   // Use search hook with selected book IDs and loadResultIntoTab
   const {
@@ -469,10 +469,16 @@ function App() {
           onDownloadComplete={handleDownloadComplete}
           onOnlineUse={handleOnlineUse}
           showOnlineOption={mode === 'pending' && !corpusDownloaded}
-          onDismiss={corpusStatus.update_available && !corpusStatus.update_required ? () => {
-            setShowDownloadModal(false);
-            setShowUpdateBanner(true);
-          } : undefined}
+          onDismiss={
+            corpusStatus.update_available && !corpusStatus.update_required
+              ? () => {
+                  setShowDownloadModal(false);
+                  setShowUpdateBanner(true);
+                }
+              : mode === 'online'
+                ? () => setShowDownloadModal(false)
+                : undefined
+          }
         />
       </Suspense>
     );
@@ -548,6 +554,7 @@ function App() {
                   currentPage={activeTab?.currentPage ?? null}
                   tokens={activeTab?.pageTokens ?? []}
                   onNavigate={handleNavigatePage}
+                  onNavigateToLabel={handleNavigateToLabel}
                   matchedTokenIndices={activeTab?.matchedTokenIndices ?? []}
                 />
               </div>

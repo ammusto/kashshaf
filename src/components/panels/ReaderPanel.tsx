@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import type { Token } from '../../types';
 import { stripHtml, buildCharToTokenMap, getHighlightRanges } from '../../utils/arabicTokenizer';
 import { TokenPopup } from '../ui/TokenPopup';
+import { Toast } from '../ui';
 import { useBooks } from '../../contexts/BooksContext';
 
 interface ReaderPanelProps {
@@ -13,6 +14,8 @@ interface ReaderPanelProps {
   } | null;
   tokens: Token[];
   onNavigate: (direction: number) => void;
+  /** Jump to a specific part_label/page_number. Returns false if no such page exists. */
+  onNavigateToLabel?: (partLabel: string, pageNumber: string) => Promise<boolean>;
   /** Token indices that matched from Tantivy search */
   matchedTokenIndices?: number[];
 }
@@ -141,17 +144,64 @@ function BodyRenderer({
   );
 }
 
-export function ReaderPanel({ currentPage, tokens, onNavigate, matchedTokenIndices = [] }: ReaderPanelProps) {
+export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel, matchedTokenIndices = [] }: ReaderPanelProps) {
   const { booksMap, authorsMap } = useBooks();
   const [selectedToken, setSelectedToken] = useState<Token | null>(null);
   const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
   const firstHighlightRef = useRef<HTMLSpanElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // Editable vol:page inputs — kept in local state so the user can type freely
+  // without triggering re-renders from the parent. Synced from currentPage.meta
+  // whenever the loaded page changes.
+  const [partLabelInput, setPartLabelInput] = useState('');
+  const [pageNumberInput, setPageNumberInput] = useState('');
+  const [navigating, setNavigating] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!currentPage?.meta) {
+      setPartLabelInput('');
+      setPageNumberInput('');
+      return;
+    }
+    const sep = currentPage.meta.indexOf(':');
+    if (sep === -1) {
+      setPartLabelInput(currentPage.meta);
+      setPageNumberInput('');
+    } else {
+      setPartLabelInput(currentPage.meta.slice(0, sep));
+      setPageNumberInput(currentPage.meta.slice(sep + 1));
+    }
+  }, [currentPage?.meta]);
+
   // Look up book metadata from booksMap
   const book = currentPage ? booksMap.get(currentPage.bookId) : null;
   const title = book?.title ?? `Book ${currentPage?.bookId}`;
   const author = book?.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+  // Hide the volume input when the book is single-part. Treat unknown/legacy
+  // (parts undefined or 0) as multi-part so we don't break older metadata.
+  const isMultiPart = book?.parts == null || book.parts > 1;
+
+  const handleGoClick = async () => {
+    if (!onNavigateToLabel || navigating) return;
+    const partLabel = partLabelInput.trim();
+    const pageNumber = pageNumberInput.trim();
+    if (!pageNumber || (isMultiPart && !partLabel)) {
+      setToastMessage(isMultiPart ? 'Enter both volume and page number' : 'Enter a page number');
+      return;
+    }
+    setNavigating(true);
+    try {
+      const ok = await onNavigateToLabel(partLabel, pageNumber);
+      if (!ok) {
+        const label = isMultiPart ? `${partLabel}:${pageNumber}` : pageNumber;
+        setToastMessage(`Page ${label} not found in this text`);
+      }
+    } finally {
+      setNavigating(false);
+    }
+  };
 
   const handleWordClick = (e: React.MouseEvent, token: Token) => {
     e.stopPropagation();
@@ -215,9 +265,54 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, matchedTokenIndic
           </span>
         )}
         {currentPage.meta && (
-          <span className="text-sm text-app-accent font-medium flex-shrink-0 bg-app-accent-light px-3 py-1 rounded">
-            {currentPage.meta}
-          </span>
+          <div className="flex items-center gap-1 flex-shrink-0 bg-app-accent-light rounded px-2 py-1">
+            {isMultiPart && (
+              <>
+                <input
+                  type="text"
+                  value={partLabelInput}
+                  onChange={(e) => setPartLabelInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleGoClick();
+                    }
+                  }}
+                  disabled={!onNavigateToLabel || navigating}
+                  aria-label="Volume"
+                  className="w-12 text-sm text-app-accent font-medium bg-transparent text-center
+                             border-b border-transparent focus:border-app-accent focus:outline-none
+                             disabled:cursor-not-allowed"
+                />
+                <span className="text-sm text-app-accent font-medium">:</span>
+              </>
+            )}
+            <input
+              type="text"
+              value={pageNumberInput}
+              onChange={(e) => setPageNumberInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleGoClick();
+                }
+              }}
+              disabled={!onNavigateToLabel || navigating}
+              aria-label="Page number"
+              className="w-14 text-sm text-app-accent font-medium bg-transparent text-center
+                         border-b border-transparent focus:border-app-accent focus:outline-none
+                         disabled:cursor-not-allowed"
+            />
+            <button
+              onClick={handleGoClick}
+              disabled={!onNavigateToLabel || navigating}
+              className="ml-1 px-2 py-0.5 text-xs font-medium text-app-accent
+                         border border-app-accent rounded hover:bg-app-accent hover:text-white
+                         transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Go
+            </button>
+          </div>
         )}
         <div className="flex gap-2 flex-shrink-0">
           <button
@@ -258,6 +353,15 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, matchedTokenIndic
           token={selectedToken}
           position={popupPosition}
           onClose={handleClosePopup}
+        />
+      )}
+
+      {/* Toast for navigation errors (matches sidebar's wildcard error style) */}
+      {toastMessage && (
+        <Toast
+          message={toastMessage}
+          type="error"
+          onClose={() => setToastMessage(null)}
         />
       )}
     </div>

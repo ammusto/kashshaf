@@ -227,6 +227,13 @@ pub struct SearchEngine {
     schema: Schema,
 }
 
+/// Stable, deterministic ordering for displayed results.
+/// Tantivy already returns docs in death_ah ASC order; this adds reading-order
+/// tiebreakers so results within the same book/author appear vol-then-page ASC.
+fn sort_results_by_reading_order(results: &mut [SearchResult]) {
+    results.sort_by_key(|r| (r.death_ah.unwrap_or(u64::MAX), r.id, r.part_index, r.page_id));
+}
+
 impl SearchEngine {
     pub fn open(index_path: &Path) -> Result<Self> {
         let index = Index::open_in_dir(index_path)?;
@@ -460,8 +467,9 @@ impl SearchEngine {
             results.push(self.extract_result(&searcher, doc_address, 0.0, matched_token_indices)?);
         }
 
-        // Results are already sorted by death_ah from TopDocsByField collector
-        // Apply offset and limit
+        // Refine Tantivy's death_ah ordering with reading-order tiebreakers
+        // (id, part_index, page_id) before pagination.
+        sort_results_by_reading_order(&mut results);
         let results: Vec<SearchResult> = results.into_iter().skip(offset).take(limit).collect();
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -480,6 +488,30 @@ impl SearchEngine {
             (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>),
             (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(part_index_field, part_index), IndexRecordOption::Basic)) as Box<dyn Query>),
             (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(page_id_field, page_id), IndexRecordOption::Basic)) as Box<dyn Query>),
+        ]);
+
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+
+        if let Some((score, doc_address)) = top_docs.into_iter().next() {
+            Ok(Some(self.extract_result(&searcher, doc_address, score, Vec::new())?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Look up a page by its human-readable (part_label, page_number) labels.
+    pub fn get_page_by_label(&self, id: u64, part_label: &str, page_number: &str) -> Result<Option<SearchResult>> {
+        let reader = self.index.reader_builder().reload_policy(ReloadPolicy::OnCommitWithDelay).try_into()?;
+        let searcher = reader.searcher();
+
+        let id_field = self.schema.get_field("text_id").unwrap();
+        let part_label_field = self.schema.get_field("part_label").unwrap();
+        let page_number_field = self.schema.get_field("page_number").unwrap();
+
+        let query = BooleanQuery::new(vec![
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(id_field, id), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_text(part_label_field, part_label), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_text(page_number_field, page_number), IndexRecordOption::Basic)) as Box<dyn Query>),
         ]);
 
         let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
@@ -573,7 +605,7 @@ impl SearchEngine {
             results.push(self.extract_result(&searcher, doc_address, 0.0, matched_token_indices)?);
         }
 
-        // Results already sorted by death_ah from Tantivy - no post-sort needed
+        sort_results_by_reading_order(&mut results);
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let query_display = if !and_terms.is_empty() && !or_terms.is_empty() {
@@ -655,7 +687,7 @@ impl SearchEngine {
             results.push(self.extract_result(&searcher, doc_address, 0.0, matched_positions)?);
         }
 
-        // Results already in death_ah order from Tantivy - no post-sort needed
+        sort_results_by_reading_order(&mut results);
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         Ok(SearchResults { query: format!("{} ~{} {}", term1.query, max_distance, term2.query), mode: term1.mode, total_hits: total_matches, results, elapsed_ms })
@@ -736,7 +768,7 @@ impl SearchEngine {
             results.push(self.extract_result(&searcher, doc_address, 0.0, matched_token_indices)?);
         }
 
-        // Results already sorted by death_ah from Tantivy - no post-sort needed
+        sort_results_by_reading_order(&mut results);
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
         let query_display = patterns_by_form.iter().filter(|p| !p.is_empty()).map(|p| p.first().map(|s| s.as_str()).unwrap_or("")).collect::<Vec<_>>().join(" AND ");
@@ -829,7 +861,7 @@ impl SearchEngine {
             results.push(self.extract_result(&searcher, doc_address, 0.0, matched_token_indices)?);
         }
 
-        // Results already sorted by death_ah from Tantivy - no post-sort needed
+        sort_results_by_reading_order(&mut results);
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         Ok(SearchResults { query: query.to_string(), mode: SearchMode::Surface, total_hits: if query_info.terms.len() > 1 { verified_count } else { total_hits }, results, elapsed_ms })

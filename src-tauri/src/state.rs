@@ -3,8 +3,8 @@
 use crate::cache::TokenCache;
 use crate::downloader::get_settings_db_path;
 use crate::search::SearchEngine;
-use anyhow::Result;
-use std::path::PathBuf;
+use anyhow::{anyhow, Result};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Default token cache capacity (number of pages)
@@ -31,6 +31,20 @@ impl AppState {
         // This allows settings to persist across corpus updates
         let settings_db_path = get_settings_db_path()
             .unwrap_or_else(|_| data_dir.join("settings.db"));
+
+        // metadata.db must exist; rusqlite would otherwise silently create an empty file
+        // and surface "no such table: books" only on the first metadata query.
+        if !metadata_db_path.exists() {
+            return Err(anyhow!(
+                "metadata.db is missing from {}. Re-download the corpus to restore it.",
+                data_dir.display()
+            ));
+        }
+
+        // Both DBs are built together by the data pipeline and share a corpus_version.
+        // Refuse to start if they're out of sync — surfaces install/update mistakes
+        // (e.g., partial download, manual file swap) before they cause weird query errors.
+        verify_corpus_versions_match(&db_path, &metadata_db_path)?;
 
         let search_engine = Arc::new(SearchEngine::open(&index_path)?);
         // TokenCache loads tokens from SQLite corpus.db
@@ -134,5 +148,44 @@ impl AppState {
         )?;
 
         Ok(())
+    }
+}
+
+/// Read corpus_version from a database's db_info table.
+/// Returns None if the table or column is missing (e.g., legacy build).
+fn read_corpus_version(db_path: &Path) -> Result<Option<String>> {
+    let conn = rusqlite::Connection::open(db_path)?;
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='db_info'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !table_exists {
+        return Ok(None);
+    }
+    let version: Option<String> = conn
+        .query_row("SELECT corpus_version FROM db_info LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .ok();
+    Ok(version)
+}
+
+/// Verify that corpus.db and metadata.db were built from the same corpus_version.
+/// If either DB lacks the db_info table, skip the check (legacy build).
+fn verify_corpus_versions_match(corpus_path: &Path, metadata_path: &Path) -> Result<()> {
+    let corpus_version = read_corpus_version(corpus_path)?;
+    let metadata_version = read_corpus_version(metadata_path)?;
+
+    match (corpus_version, metadata_version) {
+        (Some(c), Some(m)) if c != m => Err(anyhow!(
+            "corpus.db and metadata.db are out of sync (corpus={}, metadata={}). \
+             Re-download the corpus to restore alignment.",
+            c,
+            m
+        )),
+        _ => Ok(()),
     }
 }
