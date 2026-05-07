@@ -37,7 +37,8 @@ export function generateBooksCSV(
 ): string {
   const headers = [
     'ID', 'Title', 'Author', 'Author ID', 'Death Year (AH)', 'Century (AH)',
-    'Genre', 'Genre ID', 'Page Count', 'Token Count', 'Corpus', 'Original ID', 'Paginated'
+    'Genre', 'Genre ID', 'Page Count', 'Token Count', 'Corpus', 'Original ID',
+    'Paginated', 'Citation JSON'
   ];
 
   const rows = books.map(book => {
@@ -56,7 +57,8 @@ export function generateBooksCSV(
       escapeCSV(book.token_count),
       escapeCSV(book.corpus),
       escapeCSV(book.original_id),
-      escapeCSV(book.paginated ? 'Yes' : 'No')
+      escapeCSV(book.paginated ? 'Yes' : 'No'),
+      escapeCSV(book.citation_json)
     ].join(',');
   });
 
@@ -161,7 +163,8 @@ export function generateBooksXLSX(
       'Token Count': book.token_count ?? '',
       'Corpus': book.corpus ?? '',
       'Original ID': book.original_id ?? '',
-      'Paginated': book.paginated ? 'Yes' : 'No'
+      'Paginated': book.paginated ? 'Yes' : 'No',
+      'Citation JSON': book.citation_json ?? ''
     };
   });
 

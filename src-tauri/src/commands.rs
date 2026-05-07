@@ -43,13 +43,15 @@ pub struct BookMetadata {
     pub original_id: Option<String>,
     pub paginated: Option<bool>,
     pub tags: Option<String>,        // JSON array as string
-    pub book_meta: Option<String>,   // JSON array as string
-    pub author_meta: Option<String>, // JSON array as string
+    pub book_meta: Option<String>,   // JSON array as string (legacy; superseded by metadata_json)
+    pub author_meta: Option<String>, // JSON array as string (legacy)
     pub in_corpus: Option<bool>,     // Whether book is in the corpus
     pub parts: Option<i64>,          // Number of parts/volumes in the book
+    pub metadata_json: Option<String>,  // Structured metadata blob (replaces book_meta for display)
+    pub citation_json: Option<String>,  // Structured citation data for MLA/Chicago formatting
 }
 
-const BOOK_COLUMNS: &str = "id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count, original_id, paginated, tags, book_meta, author_meta, in_corpus, parts";
+const BOOK_COLUMNS: &str = "id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count, original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json";
 
 fn row_to_book(row: &Row) -> rusqlite::Result<BookMetadata> {
     Ok(BookMetadata {
@@ -69,6 +71,8 @@ fn row_to_book(row: &Row) -> rusqlite::Result<BookMetadata> {
         author_meta: row.get(13)?,
         in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
         parts: row.get(15)?,
+        metadata_json: row.get(16)?,
+        citation_json: row.get(17)?,
     })
 }
 

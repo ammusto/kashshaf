@@ -154,6 +154,8 @@ struct BookMetadata {
     author_meta: Option<String>,
     in_corpus: Option<bool>,
     parts: Option<i64>,
+    metadata_json: Option<String>,
+    citation_json: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -333,7 +335,7 @@ async fn get_all_books(
 
     let mut stmt = conn.prepare(
         "SELECT id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
-                original_id, paginated, tags, book_meta, author_meta, in_corpus, parts
+                original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json
          FROM books ORDER BY death_ah ASC NULLS LAST, id ASC"
     ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
 
@@ -355,6 +357,8 @@ async fn get_all_books(
             author_meta: row.get(13)?,
             in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
             parts: row.get(15)?,
+            metadata_json: row.get(16)?,
+            citation_json: row.get(17)?,
         })
     }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
         .filter_map(|r| r.ok())

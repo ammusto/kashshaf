@@ -78,9 +78,11 @@ export interface BookMetadata {
   paginated?: boolean;
   tags?: string;       // JSON array as string
   book_meta?: string;  // JSON array as string
-  author_meta?: string; // JSON array as string
+  author_meta?: string; // JSON array as string (legacy)
   in_corpus?: boolean; // Whether book is in the corpus
   parts?: number;      // Number of parts/volumes in the book
+  metadata_json?: string;  // Structured metadata blob (replaces book_meta for display)
+  citation_json?: string;  // Structured citation data for MLA/Chicago formatting
 }
 
 // Author lookup table

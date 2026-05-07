@@ -3,6 +3,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { BookMetadata } from '../../types';
 import { useBooks } from '../../contexts/BooksContext';
 import { exportBooks, exportAuthors, type ExportFormat } from '../../utils/exportData';
+import { CitationBlock } from '../shared/CitationBlock';
+import { InfoTooltip } from '../ui';
 
 interface MetadataBrowserProps {
   onClose: () => void;
@@ -36,7 +38,7 @@ function normalizeArabicForSearch(text: string): string {
     .toLowerCase();
 }
 
-const ROW_HEIGHT = 56;
+const ROW_HEIGHT = 64;
 
 export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
   const { books: allBooks, genres, authorsMap, genresMap, loading } = useBooks();
@@ -297,7 +299,6 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
         onClose={onClose}
         onBookClick={(book) => handleBookClick(book, 'authorBooks')}
         authorsMap={authorsMap}
-        genresMap={genresMap}
       />
     );
   }
@@ -400,7 +401,7 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
             className="w-24 h-9 px-3 text-sm rounded-lg border border-app-border-medium
                      focus:outline-none focus:border-app-accent focus:ring-1 focus:ring-app-accent"
           />
-          <span className="text-app-text-tertiary">—</span>
+          <span className="text-app-text-tertiary">-</span>
           <input
             type="number"
             placeholder="To"
@@ -516,7 +517,6 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
                       book={book}
                       onClick={() => handleBookClick(book)}
                       authorsMap={authorsMap}
-                      genresMap={genresMap}
                     />
                   </div>
                 );
@@ -571,29 +571,26 @@ function BookListRow({
   book,
   onClick,
   authorsMap,
-  genresMap,
 }: {
   book: BookMetadata;
   onClick: () => void;
   authorsMap: Map<number, string>;
-  genresMap: Map<number, string>;
 }) {
   const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
-  const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;
 
   return (
     <div
       onClick={onClick}
-      className="h-[56px] px-8 flex items-center gap-4 cursor-pointer border-b border-app-border-light
+      className="h-[64px] px-8 flex items-center gap-4 cursor-pointer border-b border-app-border-light
                hover:bg-app-accent-light transition-colors"
     >
       {/* Title - Author (d. date) */}
       <div className="flex-1 min-w-0 flex items-center gap-3" dir="rtl">
-        <span className="text-xl font-medium text-app-text-primary font-arabic truncate">
+        <span className="text-2xl font-medium text-app-text-primary font-arabic truncate leading-loose">
           {book.title}
         </span>
-        <span className="text-app-text-tertiary">—</span>
-        <span className="text-lg text-app-text-secondary font-arabic truncate">
+        <span className="text-app-text-tertiary"></span>
+        <span className="text-2xl text-app-text-secondary font-arabic truncate leading-loose">
           {authorName || 'Unknown'}
         </span>
         {book.death_ah !== undefined && book.death_ah !== 0 && (
@@ -603,19 +600,12 @@ function BookListRow({
         )}
       </div>
 
-      {/* Genre */}
+      {/* Genre
       {genreName && (
         <span className="text-sm text-app-text-tertiary bg-app-surface-variant px-3 py-1 rounded-lg capitalize flex-shrink-0">
           {genreName}
         </span>
-      )}
-
-      {/* Page count */}
-      {book.page_count !== undefined && (
-        <span className="text-sm text-app-text-tertiary flex-shrink-0">
-          {book.page_count.toLocaleString()} pages
-        </span>
-      )}
+      )} */}
 
       {/* Arrow */}
       <svg className="w-5 h-5 text-app-text-tertiary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -673,11 +663,6 @@ function AuthorListRow({
         )}
       </div>
 
-      {/* Total pages */}
-      <span className="text-sm text-app-text-tertiary flex-shrink-0">
-        {author.totalPages.toLocaleString()} pages
-      </span>
-
       {/* Arrow */}
       <svg className="w-5 h-5 text-app-text-tertiary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -694,7 +679,6 @@ function AuthorBooksView({
   onClose,
   onBookClick,
   authorsMap,
-  genresMap,
 }: {
   author: AuthorInfo;
   books: BookMetadata[];
@@ -702,7 +686,6 @@ function AuthorBooksView({
   onClose: () => void;
   onBookClick: (book: BookMetadata) => void;
   authorsMap: Map<number, string>;
-  genresMap: Map<number, string>;
 }) {
   const listParentRef = useRef<HTMLDivElement>(null);
 
@@ -749,7 +732,6 @@ function AuthorBooksView({
           <span className="text-app-accent font-medium">
             {author.bookCount} {author.bookCount === 1 ? 'book' : 'books'}
           </span>
-          <span>{author.totalPages.toLocaleString()} total pages</span>
         </div>
         {author.genres.size > 0 && (
           <div className="flex gap-2 mt-3">
@@ -789,7 +771,6 @@ function AuthorBooksView({
                   book={book}
                   onClick={() => onBookClick(book)}
                   authorsMap={authorsMap}
-                  genresMap={genresMap}
                 />
               </div>
             );
@@ -826,8 +807,6 @@ function BookDetailView({
   genresMap: Map<number, string>;
 }) {
   const tags = parseJsonArray(book.tags);
-  const bookMeta = parseJsonArray(book.book_meta);
-  const authorMeta = parseJsonArray(book.author_meta);
   const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
   const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;
 
@@ -872,66 +851,262 @@ function BookDetailView({
           </div>
 
           {/* Tags */}
-          {tags.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {tags.map((tag, idx) => (
-                <span
-                  key={idx}
-                  className="px-3 py-1 text-sm bg-app-accent-light text-app-accent rounded-full"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
+          <TagsRow tags={tags} />
 
           {/* Basic Metadata Grid */}
           <div className="bg-white rounded-xl p-6 shadow-app-md">
-            <h2 className="text-lg font-semibold text-app-text-primary mb-4">Basic Information</h2>
+            <h2 className="text-lg font-semibold text-app-text-primary mb-4">Kashshāf Data</h2>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
-              <MetadataField label="Kashshāf ID" value={book.id.toString()} />
-              <MetadataField label="Source Corpus" value={book.corpus || '—'} />
-              <MetadataField label="Source ID" value={book.original_id || '—'} />
-              <MetadataField label="Genre" value={genreName || '—'} capitalize />
-              <MetadataField label="Death" value={book.death_ah !== undefined ? `${book.death_ah} AH` : '—'} />
+              {/* Row 1 */}
               <MetadataField
-                label="Century"
-                value={
-                  book.century_ah !== undefined
-                    ? `${book.century_ah} AH / ${book.century_ah + 6} CE`
-                    : '—'
-                }
+                label="Kashshāf ID"
+                value={book.id.toString()}
+                tooltip="Unique book ID within the Kashshāf corpus"
               />
-              <MetadataField label="Author ID" value={book.author_id?.toString() || '—'} />
-              <MetadataField label="Page Count" value={book.page_count?.toLocaleString() || '—'} />
+              <MetadataField label="Genre" value={genreName || '—'} capitalize />
               <MetadataField label="Token Count" value={book.token_count?.toLocaleString() || '—'} />
+              {/* Row 2 */}
+              <MetadataField
+              label="Author ID" 
+              value={book.author_id?.toString() || '—'}
+              tooltip="Unique author ID within the Kashshāf corpus" />
+              <MetadataField label="Death" value={book.death_ah !== undefined ? `${book.death_ah} AH` : '—'} />
+              <MetadataField label="Page Count" value={book.page_count?.toLocaleString() || '—'} />
+              {/* Row 3 (Source ID spans the remaining 2 columns) */}
+              <MetadataField
+                label="Source Corpus"
+                value={book.corpus || '—'}
+                tooltip="The source corpus from which this text was taken"
+              />
+              <MetadataField
+                label="Source ID"
+                value={book.original_id || '—'}
+                className="md:col-span-2"
+                tooltip="The unique ID of this text within the source corpus"
+              />
             </div>
           </div>
 
-          {/* Book Metadata */}
-          {bookMeta.length > 0 && (
-            <div className="bg-white rounded-xl p-6 shadow-app-md">
-              <h2 className="text-lg font-semibold text-app-text-primary mb-4">Book Details</h2>
-              <div className="space-y-2">
-                {bookMeta.map((item, idx) => (
-                  <MetadataItem key={idx} value={item} />
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Structured metadata from metadata_json */}
+          <MetadataJsonView jsonStr={book.metadata_json} paginated={book.paginated} />
 
-          {/* Author Metadata */}
-          {authorMeta.length > 0 && (
-            <div className="bg-white rounded-xl p-6 shadow-app-md">
-              <h2 className="text-lg font-semibold text-app-text-primary mb-4">Author Details</h2>
-              <div className="space-y-2">
-                {authorMeta.map((item, idx) => (
-                  <MetadataItem key={idx} value={item} />
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Citation */}
+          <div className="bg-white rounded-xl p-6 shadow-app-md">
+            <h2 className="text-lg font-semibold text-app-text-primary mb-4">Citation</h2>
+            <CitationBlock book={book} />
+          </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// metadata_json rendering
+// ---------------------------------------------------------------------------
+
+interface MetadataValue {
+  value_raw: string;
+  source_key?: string;
+}
+
+interface MetadataPerson {
+  name_raw: string;
+  role_raw?: string;
+  source_key?: string;
+}
+
+interface ParsedMetadata {
+  titles?: {
+    main?: MetadataValue[];
+    [key: string]: MetadataValue[] | undefined;
+  };
+  responsible_persons?: {
+    authors?: MetadataPerson[];
+    editors?: MetadataPerson[];
+    translators?: MetadataPerson[];
+    commentators?: MetadataPerson[];
+    arrangers?: MetadataPerson[];
+    reviewers?: MetadataPerson[];
+    transmitters?: MetadataPerson[];
+    preface_by?: MetadataPerson[];
+    transcribers?: MetadataPerson[];
+    digital_encoders?: MetadataPerson[];
+    digital_preparers?: MetadataPerson[];
+    contributors?: MetadataPerson[];
+    [key: string]: MetadataPerson[] | undefined;
+  };
+  publication?: {
+    publishers?: MetadataValue[];
+    places?: MetadataValue[];
+    dates?: MetadataValue[];
+    edition?: MetadataValue[];
+    series?: MetadataValue[];
+    volumes?: MetadataValue[];
+    page_range?: MetadataValue[];
+    page_count_meta?: MetadataValue[];
+    container_titles?: MetadataValue[];
+    [key: string]: MetadataValue[] | undefined;
+  };
+}
+
+function parseMetadataJson(jsonStr?: string | null): ParsedMetadata | null {
+  if (!jsonStr) return null;
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    return parsed as ParsedMetadata;
+  } catch {
+    return null;
+  }
+}
+
+// Subsections of responsible_persons that belong under "Edition Information".
+// Authors live under "Book Metadata" instead, so they're excluded here.
+const EDITION_PERSON_FIELDS: Array<[string, string]> = [
+  ['editors', 'Editors'],
+  ['translators', 'Translators'],
+  ['commentators', 'Commentators'],
+  ['arrangers', 'Arrangers'],
+  ['reviewers', 'Reviewers'],
+  ['transmitters', 'Transmitters'],
+  ['preface_by', 'Preface By'],
+  ['transcribers', 'Transcribers'],
+  ['digital_encoders', 'Digital Encoders'],
+  ['digital_preparers', 'Digital Preparers'],
+  ['contributors', 'Contributors'],
+];
+
+const PUBLICATION_FIELDS: Array<[string, string]> = [
+  ['publishers', 'Publisher'],
+  ['places', 'Place'],
+  ['dates', 'Date'],
+  ['edition', 'Edition'],
+  ['series', 'Series'],
+  ['volumes', 'Volumes'],
+  ['page_range', 'Page Range'],
+  ['page_count_meta', 'Page Count'],
+  ['container_titles', 'Container Title'],
+];
+
+function MetadataJsonView({
+  jsonStr,
+  paginated,
+}: {
+  jsonStr?: string | null;
+  paginated?: boolean;
+}) {
+  const meta = useMemo(() => parseMetadataJson(jsonStr), [jsonStr]);
+  // Render the block whenever there's metadata OR a pagination warning to surface.
+  // The block itself decides whether to bail when there's truly nothing to show.
+  return <BookAndEditionMetadataBlock meta={meta} paginated={paginated} />;
+}
+
+interface MetadataRowSpec {
+  label: string;
+  values: string[];
+}
+
+function BookAndEditionMetadataBlock({
+  meta,
+  paginated,
+}: {
+  meta: ParsedMetadata | null;
+  paginated?: boolean;
+}) {
+  const rows: MetadataRowSpec[] = [];
+
+  if (meta) {
+    // Title (only `titles.main`)
+    pushRow(rows, 'Title', cleanValues(meta.titles?.main));
+
+    // Author (only `responsible_persons.authors`, name_raw only)
+    pushRow(rows, 'Author', cleanNames(meta.responsible_persons?.authors));
+
+    // Publication fields. Each is dropped if every value_raw is blank
+    // (handles the "if Date is blank do not show it" case generically).
+    // Volumes is also pruned: if the only value is "1" (a single-volume work),
+    // there's nothing useful to display, so suppress the row entirely.
+    if (meta.publication) {
+      for (const [key, label] of PUBLICATION_FIELDS) {
+        let values = cleanValues(meta.publication[key]);
+        if (key === 'volumes') {
+          values = values.filter((v) => {
+            const trimmed = v.trim();
+            return trimmed !== '1' && trimmed !== '١';
+          });
+        }
+        pushRow(rows, label, values);
+      }
+    }
+
+    // Non-author responsible persons (name_raw only, no role)
+    if (meta.responsible_persons) {
+      for (const [key, label] of EDITION_PERSON_FIELDS) {
+        pushRow(rows, label, cleanNames(meta.responsible_persons[key]));
+      }
+    }
+  }
+
+  // Only flag pagination as mismatched when paginated is explicitly false.
+  // Undefined/missing means "we don't know," which we don't claim about.
+  const showPaginationWarning = paginated === false;
+
+  if (rows.length === 0 && !showPaginationWarning) return null;
+
+  return (
+    <div className="bg-white rounded-xl p-6 shadow-app-md">
+      <h2 className="text-lg font-semibold text-app-text-primary mb-4">
+        Book and Edition Metadata
+      </h2>
+      {rows.length > 0 && (
+        <div className="space-y-3">
+          {rows.map((row) => (
+            <MetadataRow key={row.label} label={row.label} values={row.values} />
+          ))}
+        </div>
+      )}
+      {showPaginationWarning && (
+        <div
+          className={`text-sm font-medium text-red-600 ${
+            rows.length > 0 ? 'mt-4 pt-4 border-t border-app-border-light' : ''
+          }`}
+        >
+          Kashshāf pagination does not match a printed edition
+        </div>
+      )}
+    </div>
+  );
+}
+
+function pushRow(rows: MetadataRowSpec[], label: string, values: string[]) {
+  if (values.length > 0) {
+    rows.push({ label, values });
+  }
+}
+
+function cleanValues(items: MetadataValue[] | undefined): string[] {
+  if (!items) return [];
+  return items.map((it) => it.value_raw).filter((v) => typeof v === 'string' && v.trim().length > 0);
+}
+
+function cleanNames(items: MetadataPerson[] | undefined): string[] {
+  if (!items) return [];
+  return items.map((p) => p.name_raw).filter((v) => typeof v === 'string' && v.trim().length > 0);
+}
+
+function MetadataRow({ label, values }: { label: string; values: string[] }) {
+  return (
+    <div className="flex flex-col md:flex-row md:gap-4">
+      <div className="text-sm text-app-text-tertiary font-medium md:w-48 md:flex-shrink-0">
+        {label}
+      </div>
+      <div className="flex-1 space-y-1">
+        {values.map((v, i) => (
+          <div key={i} className="text-app-text-primary text-right" dir="rtl">
+            {v}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -941,14 +1116,21 @@ function MetadataField({
   label,
   value,
   capitalize = false,
+  className = '',
+  tooltip,
 }: {
   label: string;
   value: string;
   capitalize?: boolean;
+  className?: string;
+  tooltip?: string;
 }) {
   return (
-    <div>
-      <div className="text-sm text-app-text-tertiary font-medium mb-1">{label}</div>
+    <div className={className}>
+      <div className="text-sm text-app-text-tertiary font-medium mb-1 flex items-center gap-1.5">
+        <span>{label}</span>
+        {tooltip && <InfoTooltip content={tooltip} />}
+      </div>
       <div className={`text-lg text-app-text-primary ${capitalize ? 'capitalize' : ''}`}>
         {value}
       </div>
@@ -956,22 +1138,42 @@ function MetadataField({
   );
 }
 
-// Renders a metadata item, parsing "key: value" format if present
-function MetadataItem({ value }: { value: string }) {
-  const colonIndex = value.indexOf(':');
-  if (colonIndex > 0 && colonIndex < 40) {
-    const key = value.slice(0, colonIndex).trim();
-    const val = value.slice(colonIndex + 1).trim();
-    return (
-      <div className="flex gap-2 py-1.5 border-b border-app-border-light last:border-0">
-        <span className="text-sm text-app-text-tertiary font-medium min-w-[120px]">{key}</span>
-        <span className="text-lg text-app-text-primary" dir="auto">{val}</span>
-      </div>
-    );
-  }
+const TAGS_PREVIEW = 3;
+
+// Tag list with collapse/expand. The first TAGS_PREVIEW tags are always visible;
+// when there are more, an ellipsis chip plus an "Expand" button reveal the rest.
+function TagsRow({ tags }: { tags: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (tags.length === 0) return null;
+
+  const hasMore = tags.length > TAGS_PREVIEW;
+  const visible = expanded || !hasMore ? tags : tags.slice(0, TAGS_PREVIEW);
+
   return (
-    <div className="py-1.5 border-b border-app-border-light last:border-0">
-      <span className="text-lg text-app-text-primary" dir="auto">{value}</span>
+    <div className="flex flex-wrap items-center gap-2">
+      {visible.map((tag, idx) => (
+        <span
+          key={idx}
+          className="px-3 py-1 text-sm bg-app-accent-light text-app-accent rounded-full"
+        >
+          {tag}
+        </span>
+      ))}
+      {hasMore && !expanded && (
+        <span className="px-3 py-1 text-sm bg-app-accent-light text-app-accent rounded-full">
+          …
+        </span>
+      )}
+      {hasMore && (
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="px-3 py-1 text-sm font-medium text-app-accent border border-app-accent
+                     rounded-full hover:bg-app-accent hover:text-white transition-colors"
+        >
+          {expanded ? 'Collapse' : 'Expand'}
+        </button>
+      )}
     </div>
   );
 }
+

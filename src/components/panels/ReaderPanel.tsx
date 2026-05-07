@@ -4,6 +4,7 @@ import { stripHtml, buildCharToTokenMap, getHighlightRanges } from '../../utils/
 import { TokenPopup } from '../ui/TokenPopup';
 import { Toast } from '../ui';
 import { useBooks } from '../../contexts/BooksContext';
+import { CitationBlock } from '../shared/CitationBlock';
 
 interface ReaderPanelProps {
   currentPage: {
@@ -158,6 +159,7 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
   const [pageNumberInput, setPageNumberInput] = useState('');
   const [navigating, setNavigating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showCite, setShowCite] = useState(false);
 
   useEffect(() => {
     if (!currentPage?.meta) {
@@ -252,10 +254,31 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
     return <div className="h-full bg-white" />;
   }
 
+  // Derive vol/page from the loaded meta string for citation purposes.
+  // We use the parsed meta (not the editable inputs) so the citation always
+  // reflects the page actually displayed, not whatever the user has typed.
+  const [citeVolume, citePageNumber] = (() => {
+    const meta = currentPage?.meta ?? '';
+    if (!meta) return ['', ''];
+    const sep = meta.indexOf(':');
+    if (sep === -1) return ['', meta];
+    return [meta.slice(0, sep), meta.slice(sep + 1)];
+  })();
+
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Header */}
       <div className="h-20 border-b border-app-border-light px-8 flex items-center gap-4 flex-shrink-0 bg-app-surface">
+        <button
+          onClick={() => setShowCite(true)}
+          disabled={!book}
+          className="px-3 py-2 bg-app-surface-variant rounded-md text-xs font-medium
+                     hover:bg-app-accent-light hover:text-app-accent transition-colors
+                     border border-app-border-light flex-shrink-0
+                     disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Cite
+        </button>
         <h2 className="font-semibold text-app-text-primary flex-1 truncate font-arabic text-xl" dir="rtl">
           {title}{author ? ` - ${author}` : ''}
         </h2>
@@ -354,6 +377,40 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
           position={popupPosition}
           onClose={handleClosePopup}
         />
+      )}
+
+      {/* Citation modal */}
+      {showCite && book && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+          onClick={() => setShowCite(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-[600px] max-w-[90vw]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-app-border-light">
+              <h2 className="text-lg font-semibold text-app-text-primary">Citation</h2>
+              <button
+                onClick={() => setShowCite(false)}
+                aria-label="Close"
+                className="p-2 rounded-lg hover:bg-app-surface-variant transition-colors"
+              >
+                <svg className="w-5 h-5 text-app-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-6 py-5">
+              <CitationBlock
+                book={book}
+                volume={citeVolume}
+                page={citePageNumber}
+                withPageRef={true}
+              />
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Toast for navigation errors (matches sidebar's wildcard error style) */}
