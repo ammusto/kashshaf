@@ -70,6 +70,135 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
   const scrollPositionRef = useRef<number>(0);
   const listParentRef = useRef<HTMLDivElement>(null);
 
+  // Texts table column widths (percentages summing to 100). User can drag the
+  // dividers between header cells to redistribute width between adjacent cols.
+  const [colWidths, setColWidths] = useState({
+    title: 40,
+    author: 30,
+    death: 12,
+    genre: 18,
+  });
+  const tableRef = useRef<HTMLDivElement>(null);
+
+  // Sort state for the texts table. Default matches the existing on-load
+  // ordering (death asc, NULLs last) so behavior is unchanged until a header
+  // is clicked.
+  type SortKey = 'title' | 'author' | 'death' | 'genre';
+  const [sortKey, setSortKey] = useState<SortKey>('death');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const handleSortClick = useCallback((key: SortKey) => {
+    setSortKey((prevKey) => {
+      if (prevKey === key) {
+        // Same column clicked again — toggle direction
+        setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+        return prevKey;
+      }
+      // New column — reset to ascending
+      setSortDir('asc');
+      return key;
+    });
+  }, []);
+
+  // Authors table column widths (percentages) and resize / sort state.
+  const [authorColWidths, setAuthorColWidths] = useState({
+    name: 40,
+    death: 12,
+    books: 13,
+    genres: 35,
+  });
+  const authorTableRef = useRef<HTMLDivElement>(null);
+
+  const [authorSortKey, setAuthorSortKey] = useState<AuthorSortKey>('death');
+  const [authorSortDir, setAuthorSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const startAuthorResize = useCallback(
+    (
+      e: React.MouseEvent,
+      leftKey: keyof typeof authorColWidths,
+      rightKey: keyof typeof authorColWidths
+    ) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const containerWidth = authorTableRef.current?.offsetWidth ?? 1000;
+      const startLeft = authorColWidths[leftKey];
+      const startRight = authorColWidths[rightKey];
+      const totalBudget = startLeft + startRight;
+      const MIN_PCT = 5;
+
+      const onMove = (ev: MouseEvent) => {
+        const deltaPx = ev.clientX - startX;
+        const deltaPct = (deltaPx / containerWidth) * 100;
+        const newLeft = Math.max(MIN_PCT, Math.min(totalBudget - MIN_PCT, startLeft - deltaPct));
+        const newRight = totalBudget - newLeft;
+        setAuthorColWidths((prev) => ({ ...prev, [leftKey]: newLeft, [rightKey]: newRight }));
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+    [authorColWidths]
+  );
+
+  const handleAuthorSortClick = useCallback((key: AuthorSortKey) => {
+    setAuthorSortKey((prev) => {
+      if (prev === key) {
+        setAuthorSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+        return prev;
+      }
+      setAuthorSortDir('asc');
+      return key;
+    });
+  }, []);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent, leftKey: keyof typeof colWidths, rightKey: keyof typeof colWidths) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const containerWidth = tableRef.current?.offsetWidth ?? 1000;
+
+      // Capture starting widths so the resize is computed against an anchor,
+      // not iteratively (which would drift on rapid moves).
+      const startLeft = colWidths[leftKey];
+      const startRight = colWidths[rightKey];
+      const totalBudget = startLeft + startRight;
+      const MIN_PCT = 5;
+
+      const onMove = (ev: MouseEvent) => {
+        const deltaPx = ev.clientX - startX;
+        const deltaPct = (deltaPx / containerWidth) * 100;
+        // RTL convention: dragging the divider rightward grows the visually-right
+        // column, which in DOM order is the leftKey. Negate the screen-space
+        // delta so the LeftKey grows when dragging right.
+        const newLeft = Math.max(MIN_PCT, Math.min(totalBudget - MIN_PCT, startLeft - deltaPct));
+        const newRight = totalBudget - newLeft;
+        setColWidths((prev) => ({ ...prev, [leftKey]: newLeft, [rightKey]: newRight }));
+      };
+
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+    [colWidths]
+  );
+
   // Close dropdowns when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -98,6 +227,24 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
       listParentRef.current.scrollTop = 0;
     }
   }, [activeTab]);
+
+  // Reset scroll to top whenever filters or sort change. Without this, the
+  // virtualizer's window can land beyond the new (smaller) array length and
+  // briefly render stale rows from the previous render.
+  useEffect(() => {
+    if (listParentRef.current) {
+      listParentRef.current.scrollTop = 0;
+    }
+  }, [
+    searchQuery,
+    deathAhMin,
+    deathAhMax,
+    selectedGenreIds,
+    sortKey,
+    sortDir,
+    authorSortKey,
+    authorSortDir,
+  ]);
 
   const toggleGenre = useCallback((genreId: number) => {
     setSelectedGenreIds(prev => {
@@ -243,18 +390,33 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
     }
   }, [activeTab, filteredBooks, filteredAuthors, authorsMap, genresMap]);
 
+  // Sort filtered books by the active sort column. Done as a memo so the
+  // virtualizer stays stable when the underlying data hasn't changed.
+  const sortedFilteredBooks = useMemo(() => {
+    const out = [...filteredBooks];
+    out.sort((a, b) => compareBooks(a, b, sortKey, sortDir, authorsMap, genresMap));
+    return out;
+  }, [filteredBooks, sortKey, sortDir, authorsMap, genresMap]);
+
   // Text virtualizer
   const textVirtualizer = useVirtualizer({
-    count: filteredBooks.length,
+    count: sortedFilteredBooks.length,
     getScrollElement: () => listParentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 15,
     enabled: activeTab === 'texts',
   });
 
+  // Sort filtered authors by the active author-sort column.
+  const sortedFilteredAuthors = useMemo(() => {
+    const out = [...filteredAuthors];
+    out.sort((a, b) => compareAuthors(a, b, authorSortKey, authorSortDir));
+    return out;
+  }, [filteredAuthors, authorSortKey, authorSortDir]);
+
   // Author virtualizer
   const authorVirtualizer = useVirtualizer({
-    count: filteredAuthors.length,
+    count: sortedFilteredAuthors.length,
     getScrollElement: () => listParentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 15,
@@ -299,6 +461,12 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
         onClose={onClose}
         onBookClick={(book) => handleBookClick(book, 'authorBooks')}
         authorsMap={authorsMap}
+        genresMap={genresMap}
+        colWidths={colWidths}
+        startResize={startResize}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={handleSortClick}
       />
     );
   }
@@ -461,7 +629,7 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
             placeholder={activeTab === 'texts' ? 'Title or author...' : 'Author name...'}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="flex-1 max-w-md h-9 px-4 text-sm rounded-lg border border-app-border-medium
+            className="flex-1 h-9 px-4 text-sm rounded-lg border border-app-border-medium
                      focus:outline-none focus:border-app-accent focus:ring-1 focus:ring-app-accent
                      text-right font-arabic"
           />
@@ -479,85 +647,114 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
         )}
       </div>
 
-      {/* List View */}
-      <div ref={listParentRef} className="flex-1 overflow-auto bg-white">
+      {/* List View — keying on activeTab forces a clean remount when switching
+          tabs so the previous tab's virtualized rows can't linger. */}
+      <div ref={listParentRef} key={`tab-${activeTab}`} className="flex-1 overflow-auto bg-white">
         {loading ? (
           <div className="flex items-center justify-center h-40">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-app-accent"></div>
           </div>
         ) : activeTab === 'texts' ? (
           // Text Browser List
-          filteredBooks.length === 0 ? (
+          sortedFilteredBooks.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 text-app-text-tertiary text-lg">
               No books match your filters
             </div>
           ) : (
-            <div
-              style={{
-                height: `${textVirtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative',
-              }}
-            >
-              {textVirtualizer.getVirtualItems().map((virtualRow) => {
-                const book = filteredBooks[virtualRow.index];
-                return (
-                  <div
-                    key={book.id}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <BookListRow
-                      book={book}
-                      onClick={() => handleBookClick(book)}
-                      authorsMap={authorsMap}
-                    />
-                  </div>
-                );
-              })}
+            <div ref={tableRef} className="relative">
+              <TextsTableHeader
+                colWidths={colWidths}
+                startResize={startResize}
+                sortKey={sortKey}
+                sortDir={sortDir}
+                onSort={handleSortClick}
+              />
+              <div
+                // Content-aware key: when the filtered/sorted list identity
+                // changes, fully remount the inner container so the previous
+                // render's absolutely-positioned rows can't linger.
+                key={`texts-${sortedFilteredBooks.length}-${sortKey}-${sortDir}-${searchQuery}-${[...selectedGenreIds].sort().join(',')}-${deathAhMin}-${deathAhMax}`}
+                style={{
+                  height: `${textVirtualizer.getTotalSize()}px`,
+                  width: '100%',
+                  position: 'relative',
+                }}
+              >
+                {textVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const book = sortedFilteredBooks[virtualRow.index];
+                  if (!book) return null;
+                  return (
+                    <div
+                      key={book.id}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: `${virtualRow.size}px`,
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    >
+                      <BookListRow
+                        book={book}
+                        onClick={() => handleBookClick(book)}
+                        authorsMap={authorsMap}
+                        genresMap={genresMap}
+                        colWidths={colWidths}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )
         ) : (
           // Author Browser List
-          filteredAuthors.length === 0 ? (
+          sortedFilteredAuthors.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 text-app-text-tertiary text-lg">
               No authors match your filters
             </div>
           ) : (
-            <div
-              style={{
-                height: `${authorVirtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative',
-              }}
-            >
-              {authorVirtualizer.getVirtualItems().map((virtualRow) => {
-                const author = filteredAuthors[virtualRow.index];
-                return (
-                  <div
-                    key={author.author}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <AuthorListRow
-                      author={author}
-                      onClick={() => handleAuthorClick(author)}
-                    />
-                  </div>
-                );
-              })}
+            <div ref={authorTableRef} className="relative">
+              <AuthorTableHeader
+                colWidths={authorColWidths}
+                startResize={startAuthorResize}
+                sortKey={authorSortKey}
+                sortDir={authorSortDir}
+                onSort={handleAuthorSortClick}
+              />
+              <div
+                key={`authors-${sortedFilteredAuthors.length}-${authorSortKey}-${authorSortDir}-${searchQuery}-${[...selectedGenreIds].sort().join(',')}-${deathAhMin}-${deathAhMax}`}
+                style={{
+                  height: `${authorVirtualizer.getTotalSize()}px`,
+                  width: '100%',
+                  position: 'relative',
+                }}
+              >
+                {authorVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const author = sortedFilteredAuthors[virtualRow.index];
+                  if (!author) return null;
+                  return (
+                    <div
+                      key={author.author_id ?? `unknown-${author.author}`}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: `${virtualRow.size}px`,
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    >
+                      <AuthorListRow
+                        author={author}
+                        onClick={() => handleAuthorClick(author)}
+                        colWidths={authorColWidths}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )
         )}
@@ -566,107 +763,411 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
   );
 }
 
-// Book row in list view
-function BookListRow({
-  book,
-  onClick,
-  authorsMap,
+interface TextsColWidths {
+  title: number;
+  author: number;
+  death: number;
+  genre: number;
+}
+
+type TextsSortKey = 'title' | 'author' | 'death' | 'genre';
+type TextsSortDir = 'asc' | 'desc';
+
+// Sticky table header with 4 columns and drag-resize handles between adjacent
+// header cells. The same colWidths are passed to every BookListRow so cells
+// stay aligned with the header.
+function TextsTableHeader({
+  colWidths,
+  startResize,
+  sortKey,
+  sortDir,
+  onSort,
 }: {
-  book: BookMetadata;
-  onClick: () => void;
-  authorsMap: Map<number, string>;
+  colWidths: TextsColWidths;
+  startResize: (
+    e: React.MouseEvent,
+    leftKey: keyof TextsColWidths,
+    rightKey: keyof TextsColWidths
+  ) => void;
+  sortKey: TextsSortKey;
+  sortDir: TextsSortDir;
+  onSort: (key: TextsSortKey) => void;
 }) {
-  const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+  // RTL: cumulative widths from the right edge map to "left:" offsets from the
+  // container's left edge as (100 - cumulative)%.
+  const handleAuthorPos = 100 - colWidths.title;
+  const handleDeathPos = 100 - colWidths.title - colWidths.author;
+  const handleGenrePos = 100 - colWidths.title - colWidths.author - colWidths.death;
 
   return (
-    <div
-      onClick={onClick}
-      className="h-[64px] px-8 flex items-center gap-4 cursor-pointer border-b border-app-border-light
-               hover:bg-app-accent-light transition-colors"
-    >
-      {/* Title - Author (d. date) */}
-      <div className="flex-1 min-w-0 flex items-center gap-3" dir="rtl">
-        <span className="text-2xl font-medium text-app-text-primary font-arabic truncate leading-loose">
-          {book.title}
-        </span>
-        <span className="text-app-text-tertiary"></span>
-        <span className="text-2xl text-app-text-secondary font-arabic truncate leading-loose">
-          {authorName || 'Unknown'}
-        </span>
-        {book.death_ah !== undefined && book.death_ah !== 0 && (
-          <span className="text-sm text-app-text-tertiary whitespace-nowrap">
-            (ت {book.death_ah})
-          </span>
-        )}
+    <div className="sticky top-0 z-10 bg-app-surface border-b border-app-border-light">
+      <div
+        dir="rtl"
+        className="flex h-10 px-8 text-sm font-semibold text-app-text-tertiary select-none"
+      >
+        <HeaderCell
+          width={colWidths.title}
+          label="Title"
+          sortKey="title"
+          activeSort={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+        />
+        <HeaderCell
+          width={colWidths.author}
+          label="Author"
+          sortKey="author"
+          activeSort={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+        />
+        <HeaderCell
+          width={colWidths.death}
+          label="Death"
+          sortKey="death"
+          activeSort={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+        />
+        <HeaderCell
+          width={colWidths.genre}
+          label="Genre"
+          sortKey="genre"
+          activeSort={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+        />
       </div>
-
-      {/* Genre
-      {genreName && (
-        <span className="text-sm text-app-text-tertiary bg-app-surface-variant px-3 py-1 rounded-lg capitalize flex-shrink-0">
-          {genreName}
-        </span>
-      )} */}
-
-      {/* Arrow */}
-      <svg className="w-5 h-5 text-app-text-tertiary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-      </svg>
+      {/* Drag handles overlay; absolute positioning relative to header bar */}
+      <ResizeHandle leftPercent={handleAuthorPos} onMouseDown={(e) => startResize(e, 'title', 'author')} />
+      <ResizeHandle leftPercent={handleDeathPos} onMouseDown={(e) => startResize(e, 'author', 'death')} />
+      <ResizeHandle leftPercent={handleGenrePos} onMouseDown={(e) => startResize(e, 'death', 'genre')} />
     </div>
   );
 }
 
-// Author row in list view
-function AuthorListRow({
-  author,
-  onClick,
+function HeaderCell<K extends string>({
+  width,
+  label,
+  sortKey,
+  activeSort,
+  sortDir,
+  onSort,
 }: {
-  author: AuthorInfo;
-  onClick: () => void;
+  width: number;
+  label: string;
+  sortKey: K;
+  activeSort: K;
+  sortDir: TextsSortDir;
+  onSort: (key: K) => void;
 }) {
-  const genresList = Array.from(author.genres).slice(0, 3);
-  const moreGenres = author.genres.size > 3 ? author.genres.size - 3 : 0;
+  const isActive = activeSort === sortKey;
+  const arrow = !isActive ? '' : sortDir === 'asc' ? '▲' : '▼';
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      style={{ width: `${width}%` }}
+      className={`px-3 flex items-center justify-center gap-1 truncate
+                  cursor-pointer hover:text-app-accent transition-colors
+                  ${isActive ? 'text-app-accent' : ''}`}
+      dir="auto"
+    >
+      <span className="truncate">{label}</span>
+      {arrow && <span className="text-[10px] flex-shrink-0">{arrow}</span>}
+    </button>
+  );
+}
+
+// Shared sort comparator so the texts list and the author drilldown agree.
+function compareBooks(
+  a: BookMetadata,
+  b: BookMetadata,
+  sortKey: TextsSortKey,
+  sortDir: TextsSortDir,
+  authorsMap: Map<number, string>,
+  genresMap: Map<number, string>
+): number {
+  let cmp = 0;
+  if (sortKey === 'title') {
+    cmp = (a.title || '').localeCompare(b.title || '', 'ar');
+  } else if (sortKey === 'author') {
+    const aName = a.author_id !== undefined ? authorsMap.get(a.author_id) ?? '' : '';
+    const bName = b.author_id !== undefined ? authorsMap.get(b.author_id) ?? '' : '';
+    cmp = aName.localeCompare(bName, 'ar');
+  } else if (sortKey === 'death') {
+    const aDeath = a.death_ah ?? Infinity;
+    const bDeath = b.death_ah ?? Infinity;
+    if (aDeath === bDeath) {
+      cmp = 0;
+    } else if (!isFinite(aDeath)) {
+      return 1;
+    } else if (!isFinite(bDeath)) {
+      return -1;
+    } else {
+      cmp = aDeath - bDeath;
+    }
+  } else if (sortKey === 'genre') {
+    const aGenre = a.genre_id !== undefined ? genresMap.get(a.genre_id) ?? '' : '';
+    const bGenre = b.genre_id !== undefined ? genresMap.get(b.genre_id) ?? '' : '';
+    cmp = aGenre.localeCompare(bGenre, 'ar');
+  }
+  return sortDir === 'asc' ? cmp : -cmp;
+}
+
+type AuthorSortKey = 'name' | 'death' | 'books' | 'genres';
+
+interface AuthorColWidths {
+  name: number;
+  death: number;
+  books: number;
+  genres: number;
+}
+
+// Sort comparator for the authors table. Same NULL-handling for death as
+// compareBooks: unknown deaths always sink to the bottom regardless of
+// direction.
+function compareAuthors(
+  a: AuthorInfo,
+  b: AuthorInfo,
+  sortKey: AuthorSortKey,
+  sortDir: TextsSortDir
+): number {
+  let cmp = 0;
+  if (sortKey === 'name') {
+    cmp = a.author.localeCompare(b.author, 'ar');
+  } else if (sortKey === 'death') {
+    const aDeath = a.death_ah ?? Infinity;
+    const bDeath = b.death_ah ?? Infinity;
+    if (aDeath === bDeath) {
+      cmp = 0;
+    } else if (!isFinite(aDeath)) {
+      return 1;
+    } else if (!isFinite(bDeath)) {
+      return -1;
+    } else {
+      cmp = aDeath - bDeath;
+    }
+  } else if (sortKey === 'books') {
+    cmp = a.bookCount - b.bookCount;
+  } else if (sortKey === 'genres') {
+    // Sort by the genre listing string (alphabetical of joined genres)
+    const aGenres = Array.from(a.genres).sort().join(', ');
+    const bGenres = Array.from(b.genres).sort().join(', ');
+    cmp = aGenres.localeCompare(bGenres, 'ar');
+  }
+  return sortDir === 'asc' ? cmp : -cmp;
+}
+
+function ResizeHandle({
+  leftPercent,
+  onMouseDown,
+}: {
+  leftPercent: number;
+  onMouseDown: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{ left: `${leftPercent}%` }}
+      className="absolute top-0 bottom-0 -translate-x-1/2 w-2 cursor-col-resize
+                 group flex items-center justify-center"
+    >
+      {/* Visible track on hover */}
+      <div className="w-px h-full bg-app-border-medium group-hover:bg-app-accent transition-colors" />
+    </div>
+  );
+}
+
+// Book row in list view (4 columns aligned with the table header)
+function BookListRow({
+  book,
+  onClick,
+  authorsMap,
+  genresMap,
+  colWidths,
+}: {
+  book: BookMetadata;
+  onClick: () => void;
+  authorsMap: Map<number, string>;
+  genresMap: Map<number, string>;
+  colWidths: TextsColWidths;
+}) {
+  const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
+  const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;
+  const death =
+    book.death_ah !== undefined && book.death_ah !== 0 ? `${book.death_ah} AH` : '';
 
   return (
     <div
       onClick={onClick}
-      className="h-[56px] px-8 flex items-center gap-4 cursor-pointer border-b border-app-border-light
-               hover:bg-app-accent-light transition-colors"
+      className="h-[64px] px-8 flex items-center cursor-pointer border-b border-app-border-light
+                 hover:bg-app-accent-light transition-colors"
+      dir="rtl"
     >
-      {/* Author name (d. date) */}
-      <div className="flex-1 min-w-0 flex items-center gap-3" dir="rtl">
-        <span className="text-xl font-medium text-app-text-primary font-arabic truncate">
-          {author.author}
-        </span>
-        {author.death_ah !== undefined && author.death_ah !== 0 && (
-          <span className="text-sm text-app-text-tertiary whitespace-nowrap">
-            (ت {author.death_ah})
-          </span>
-        )}
+      <BookCell width={colWidths.title} arabic>
+        {book.title}
+      </BookCell>
+      <BookCell width={colWidths.author} arabic muted>
+        {authorName || 'Unknown'}
+      </BookCell>
+      <BookCell width={colWidths.death}>{death || '—'}</BookCell>
+      <BookCell width={colWidths.genre} capitalize>
+        {genreName || '—'}
+      </BookCell>
+    </div>
+  );
+}
+
+function BookCell({
+  width,
+  arabic,
+  muted,
+  capitalize,
+  children,
+}: {
+  width: number;
+  arabic?: boolean;
+  muted?: boolean;
+  capitalize?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{ width: `${width}%` }}
+      className={`px-3 truncate ${arabic ? 'text-2xl font-arabic leading-loose' : 'text-base'} ${
+        muted ? 'text-app-text-secondary' : 'text-app-text-primary'
+      } ${capitalize ? 'capitalize' : ''}`}
+      dir="auto"
+    >
+      {children}
+    </div>
+  );
+}
+
+// Sticky table header for the authors browser. Mirrors TextsTableHeader but
+// with the four authors-table columns and a generic-typed HeaderCell.
+function AuthorTableHeader({
+  colWidths,
+  startResize,
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  colWidths: AuthorColWidths;
+  startResize: (
+    e: React.MouseEvent,
+    leftKey: keyof AuthorColWidths,
+    rightKey: keyof AuthorColWidths
+  ) => void;
+  sortKey: AuthorSortKey;
+  sortDir: TextsSortDir;
+  onSort: (key: AuthorSortKey) => void;
+}) {
+  // RTL: positions are computed as 100 - cumulative-from-right.
+  const handleDeathPos = 100 - colWidths.name;
+  const handleBooksPos = 100 - colWidths.name - colWidths.death;
+  const handleGenresPos = 100 - colWidths.name - colWidths.death - colWidths.books;
+
+  return (
+    <div className="sticky top-0 z-10 bg-app-surface border-b border-app-border-light">
+      <div
+        dir="rtl"
+        className="flex h-10 px-8 text-sm font-semibold text-app-text-tertiary select-none"
+      >
+        <HeaderCell
+          width={colWidths.name}
+          label="Name"
+          sortKey="name"
+          activeSort={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+        />
+        <HeaderCell
+          width={colWidths.death}
+          label="Death"
+          sortKey="death"
+          activeSort={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+        />
+        <HeaderCell
+          width={colWidths.books}
+          label="# of Books"
+          sortKey="books"
+          activeSort={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+        />
+        <HeaderCell
+          width={colWidths.genres}
+          label="Genres"
+          sortKey="genres"
+          activeSort={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+        />
       </div>
+      <ResizeHandle leftPercent={handleDeathPos} onMouseDown={(e) => startResize(e, 'name', 'death')} />
+      <ResizeHandle leftPercent={handleBooksPos} onMouseDown={(e) => startResize(e, 'death', 'books')} />
+      <ResizeHandle leftPercent={handleGenresPos} onMouseDown={(e) => startResize(e, 'books', 'genres')} />
+    </div>
+  );
+}
 
-      {/* Book count */}
-      <span className="text-sm text-app-accent font-medium flex-shrink-0">
-        {author.bookCount} {author.bookCount === 1 ? 'book' : 'books'}
-      </span>
+// Author row in list view (4 columns aligned with the author table header)
+function AuthorListRow({
+  author,
+  onClick,
+  colWidths,
+}: {
+  author: AuthorInfo;
+  onClick: () => void;
+  colWidths: AuthorColWidths;
+}) {
+  const death =
+    author.death_ah !== undefined && author.death_ah !== 0 ? `${author.death_ah} AH` : '—';
+  const genresText = Array.from(author.genres).join(', ') || '—';
 
-      {/* Genres */}
-      <div className="flex gap-1 flex-shrink-0">
-        {genresList.map(genre => (
-          <span key={genre} className="text-xs text-app-text-tertiary bg-app-surface-variant px-2 py-0.5 rounded capitalize">
-            {genre}
-          </span>
-        ))}
-        {moreGenres > 0 && (
-          <span className="text-xs text-app-text-tertiary bg-app-surface-variant px-2 py-0.5 rounded">
-            +{moreGenres}
-          </span>
-        )}
-      </div>
+  return (
+    <div
+      onClick={onClick}
+      className="h-[64px] px-8 flex items-center cursor-pointer border-b border-app-border-light
+                 hover:bg-app-accent-light transition-colors"
+      dir="rtl"
+    >
+      <AuthorCell width={colWidths.name} arabic>
+        {author.author}
+      </AuthorCell>
+      <AuthorCell width={colWidths.death}>{death}</AuthorCell>
+      <AuthorCell width={colWidths.books}>{author.bookCount}</AuthorCell>
+      <AuthorCell width={colWidths.genres} capitalize>
+        {genresText}
+      </AuthorCell>
+    </div>
+  );
+}
 
-      {/* Arrow */}
-      <svg className="w-5 h-5 text-app-text-tertiary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-      </svg>
+function AuthorCell({
+  width,
+  arabic,
+  capitalize,
+  children,
+}: {
+  width: number;
+  arabic?: boolean;
+  capitalize?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{ width: `${width}%` }}
+      className={`px-3 truncate text-app-text-primary ${
+        arabic ? 'text-2xl font-arabic leading-loose' : 'text-base'
+      } ${capitalize ? 'capitalize' : ''}`}
+      dir="auto"
+    >
+      {children}
     </div>
   );
 }
@@ -679,6 +1180,12 @@ function AuthorBooksView({
   onClose,
   onBookClick,
   authorsMap,
+  genresMap,
+  colWidths,
+  startResize,
+  sortKey,
+  sortDir,
+  onSort,
 }: {
   author: AuthorInfo;
   books: BookMetadata[];
@@ -686,11 +1193,29 @@ function AuthorBooksView({
   onClose: () => void;
   onBookClick: (book: BookMetadata) => void;
   authorsMap: Map<number, string>;
+  genresMap: Map<number, string>;
+  colWidths: TextsColWidths;
+  startResize: (
+    e: React.MouseEvent,
+    leftKey: keyof TextsColWidths,
+    rightKey: keyof TextsColWidths
+  ) => void;
+  sortKey: TextsSortKey;
+  sortDir: TextsSortDir;
+  onSort: (key: TextsSortKey) => void;
 }) {
   const listParentRef = useRef<HTMLDivElement>(null);
 
+  // Apply the same sort that's used by the main texts list, so the per-author
+  // drilldown stays consistent when the user toggles a header.
+  const sortedBooks = useMemo(() => {
+    const out = [...books];
+    out.sort((a, b) => compareBooks(a, b, sortKey, sortDir, authorsMap, genresMap));
+    return out;
+  }, [books, sortKey, sortDir, authorsMap, genresMap]);
+
   const virtualizer = useVirtualizer({
-    count: books.length,
+    count: sortedBooks.length,
     getScrollElement: () => listParentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 15,
@@ -746,35 +1271,47 @@ function AuthorBooksView({
 
       {/* Books List */}
       <div ref={listParentRef} className="flex-1 overflow-auto bg-white">
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            width: '100%',
-            position: 'relative',
-          }}
-        >
-          {virtualizer.getVirtualItems().map((virtualRow) => {
-            const book = books[virtualRow.index];
-            return (
-              <div
-                key={book.id}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-              >
-                <BookListRow
-                  book={book}
-                  onClick={() => onBookClick(book)}
-                  authorsMap={authorsMap}
-                />
-              </div>
-            );
-          })}
+        <div className="relative">
+          <TextsTableHeader
+            colWidths={colWidths}
+            startResize={startResize}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={onSort}
+          />
+          <div
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              width: '100%',
+              position: 'relative',
+            }}
+          >
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const book = sortedBooks[virtualRow.index];
+              if (!book) return null;
+              return (
+                <div
+                  key={book.id}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <BookListRow
+                    book={book}
+                    onClick={() => onBookClick(book)}
+                    authorsMap={authorsMap}
+                    genresMap={genresMap}
+                    colWidths={colWidths}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -793,16 +1330,21 @@ function parseJsonArray(jsonStr?: string): string[] {
 }
 
 // Book detail view
-function BookDetailView({
+export function BookDetailView({
   book,
   onBack,
+  backLabel = 'Back to List',
   onClose,
   authorsMap,
   genresMap,
 }: {
   book: BookMetadata;
-  onBack: () => void;
-  onClose: () => void;
+  /** When omitted, the back button is hidden. */
+  onBack?: () => void;
+  /** Custom label for the back button. Defaults to "Back to List". */
+  backLabel?: string;
+  /** When omitted, the close (×) button is hidden. */
+  onClose?: () => void;
   authorsMap: Map<number, string>;
   genresMap: Map<number, string>;
 }) {
@@ -814,24 +1356,28 @@ function BookDetailView({
     <div className="fixed inset-0 bg-app-bg z-50 flex flex-col">
       {/* Header */}
       <div className="px-8 py-5 border-b border-app-border-light bg-white flex items-center gap-4 shadow-sm">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-2 px-4 py-2 text-app-text-secondary hover:text-app-accent
-                   hover:bg-app-accent-light rounded-lg transition-colors"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          <span className="font-medium">Back to List</span>
-        </button>
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 px-4 py-2 text-app-text-secondary hover:text-app-accent
+                     hover:bg-app-accent-light rounded-lg transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            <span className="font-medium">{backLabel}</span>
+          </button>
+        )}
         <div className="flex-1" />
-        <button
-          onClick={onClose}
-          className="w-10 h-10 bg-app-surface-variant rounded-lg hover:bg-red-50 hover:text-red-600
-                   flex items-center justify-center text-app-text-secondary text-xl transition-colors"
-        >
-          ×
-        </button>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="w-10 h-10 bg-app-surface-variant rounded-lg hover:bg-red-50 hover:text-red-600
+                     flex items-center justify-center text-app-text-secondary text-xl transition-colors"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {/* Content */}

@@ -226,28 +226,23 @@ export function MetadataTooltip({
   book,
   position,
   authorsMap,
-  genresMap,
 }: {
   book: {
     title?: string;
     author_id?: number;
     death_ah?: number;
-    genre_id?: number;
-    corpus?: string;
   };
   position: { x: number; y: number };
   authorsMap?: Map<number, string>;
+  /** Kept for callsite compatibility; no longer rendered. */
   genresMap?: Map<number, string>;
 }) {
   const authorName = book.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
-  const genreName = book.genre_id !== undefined && genresMap ? genresMap.get(book.genre_id) : undefined;
 
   const rows: TooltipRow[] = [
     { label: 'Title', value: book.title, parseArabic: true },
     { label: 'Author', value: authorName, parseArabic: true },
     { label: 'Death', value: book.death_ah ? `${book.death_ah} AH` : undefined },
-    { label: 'Genre', value: genreName },
-    { label: 'Corpus', value: book.corpus },
   ];
 
   return <TooltipContent rows={rows} position={position} width={320} />;

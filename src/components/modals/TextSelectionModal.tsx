@@ -33,13 +33,47 @@ function normalizeArabicForSearch(text: string): string {
     .toLowerCase();
 }
 
-// Truncate text to specified length
-function truncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + '...';
-}
-
 const ROW_HEIGHT = 48;
+
+type SortKey = 'title' | 'author' | 'death' | 'genre';
+type SortDir = 'asc' | 'desc';
+
+// Same comparator semantics as MetadataBrowser: Arabic-aware string compare,
+// numeric for death, NULLs always last regardless of direction.
+function compareBooks(
+  a: BookMetadata,
+  b: BookMetadata,
+  sortKey: SortKey,
+  sortDir: SortDir,
+  authorsMap: Map<number, string>,
+  genresMap: Map<number, string>
+): number {
+  let cmp = 0;
+  if (sortKey === 'title') {
+    cmp = (a.title || '').localeCompare(b.title || '', 'ar');
+  } else if (sortKey === 'author') {
+    const aName = a.author_id !== undefined ? authorsMap.get(a.author_id) ?? '' : '';
+    const bName = b.author_id !== undefined ? authorsMap.get(b.author_id) ?? '' : '';
+    cmp = aName.localeCompare(bName, 'ar');
+  } else if (sortKey === 'death') {
+    const aDeath = a.death_ah ?? Infinity;
+    const bDeath = b.death_ah ?? Infinity;
+    if (aDeath === bDeath) {
+      cmp = 0;
+    } else if (!isFinite(aDeath)) {
+      return 1;
+    } else if (!isFinite(bDeath)) {
+      return -1;
+    } else {
+      cmp = aDeath - bDeath;
+    }
+  } else if (sortKey === 'genre') {
+    const aGenre = a.genre_id !== undefined ? genresMap.get(a.genre_id) ?? '' : '';
+    const bGenre = b.genre_id !== undefined ? genresMap.get(b.genre_id) ?? '' : '';
+    cmp = aGenre.localeCompare(bGenre, 'ar');
+  }
+  return sortDir === 'asc' ? cmp : -cmp;
+}
 
 export function TextSelectionModal({
   onClose,
@@ -88,6 +122,22 @@ export function TextSelectionModal({
 
   // Selected Texts tab search
   const [selectedSearch, setSelectedSearch] = useState('');
+
+  // Sort state — shared between both tabs (All Texts and Selected Texts).
+  // Default mirrors the corpus's natural order: death asc, NULLs last.
+  const [sortKey, setSortKey] = useState<SortKey>('death');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+
+  const handleSortClick = useCallback((key: SortKey) => {
+    setSortKey((prev) => {
+      if (prev === key) {
+        setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+        return prev;
+      }
+      setSortDir('asc');
+      return key;
+    });
+  }, []);
 
   // Refs for virtualization
   const allTextsParentRef = useRef<HTMLDivElement>(null);
@@ -260,16 +310,29 @@ export function TextSelectionModal({
     });
   }, [selectedBooks, selectedSearch, authorsMap]);
 
+  // Sort the filtered lists for both tabs.
+  const sortedFilteredBooks = useMemo(() => {
+    const out = [...filteredBooks];
+    out.sort((a, b) => compareBooks(a, b, sortKey, sortDir, authorsMap, genresMap));
+    return out;
+  }, [filteredBooks, sortKey, sortDir, authorsMap, genresMap]);
+
+  const sortedFilteredSelectedBooks = useMemo(() => {
+    const out = [...filteredSelectedBooks];
+    out.sort((a, b) => compareBooks(a, b, sortKey, sortDir, authorsMap, genresMap));
+    return out;
+  }, [filteredSelectedBooks, sortKey, sortDir, authorsMap, genresMap]);
+
   // Virtualizers
   const allTextsVirtualizer = useVirtualizer({
-    count: filteredBooks.length,
+    count: sortedFilteredBooks.length,
     getScrollElement: () => allTextsParentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
   });
 
   const selectedTextsVirtualizer = useVirtualizer({
-    count: filteredSelectedBooks.length,
+    count: sortedFilteredSelectedBooks.length,
     getScrollElement: () => selectedTextsParentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
@@ -521,6 +584,8 @@ export function TextSelectionModal({
                   No books match filters
                 </div>
               ) : (
+                <>
+                <SelectTableHeader sortKey={sortKey} sortDir={sortDir} onSort={handleSortClick} />
                 <div
                   style={{
                     height: `${allTextsVirtualizer.getTotalSize()}px`,
@@ -529,7 +594,8 @@ export function TextSelectionModal({
                   }}
                 >
                   {allTextsVirtualizer.getVirtualItems().map((virtualRow) => {
-                    const book = filteredBooks[virtualRow.index];
+                    const book = sortedFilteredBooks[virtualRow.index];
+                    if (!book) return null;
                     const isSelected = selectedBookIds.has(book.id);
                     return (
                       <div
@@ -548,12 +614,12 @@ export function TextSelectionModal({
                           isSelected={isSelected}
                           onToggle={() => toggleBook(book.id)}
                           authorsMap={authorsMap}
-                          genresMap={genresMap}
                         />
                       </div>
                     );
                   })}
                 </div>
+                </>
               )}
             </div>
           </div>
@@ -598,6 +664,8 @@ export function TextSelectionModal({
                     : 'No matches found'}
                 </div>
               ) : (
+                <>
+                <SelectTableHeader sortKey={sortKey} sortDir={sortDir} onSort={handleSortClick} />
                 <div
                   style={{
                     height: `${selectedTextsVirtualizer.getTotalSize()}px`,
@@ -606,7 +674,8 @@ export function TextSelectionModal({
                   }}
                 >
                   {selectedTextsVirtualizer.getVirtualItems().map((virtualRow) => {
-                    const book = filteredSelectedBooks[virtualRow.index];
+                    const book = sortedFilteredSelectedBooks[virtualRow.index];
+                    if (!book) return null;
                     return (
                       <div
                         key={book.id}
@@ -624,12 +693,12 @@ export function TextSelectionModal({
                           isSelected={true}
                           onToggle={() => toggleBook(book.id)}
                           authorsMap={authorsMap}
-                          genresMap={genresMap}
                         />
                       </div>
                     );
                   })}
                 </div>
+                </>
               )}
             </div>
           </div>
@@ -672,24 +741,90 @@ export function TextSelectionModal({
   );
 }
 
-// Book row component - compact single line
+// Sticky header row that matches BookRow's layout: a checkbox-sized spacer on
+// the left, then four labeled RTL columns at the same percentages as BookRow.
+// Header cells are clickable to toggle sort.
+function SelectTableHeader({
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (key: SortKey) => void;
+}) {
+  return (
+    <div
+      className="sticky top-0 z-10 bg-app-surface border-b border-app-border-light
+                 h-9 px-6 flex items-center gap-3 text-xs font-semibold text-app-text-tertiary
+                 select-none"
+    >
+      {/* Spacer aligning with the checkbox column in each row */}
+      <div className="w-4 flex-shrink-0" />
+      <div className="flex-1 flex items-center" dir="rtl">
+        <SelectHeaderCell width={50} sortKey="title" activeSort={sortKey} sortDir={sortDir} onSort={onSort}>
+          Title
+        </SelectHeaderCell>
+        <SelectHeaderCell width={35} sortKey="author" activeSort={sortKey} sortDir={sortDir} onSort={onSort}>
+          Author
+        </SelectHeaderCell>
+        <SelectHeaderCell width={15} sortKey="death" activeSort={sortKey} sortDir={sortDir} onSort={onSort}>
+          Death
+        </SelectHeaderCell>
+      </div>
+    </div>
+  );
+}
+
+function SelectHeaderCell({
+  width,
+  sortKey,
+  activeSort,
+  sortDir,
+  onSort,
+  children,
+}: {
+  width: number;
+  sortKey: SortKey;
+  activeSort: SortKey;
+  sortDir: SortDir;
+  onSort: (key: SortKey) => void;
+  children: React.ReactNode;
+}) {
+  const isActive = activeSort === sortKey;
+  const arrow = !isActive ? '' : sortDir === 'asc' ? '▲' : '▼';
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      style={{ width: `${width}%` }}
+      className={`px-2 flex items-center justify-center gap-1 truncate
+                  cursor-pointer hover:text-app-accent transition-colors
+                  ${isActive ? 'text-app-accent' : ''}`}
+      dir="auto"
+    >
+      <span className="truncate">{children}</span>
+      {arrow && <span className="text-[10px] flex-shrink-0">{arrow}</span>}
+    </button>
+  );
+}
+
+// Book row component — checkbox on the left, then three RTL columns
+// (title | author | death) matching the metadata browser layout.
 function BookRow({
   book,
   isSelected,
   onToggle,
   authorsMap,
-  genresMap,
 }: {
   book: BookMetadata;
   isSelected: boolean;
   onToggle: () => void;
   authorsMap: Map<number, string>;
-  genresMap: Map<number, string>;
 }) {
-  const titleTruncated = truncate(book.title, 75);
   const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
-  const authorTruncated = authorName ? truncate(authorName, 50) : 'Unknown';
-  const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;
+  const death =
+    book.death_ah !== undefined && book.death_ah !== 0 ? `${book.death_ah} AH` : '—';
 
   return (
     <div
@@ -697,7 +832,7 @@ function BookRow({
       className={`h-[48px] px-6 flex items-center gap-3 cursor-pointer border-b border-app-border-light
                transition-colors ${isSelected ? 'bg-app-accent-light' : 'hover:bg-app-surface-variant'}`}
     >
-      {/* Checkbox */}
+      {/* Checkbox stays on the left (parent is LTR) */}
       <div
         className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
           isSelected
@@ -712,28 +847,47 @@ function BookRow({
         )}
       </div>
 
-      {/* Title - Author (d. date) */}
-      <div className="flex-1 min-w-0 flex items-center gap-2" dir="rtl">
-        <span className="text-2xl font-medium text-app-accent font-arabic truncate">
-          {titleTruncated}
-        </span>
-        <span className="text-xs text-app-text-tertiary">—</span>
-        <span className="text-xl text-app-text-secondary font-arabic truncate">
-          {authorTruncated}
-        </span>
-        {book.death_ah !== undefined && (
-          <span className="text-sm whitespace-nowrap">
-            (d. {book.death_ah === 0 ? '?' : book.death_ah})
-          </span>
-        )}
+      {/* 4-column row, RTL: title (right) | author | death | genre (left) */}
+      <div className="flex-1 min-w-0 flex items-center" dir="rtl">
+        <SelectCell width={50} arabic accent>
+          {book.title}
+        </SelectCell>
+        <SelectCell width={35} arabic muted>
+          {authorName || 'Unknown'}
+        </SelectCell>
+        <SelectCell width={15}>{death}</SelectCell>
       </div>
+    </div>
+  );
+}
 
-      {/* Genre */}
-      {genreName && (
-        <span className="text-sm text-app-text-tertiary bg-app-surface-variant px-2 py-0.5 rounded capitalize flex-shrink-0">
-          {genreName}
-        </span>
-      )}
+function SelectCell({
+  width,
+  arabic,
+  accent,
+  muted,
+  capitalize,
+  children,
+}: {
+  width: number;
+  arabic?: boolean;
+  accent?: boolean;
+  muted?: boolean;
+  capitalize?: boolean;
+  children: React.ReactNode;
+}) {
+  let textColor = 'text-app-text-primary';
+  if (accent) textColor = 'text-app-accent';
+  else if (muted) textColor = 'text-app-text-secondary';
+  return (
+    <div
+      style={{ width: `${width}%` }}
+      className={`px-2 truncate ${textColor} ${
+        arabic ? 'text-lg font-arabic leading-loose' : 'text-sm'
+      } ${capitalize ? 'capitalize' : ''}`}
+      dir="auto"
+    >
+      {children}
     </div>
   );
 }

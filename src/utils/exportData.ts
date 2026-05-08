@@ -92,27 +92,23 @@ export function generateSearchResultsCSV(
   results: SearchResult[],
   booksMap?: Map<number, BookMetadata>,
   authorsMap?: Map<number, string>,
-  genresMap?: Map<number, string>
+  _genresMap?: Map<number, string>
 ): string {
-  const headers = [
-    'Book ID', 'Title', 'Author', 'Death Year (AH)', 'Century (AH)', 'Genre',
-    'Volume', 'Page', 'Score', 'Context'
-  ];
+  const headers = ['Book ID', 'Title', 'Author', 'Death Year (AH)', 'Volume', 'Page', 'Context'];
 
   const rows = results.map(result => {
     const book = booksMap?.get(result.id);
     const authorName = book?.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
-    const genreName = book?.genre_id !== undefined && genresMap ? genresMap.get(book.genre_id) : undefined;
+    // SearchResult.death_ah is often missing for non-relevance-sorted hits;
+    // fall back to the book metadata so the column is never silently empty.
+    const death = result.death_ah ?? book?.death_ah;
     return [
       escapeCSV(result.id),
       escapeCSV(book?.title),
       escapeCSV(authorName),
-      escapeCSV(result.death_ah),
-      escapeCSV(result.century_ah),
-      escapeCSV(genreName),
+      escapeCSV(death),
       escapeCSV(result.part_label),
       escapeCSV(result.page_number),
-      escapeCSV(result.score.toFixed(2)),
       escapeCSV(stripHtmlForExport(result.body || '').slice(0, 500)) // Limit context to 500 chars
     ].join(',');
   });
@@ -202,22 +198,21 @@ export function generateSearchResultsXLSX(
   results: SearchResult[],
   booksMap?: Map<number, BookMetadata>,
   authorsMap?: Map<number, string>,
-  genresMap?: Map<number, string>
+  _genresMap?: Map<number, string>
 ): Uint8Array {
   const data = results.map(result => {
     const book = booksMap?.get(result.id);
     const authorName = book?.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
-    const genreName = book?.genre_id !== undefined && genresMap ? genresMap.get(book.genre_id) : undefined;
+    // SearchResult.death_ah is often missing for non-relevance-sorted hits;
+    // fall back to the book metadata so the column is never silently empty.
+    const death = result.death_ah ?? book?.death_ah;
     return {
       'Book ID': result.id,
       'Title': book?.title ?? '',
       'Author': authorName ?? '',
-      'Death Year (AH)': result.death_ah ?? '',
-      'Century (AH)': result.century_ah ?? '',
-      'Genre': genreName ?? '',
+      'Death Year (AH)': death ?? '',
       'Volume': result.part_label,
       'Page': result.page_number,
-      'Score': result.score.toFixed(2),
       'Context': stripHtmlForExport(result.body || '').slice(0, 500)
     };
   });

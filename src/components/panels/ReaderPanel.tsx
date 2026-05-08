@@ -5,6 +5,7 @@ import { TokenPopup } from '../ui/TokenPopup';
 import { Toast } from '../ui';
 import { useBooks } from '../../contexts/BooksContext';
 import { CitationBlock } from '../shared/CitationBlock';
+import { BookDetailView } from '../modals/MetadataBrowser';
 
 interface ReaderPanelProps {
   currentPage: {
@@ -146,7 +147,7 @@ function BodyRenderer({
 }
 
 export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel, matchedTokenIndices = [] }: ReaderPanelProps) {
-  const { booksMap, authorsMap } = useBooks();
+  const { booksMap, authorsMap, genresMap } = useBooks();
   const [selectedToken, setSelectedToken] = useState<Token | null>(null);
   const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
   const firstHighlightRef = useRef<HTMLSpanElement>(null);
@@ -160,6 +161,7 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
   const [navigating, setNavigating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showCite, setShowCite] = useState(false);
+  const [showBookDetail, setShowBookDetail] = useState(false);
 
   useEffect(() => {
     if (!currentPage?.meta) {
@@ -279,9 +281,18 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
         >
           Cite
         </button>
-        <h2 className="font-semibold text-app-text-primary flex-1 truncate font-arabic text-xl" dir="rtl">
+        <button
+          type="button"
+          onClick={() => book && setShowBookDetail(true)}
+          disabled={!book}
+          title="View book details"
+          className="font-semibold text-app-text-primary flex-1 truncate font-arabic text-lg
+                     text-right hover:text-app-accent transition-colors cursor-pointer
+                     disabled:cursor-default disabled:hover:text-app-text-primary"
+          dir="rtl"
+        >
           {title}{author ? ` - ${author}` : ''}
-        </h2>
+        </button>
         {currentPage.loadTimeMs !== undefined && (
           <span className="text-xs text-app-text-tertiary flex-shrink-0">
             {currentPage.loadTimeMs}ms
@@ -380,6 +391,19 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
       )}
 
       {/* Citation modal */}
+      {/* Book detail overlay — clicking the title in the header opens this.
+          We pass only onBack (with a custom label) so the header shows a single
+          "Back to Search Results" button on the left and no close X. */}
+      {showBookDetail && book && (
+        <BookDetailView
+          book={book}
+          onBack={() => setShowBookDetail(false)}
+          backLabel="Back to Search Results"
+          authorsMap={authorsMap}
+          genresMap={genresMap}
+        />
+      )}
+
       {showCite && book && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"

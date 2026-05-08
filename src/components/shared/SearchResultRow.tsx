@@ -125,14 +125,14 @@ export function SearchResultRow({
         </div>
 
         <div
-          className="w-48 flex-shrink-0 min-w-0"
+          className="w-56 flex-shrink-0 min-w-0 cursor-pointer"
           onMouseEnter={handleMouseEnter}
           onMouseMove={(e) => setTooltipPosition({ x: e.clientX, y: e.clientY })}
           onMouseLeave={() => setShowTooltip(false)}
         >
           <p
             dir="rtl"
-            className="text-xl font-medium text-app-accent truncate text-right font-arabic"
+            className="text-lg font-medium text-app-accent truncate text-right font-arabic"
           >
             {book?.title ?? `Book ${result.id}`}
           </p>

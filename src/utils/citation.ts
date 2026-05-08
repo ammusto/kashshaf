@@ -61,6 +61,13 @@ function joinClean(parts: (string | null | undefined)[], sep: string): string {
   return parts.filter((p): p is string => !!p && p.length > 0).join(sep);
 }
 
+/** Append a period to a value unless it already ends with terminal punctuation
+ *  (handles inputs like "2nd ed." that include their own trailing period). */
+function withTerminalPeriod(value: string): string {
+  const trimmed = value.trimEnd();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
 /**
  * Format as Chicago bibliographic-style citation.
  *
@@ -91,7 +98,7 @@ export function formatChicago(c: CitationData, opts: CitationOptions = {}): stri
     parts.push(`Arranged by ${c.arrangers.join(', ')}.`);
   }
   if (c.edition) {
-    parts.push(`${c.edition}.`);
+    parts.push(withTerminalPeriod(c.edition));
   }
 
   // Place: Publisher, Date.
@@ -99,7 +106,7 @@ export function formatChicago(c: CitationData, opts: CitationOptions = {}): stri
     [c.place, c.publisher ? `${c.place ? ': ' : ''}${c.publisher}` : null, c.date ? `${(c.place || c.publisher) ? ', ' : ''}${c.date}` : null],
     ''
   );
-  if (pub) parts.push(pub + '.');
+  if (pub) parts.push(withTerminalPeriod(pub));
 
   if (opts.includePageRef) {
     if (opts.volume && opts.page) {
@@ -142,7 +149,7 @@ export function formatMLA(c: CitationData, opts: CitationOptions = {}): string {
   if (c.edition) middle.push(c.edition);
   if (c.publisher) middle.push(c.publisher);
   if (c.date) middle.push(c.date);
-  if (middle.length > 0) parts.push(middle.join(', ') + '.');
+  if (middle.length > 0) parts.push(withTerminalPeriod(middle.join(', ')));
 
   if (opts.includePageRef) {
     if (opts.volume && opts.page) {
