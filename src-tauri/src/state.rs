@@ -46,6 +46,11 @@ impl AppState {
         // (e.g., partial download, manual file swap) before they cause weird query errors.
         verify_corpus_versions_match(&db_path, &metadata_db_path)?;
 
+        // One-time idempotent migration: ensure the lemma_id index on
+        // token_definitions exists. Older corpus.db builds didn't have it,
+        // and the variants scanner needs O(log n) lookups by lemma.
+        ensure_corpus_indexes(&db_path)?;
+
         let search_engine = Arc::new(SearchEngine::open(&index_path)?);
         // TokenCache loads tokens from SQLite corpus.db
         let token_cache = Arc::new(TokenCache::new(db_path.clone(), DEFAULT_CACHE_CAPACITY));
@@ -149,6 +154,34 @@ impl AppState {
 
         Ok(())
     }
+}
+
+/// Idempotent migration: create indexes on corpus.db that newer features rely
+/// on but older builds may not have. Logs the outcome so we have proof of
+/// migration on startup; check whether the variants slowness is index-related.
+fn ensure_corpus_indexes(corpus_db_path: &Path) -> Result<()> {
+    let conn = rusqlite::Connection::open(corpus_db_path)?;
+
+    let pre_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_token_def_lemma'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+
+    if pre_exists {
+        eprintln!("[corpus.db] idx_token_def_lemma already present at {:?}", corpus_db_path);
+    } else {
+        eprintln!("[corpus.db] creating idx_token_def_lemma at {:?} (one-time, may take a moment)", corpus_db_path);
+        let t0 = std::time::Instant::now();
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_token_def_lemma ON token_definitions(lemma_id);",
+        )?;
+        eprintln!("[corpus.db] idx_token_def_lemma created in {} ms", t0.elapsed().as_millis());
+    }
+
+    Ok(())
 }
 
 /// Read corpus_version from a database's db_info table.

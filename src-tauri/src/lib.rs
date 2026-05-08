@@ -9,10 +9,12 @@ pub mod cache;
 pub mod error;
 pub mod state;
 pub mod downloader;
+pub mod variants;
 
 pub use error::KashshafError;
 pub use state::AppState;
 pub use search::{SearchEngine, SearchMode, SearchFilters, SearchResult, SearchResults, PageWithMatches, SearchTerm, parse_wildcard_query, WildcardQueryInfo};
+pub use variants::{Variant, VariantsResponse, compute_variants, MAX_SCANNED_HITS};
 pub use cache::TokenCache;
 pub use tokens::{Token, TokenField, PageKey};
 pub use downloader::{

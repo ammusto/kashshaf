@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement } from './types';
 import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from './types/search';
 import type { Collection } from './types/collections';
@@ -103,6 +103,50 @@ function App() {
     handleExportResults,
     handleResultClick,
   } = useSearch({ selectedBookIds, loadResultIntoTab, api });
+
+  // Variants: only available for single-input lemma/root searches. Returns
+  // undefined when the active search doesn't qualify, which hides the button.
+  const variantsContext = useMemo(() => {
+    const ctx = activeTab?.searchContext;
+    if (!ctx || ctx.type !== 'combined' || !ctx.combinedQuery) return null;
+    const { andInputs = [], orInputs = [] } = ctx.combinedQuery;
+    if (orInputs.length > 0) return null;
+    if (andInputs.length !== 1) return null;
+    const input = andInputs[0];
+    if (input.mode !== 'lemma' && input.mode !== 'root') return null;
+    if (!input.query.trim()) return null;
+    return { query: input.query, mode: input.mode };
+  }, [activeTab?.searchContext]);
+
+  const handleLoadVariants = useCallback(async () => {
+    if (!variantsContext) {
+      throw new Error('Variants are only available for single lemma or root searches.');
+    }
+    const filters = selectedBookIds.size > 0 ? { book_ids: Array.from(selectedBookIds) } : {};
+    return api.getVariants(variantsContext.query, variantsContext.mode, filters);
+  }, [api, variantsContext, selectedBookIds]);
+
+  const handleVariantClick = useCallback(
+    (tuple: string[]) => {
+      // Re-run as a single-input surface phrase search. Joining with spaces
+      // turns the tuple into a phrase the way the existing search builder
+      // expects (multi-word query in one input → PhraseQuery).
+      const combined: CombinedSearchQuery = {
+        andInputs: [
+          {
+            id: Date.now(),
+            query: tuple.join(' '),
+            mode: 'surface',
+            cliticToggle: false,
+          },
+        ],
+        orInputs: [],
+      };
+      setAppSearchMode('terms');
+      handleSearch(combined);
+    },
+    [handleSearch]
+  );
 
   // Wrap name search to update generated patterns
   const handleNameSearch = useCallback(async () => {
@@ -571,6 +615,8 @@ function App() {
                   loadingMore={activeTab?.loadingMore ?? false}
                   errorMessage={activeTab?.errorMessage ?? ''}
                   maxResults={MAX_RESULTS}
+                  onLoadVariants={variantsContext ? handleLoadVariants : undefined}
+                  onVariantClick={variantsContext ? handleVariantClick : undefined}
                 />
               </div>
             </>

@@ -39,6 +39,14 @@ export class OfflineAPI implements SearchAPI {
     return tauri.combinedSearch(combined, filters, limit, offset);
   }
 
+  async getVariants(
+    query: string,
+    mode: SearchMode,
+    filters: SearchFilters,
+  ) {
+    return tauri.getVariants(query, mode, filters);
+  }
+
   async proximitySearch(
     term1: string,
     field1: SearchMode,

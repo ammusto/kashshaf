@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { SearchResults, SearchResult } from '../../types';
-import { EXPORT_MAX_RESULTS } from '../../constants/search';
+import type { VariantsResponse } from '../../api';
+import { EXPORT_MAX_RESULTS, VARIANTS_MAX_HITS } from '../../constants/search';
 import { VirtualizedResultsList } from '../shared/VirtualizedResultsList';
+import { VariantsList } from './VariantsList';
 import { exportSearchResults, type ExportFormat } from '../../utils/exportData';
 import { useBooks } from '../../contexts/BooksContext';
 
@@ -14,6 +16,11 @@ interface ResultsPanelProps {
   loadingMore: boolean;
   errorMessage: string;
   maxResults: number;
+  /** When provided, shows a Variants button. Should resolve with the variants
+   *  for the current search; rejecting is fine and shows the error. */
+  onLoadVariants?: () => Promise<VariantsResponse>;
+  /** Re-run the current search as a surface-mode phrase for the given tuple. */
+  onVariantClick?: (tuple: string[]) => void;
 }
 
 export function ResultsPanel({
@@ -25,11 +32,51 @@ export function ResultsPanel({
   loadingMore,
   errorMessage,
   maxResults,
+  onLoadVariants,
+  onVariantClick,
 }: ResultsPanelProps) {
   const { booksMap, authorsMap, genresMap } = useBooks();
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
+
+  // View toggle: 'results' is the standard hit list, 'variants' shows the
+  // surface-form distribution. Variants are fetched lazily on first switch.
+  const [viewMode, setViewMode] = useState<'results' | 'variants'>('results');
+  const [variantsData, setVariantsData] = useState<VariantsResponse | null>(null);
+  const [variantsLoading, setVariantsLoading] = useState(false);
+  const [variantsError, setVariantsError] = useState<string | null>(null);
+
+  // Reset variants state whenever the underlying search results change. New
+  // search → previous variants are stale.
+  useEffect(() => {
+    setVariantsData(null);
+    setVariantsError(null);
+    setViewMode('results');
+  }, [results]);
+
+  const handleShowVariants = useCallback(async () => {
+    if (!onLoadVariants) return;
+    setViewMode('variants');
+    if (variantsData || variantsLoading) return;
+    setVariantsLoading(true);
+    setVariantsError(null);
+    try {
+      const data = await onLoadVariants();
+      setVariantsData(data);
+    } catch (err) {
+      setVariantsError(`Failed to load variants: ${err}`);
+    } finally {
+      setVariantsLoading(false);
+    }
+  }, [onLoadVariants, variantsData, variantsLoading]);
+
+  const handleVariantClick = useCallback(
+    (tuple: string[]) => {
+      onVariantClick?.(tuple);
+    },
+    [onVariantClick]
+  );
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -63,10 +110,52 @@ export function ResultsPanel({
   return (
     <div className="h-full flex flex-col bg-app-surface border-t-2 border-app-border-light">
       <div className="h-10 bg-app-surface-variant px-6 flex items-center flex-shrink-0 border-b border-app-border-light">
-        <span className="text-xs font-semibold text-app-text-secondary uppercase tracking-wide">Results</span>
+        <span className="text-xs font-semibold text-app-text-secondary uppercase tracking-wide">
+          {viewMode === 'variants' ? 'Variants' : 'Results'}
+        </span>
+
+        {/* View toggle: Variants ↔ Results. Only shown when the active search
+            qualifies (onLoadVariants present) and we have search results.
+            Disabled when the result set is large enough that scanning would
+            be slow — the button stays visible so users see the feature exists. */}
+        {hasResults && onLoadVariants && (
+          <div className="ml-4 flex items-center gap-1">
+            {viewMode === 'results' ? (
+              (() => {
+                const tooManyResults = (results?.total_hits ?? 0) > VARIANTS_MAX_HITS;
+                return (
+                  <button
+                    onClick={tooManyResults ? undefined : handleShowVariants}
+                    disabled={tooManyResults}
+                    title={
+                      tooManyResults
+                        ? `Only available on ${VARIANTS_MAX_HITS.toLocaleString()} results or fewer`
+                        : undefined
+                    }
+                    className={`h-6 px-2 text-xs font-medium rounded bg-white border transition-colors
+                      ${tooManyResults
+                        ? 'border-app-border-light text-app-text-tertiary cursor-not-allowed'
+                        : 'border-app-border-medium text-app-text-secondary hover:text-app-accent hover:border-app-accent'}`}
+                  >
+                    Variants
+                  </button>
+                );
+              })()
+            ) : (
+              <button
+                onClick={() => setViewMode('results')}
+                className="h-6 px-2 text-xs font-medium rounded bg-white border border-app-border-medium
+                           text-app-text-secondary hover:text-app-accent hover:border-app-accent
+                           transition-colors flex items-center gap-1"
+              >
+                ← Results
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Export Button */}
-        {hasResults && (
+        {hasResults && viewMode === 'results' && (
           <div className="relative ml-4" ref={exportDropdownRef}>
             <button
               onClick={() => !exporting && setExportDropdownOpen(!exportDropdownOpen)}
@@ -117,27 +206,44 @@ export function ResultsPanel({
         )}
 
         <div className="flex-1" />
-        <span className={`text-xs ${results && results.total_hits > 0 ? 'text-app-text-primary font-medium' : 'text-app-text-tertiary'}`}>
-          {results && results.total_hits > 0
-            ? `${results.results.length.toLocaleString()} / ${results.total_hits.toLocaleString()} · ${results.elapsed_ms}ms`
-            : ''}
+        <span
+          className={`text-xs ${
+            viewMode === 'variants' && variantsData
+              ? 'text-app-text-primary font-medium'
+              : results && results.total_hits > 0
+                ? 'text-app-text-primary font-medium'
+                : 'text-app-text-tertiary'
+          }`}
+        >
+          {viewMode === 'variants' && variantsData
+            ? `${variantsData.variants.length.toLocaleString()} variants · ${variantsData.elapsed_ms}ms`
+            : results && results.total_hits > 0
+              ? `${results.results.length.toLocaleString()} / ${results.total_hits.toLocaleString()} · ${results.elapsed_ms}ms`
+              : ''}
         </span>
       </div>
 
-      {errorMessage && (
+      {errorMessage && viewMode === 'results' && (
         <div className="h-10 bg-red-50 px-5 flex items-center flex-shrink-0">
           <span className="text-xs text-app-error">{errorMessage}</span>
         </div>
       )}
 
-      {loading && (
+      {variantsError && viewMode === 'variants' && (
+        <div className="h-10 bg-red-50 px-5 flex items-center flex-shrink-0">
+          <span className="text-xs text-app-error">{variantsError}</span>
+        </div>
+      )}
+
+      {/* Search-results loading */}
+      {viewMode === 'results' && loading && (
         <div className="flex-1 flex flex-col items-center justify-center space-y-2">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-app-accent"></div>
           <p className="text-xs text-app-text-tertiary">Searching...</p>
         </div>
       )}
 
-      {!loading && results && results.results.length > 0 && (
+      {viewMode === 'results' && !loading && results && results.results.length > 0 && (
         <VirtualizedResultsList
           results={results.results}
           onResultClick={onResultClick}
@@ -148,12 +254,24 @@ export function ResultsPanel({
         />
       )}
 
-      {!loading && (!results || results.results.length === 0) && (
+      {viewMode === 'results' && !loading && (!results || results.results.length === 0) && (
         <div className="flex-1 flex flex-col items-center justify-center">
           <span className="text-xs text-app-text-tertiary">
             {results ? 'No results found' : 'Enter a search query'}
           </span>
         </div>
+      )}
+
+      {/* Variants loading */}
+      {viewMode === 'variants' && variantsLoading && (
+        <div className="flex-1 flex flex-col items-center justify-center space-y-2">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-app-accent"></div>
+          <p className="text-xs text-app-text-tertiary">Computing variants…</p>
+        </div>
+      )}
+
+      {viewMode === 'variants' && !variantsLoading && variantsData && (
+        <VariantsList data={variantsData} onVariantClick={handleVariantClick} />
       )}
     </div>
   );

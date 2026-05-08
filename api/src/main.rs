@@ -2,6 +2,7 @@ mod cache;
 mod error;
 mod search;
 mod tokens;
+mod variants;
 
 use axum::{
     extract::{Query, State},
@@ -210,6 +211,29 @@ async fn combined_search(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
 }
 
+#[derive(Deserialize)]
+struct VariantsRequest {
+    query: String,
+    mode: Option<SearchMode>,
+    filters: Option<SearchFilters>,
+}
+
+async fn search_variants(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<VariantsRequest>,
+) -> Result<Json<variants::VariantsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mode = req.mode.unwrap_or_default();
+    let filters = req.filters.unwrap_or_default();
+
+    // Match the existing search handler pattern: run synchronously inside the
+    // tokio task. Variants do real CPU + SQLite work, so this can stall other
+    // requests; if that becomes a problem, wrap SearchEngine in Arc and move
+    // to spawn_blocking. Out of scope here.
+    variants::compute_variants(&state.search_engine, &state.db_path, &req.query, mode, &filters)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+}
+
 async fn proximity_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ProximitySearchRequest>,
@@ -411,6 +435,14 @@ async fn main() -> anyhow::Result<()> {
     let db_path = PathBuf::from("/opt/kashshaf/data/corpus.db");
     let metadata_db_path = PathBuf::from("/opt/kashshaf/data/metadata.db");
 
+    // Idempotent migration: ensure indexes the variants scanner relies on exist.
+    {
+        let conn = rusqlite::Connection::open(&db_path)?;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_token_def_lemma ON token_definitions(lemma_id);",
+        )?;
+    }
+
     let search_engine = SearchEngine::open(&index_path)?;
     let token_cache = TokenCache::new(db_path.clone(), 1000);
 
@@ -432,6 +464,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/search/combined", post(combined_search))
         .route("/search/proximity", post(proximity_search))
         .route("/search/name", post(name_search))
+        .route("/search/variants", post(search_variants))
         .route("/search/wildcard", get(wildcard_search))
         .route("/page", get(get_page))
         .route("/page/by-label", get(get_page_by_label))

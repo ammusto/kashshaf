@@ -144,6 +144,23 @@ export class OnlineAPI implements SearchAPI {
     });
   }
 
+  async getVariants(
+    query: string,
+    mode: SearchMode,
+    filters: SearchFilters,
+  ): Promise<import('./index').VariantsResponse> {
+    return fetchAPI('/search/variants', {
+      method: 'POST',
+      body: JSON.stringify({
+        query: stripPunctuation(query),
+        mode,
+        filters: {
+          book_ids: filters.book_ids || [],
+        },
+      }),
+    });
+  }
+
   async proximitySearch(
     term1: string,
     field1: SearchMode,

@@ -4,11 +4,11 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
-use tantivy::collector::{Count, TopDocs};
+use tantivy::collector::{Collector, Count, SegmentCollector, TopDocs};
 use tantivy::postings::Postings;
 use tantivy::query::{BooleanQuery, Occur, PhraseQuery, Query, QueryParser, TermQuery, RegexQuery};
 use tantivy::schema::*;
-use tantivy::{DocAddress, DocSet, Index, ReloadPolicy, SegmentReader, Term};
+use tantivy::{DocAddress, DocId, DocSet, Index, ReloadPolicy, Score, SegmentOrdinal, SegmentReader, Term};
 
 /// Normalize Arabic text for search: removes diacritics, normalizes hamza/alif variants
 fn normalize_arabic(text: &str) -> String {
@@ -258,12 +258,165 @@ fn sort_results_by_reading_order(results: &mut [SearchResult]) {
     results.sort_by_key(|r| (r.death_ah.unwrap_or(u64::MAX), r.id, r.part_index, r.page_id));
 }
 
+// ---------------------------------------------------------------------------
+// AllDocsCollector: enumerates every matching page hit (text_id, part_index,
+// page_id) without scoring or limit. Fast-field readers are cached per segment
+// in `for_segment` rather than rebuilt per-document, so a 4k-hit query stays
+// well under 200 ms instead of ballooning to 10 s.
+// ---------------------------------------------------------------------------
+
+struct AllDocsCollector;
+
+impl Collector for AllDocsCollector {
+    type Fruit = Vec<(u64, u64, u64)>;
+    type Child = AllDocsSegmentCollector;
+
+    fn for_segment(
+        &self,
+        _segment_local_id: SegmentOrdinal,
+        reader: &SegmentReader,
+    ) -> tantivy::Result<Self::Child> {
+        // Build the three fast-field accessors once per segment. These calls
+        // do schema lookups + open columnar storage; doing them per-doc was
+        // the bug.
+        let id_reader = reader.fast_fields().u64("text_id")?.first_or_default_col(0);
+        let part_reader = reader.fast_fields().u64("part_index")?.first_or_default_col(0);
+        let page_reader = reader.fast_fields().u64("page_id")?.first_or_default_col(0);
+        Ok(AllDocsSegmentCollector {
+            id_reader,
+            part_reader,
+            page_reader,
+            triples: Vec::new(),
+        })
+    }
+
+    fn requires_scoring(&self) -> bool {
+        false
+    }
+
+    fn merge_fruits(&self, segment_fruits: Vec<Self::Fruit>) -> tantivy::Result<Self::Fruit> {
+        // Flatten in order; the orchestrator doesn't depend on document order.
+        let total: usize = segment_fruits.iter().map(|v| v.len()).sum();
+        let mut out = Vec::with_capacity(total);
+        for v in segment_fruits {
+            out.extend(v);
+        }
+        Ok(out)
+    }
+}
+
+struct AllDocsSegmentCollector {
+    id_reader: std::sync::Arc<dyn tantivy::columnar::ColumnValues<u64>>,
+    part_reader: std::sync::Arc<dyn tantivy::columnar::ColumnValues<u64>>,
+    page_reader: std::sync::Arc<dyn tantivy::columnar::ColumnValues<u64>>,
+    triples: Vec<(u64, u64, u64)>,
+}
+
+impl SegmentCollector for AllDocsSegmentCollector {
+    type Fruit = Vec<(u64, u64, u64)>;
+
+    fn collect(&mut self, doc: DocId, _score: Score) {
+        // Hot loop: pure column lookups, no allocations. Three FAST reads.
+        self.triples.push((
+            self.id_reader.get_val(doc),
+            self.part_reader.get_val(doc),
+            self.page_reader.get_val(doc),
+        ));
+    }
+
+    fn harvest(self) -> Self::Fruit {
+        self.triples
+    }
+}
+
 impl SearchEngine {
     pub fn open(index_path: &Path) -> Result<Self> {
         let index = Index::open_in_dir(index_path)?;
         index.tokenizers().register("whitespace", tantivy::tokenizer::WhitespaceTokenizer::default());
         let schema = index.schema();
         Ok(Self { index, schema })
+    }
+
+    /// Enumerate every matching page hit for a query, unscored and unpaginated.
+    /// Returns `(text_id, part_index, page_id)` triples plus the Count-collector
+    /// total in the same call (so callers can sanity-check parity).
+    ///
+    /// This is the foundation for the variants feature: variants scan the
+    /// returned hit list against corpus.db blobs, so the count needs to be the
+    /// real total, not the TopDocs-limited prefix that paginated search uses.
+    pub fn collect_all_hits(
+        &self,
+        query: &str,
+        mode: SearchMode,
+        filters: &SearchFilters,
+    ) -> Result<(Vec<(u64, u64, u64)>, usize)> {
+        let reader = self
+            .index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .try_into()?;
+        let searcher = reader.searcher();
+
+        let search_field = match mode {
+            SearchMode::Surface => self.schema.get_field("surface_text").unwrap(),
+            SearchMode::Lemma => self.schema.get_field("lemma_text").unwrap(),
+            SearchMode::Root => self.schema.get_field("root_text").unwrap(),
+        };
+
+        let normalized_query = match mode {
+            SearchMode::Root => normalize_root_query(query),
+            SearchMode::Surface => normalize_arabic(query),
+            SearchMode::Lemma => query.to_string(),
+        };
+
+        let mut tokenizer = self.index.tokenizers().get("whitespace").unwrap();
+        let mut token_stream = tokenizer.token_stream(&normalized_query);
+        let mut query_terms: HashSet<String> = HashSet::new();
+        while token_stream.advance() {
+            query_terms.insert(token_stream.token().text.clone());
+        }
+
+        let text_query: Box<dyn Query> = if query_terms.len() > 1 {
+            let terms: Vec<Term> = normalized_query
+                .split_whitespace()
+                .map(|word| Term::from_field_text(search_field, word))
+                .collect();
+            Box::new(PhraseQuery::new(terms))
+        } else {
+            let query_parser = QueryParser::for_index(&self.index, vec![search_field]);
+            query_parser.parse_query(&normalized_query)?
+        };
+
+        let final_query: Box<dyn Query> = if let Some(ref book_ids) = filters.book_ids {
+            if book_ids.is_empty() {
+                text_query
+            } else {
+                let id_field = self.schema.get_field("text_id").unwrap();
+                let book_id_queries: Vec<(Occur, Box<dyn Query>)> = book_ids
+                    .iter()
+                    .map(|&id| {
+                        let term = Term::from_field_u64(id_field, id);
+                        let term_query: Box<dyn Query> =
+                            Box::new(TermQuery::new(term, IndexRecordOption::Basic));
+                        (Occur::Should, term_query)
+                    })
+                    .collect();
+                let book_ids_query = BooleanQuery::new(book_id_queries);
+                Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, text_query),
+                    (Occur::Must, Box::new(book_ids_query)),
+                ]))
+            }
+        } else {
+            text_query
+        };
+
+        // Run both collectors in a single search pass so we don't pay query
+        // execution twice. AllDocsCollector now reads FAST fields inside its
+        // SegmentCollector and returns triples directly — no post-loop needed.
+        let (triples, count_total) =
+            searcher.search(&*final_query, &(AllDocsCollector, Count))?;
+        Ok((triples, count_total))
     }
 
     pub fn search(

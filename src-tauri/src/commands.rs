@@ -8,6 +8,7 @@ use kashshaf_lib::search::{
 };
 use kashshaf_lib::state::AppState;
 use kashshaf_lib::tokens::{Token, TokenField};
+use kashshaf_lib::variants::{compute_variants, VariantsResponse};
 use rusqlite::{OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
@@ -74,6 +75,77 @@ fn row_to_book(row: &Row) -> rusqlite::Result<BookMetadata> {
         metadata_json: row.get(16)?,
         citation_json: row.get(17)?,
     })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CountAllHitsResponse {
+    /// Number of triples produced by AllDocsCollector.
+    pub all_docs_count: usize,
+    /// total_hits from the Count collector. Should equal all_docs_count.
+    pub count_collector_total: usize,
+    /// First few hit triples for spot-checking.
+    pub sample: Vec<(u64, u64, u64)>,
+    /// Wall-clock time for the collection.
+    pub elapsed_ms: u64,
+}
+
+/// Compute variants: distribution of surface forms matching a lemma or root
+/// query, scoped to the user's current filters. See [`kashshaf_lib::variants`]
+/// for the algorithm. Surface mode is rejected; the caller should disable the
+/// Variants UI in surface mode.
+#[tauri::command]
+pub async fn get_variants(
+    state: State<'_, ManagedAppState>,
+    query: String,
+    mode: Option<SearchMode>,
+    filters: Option<SearchFilters>,
+) -> Result<VariantsResponse, KashshafError> {
+    let app_state = require_state(&state)?;
+    let mode = mode.unwrap_or_default();
+    let filters = filters.unwrap_or_default();
+    let search_engine = app_state.search_engine.clone();
+    let corpus_db_path = app_state.db_path.clone();
+
+    tokio::task::spawn_blocking(move || {
+        compute_variants(&search_engine, &corpus_db_path, &query, mode, &filters)
+            .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
+    })
+    .await
+    .map_err(|e| KashshafError::Search(format!("Task join error: {}", e)))?
+}
+
+/// Debug command — runs the unscored hit collector and returns parity info.
+/// Used during the variants feature spike to confirm AllDocsCollector and the
+/// Count collector report the same total. Safe to leave shipped; small CPU cost
+/// only when explicitly invoked from the frontend devtools.
+#[tauri::command]
+pub async fn count_all_hits(
+    state: State<'_, ManagedAppState>,
+    query: String,
+    mode: Option<SearchMode>,
+    filters: Option<SearchFilters>,
+) -> Result<CountAllHitsResponse, KashshafError> {
+    let app_state = require_state(&state)?;
+    let mode = mode.unwrap_or_default();
+    let filters = filters.unwrap_or_default();
+    let search_engine = app_state.search_engine.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let start = std::time::Instant::now();
+        let (triples, count_total) = search_engine
+            .collect_all_hits(&query, mode, &filters)
+            .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))?;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        let sample: Vec<(u64, u64, u64)> = triples.iter().take(5).copied().collect();
+        Ok(CountAllHitsResponse {
+            all_docs_count: triples.len(),
+            count_collector_total: count_total,
+            sample,
+            elapsed_ms,
+        })
+    })
+    .await
+    .map_err(|e| KashshafError::Search(format!("Task join error: {}", e)))?
 }
 
 #[tauri::command]

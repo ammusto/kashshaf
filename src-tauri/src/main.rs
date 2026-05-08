@@ -40,6 +40,8 @@ fn main() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::search,
+            commands::count_all_hits,
+            commands::get_variants,
             commands::combined_search,
             commands::name_search,
             commands::get_page,

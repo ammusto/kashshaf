@@ -27,6 +27,15 @@ export async function search(
   return invoke('search', { query: sanitizedQuery, mode, filters, limit, offset });
 }
 
+export async function getVariants(
+  query: string,
+  mode: SearchMode,
+  filters: SearchFilters,
+): Promise<import('./index').VariantsResponse> {
+  const sanitizedQuery = stripPunctuation(query);
+  return invoke('get_variants', { query: sanitizedQuery, mode, filters });
+}
+
 export async function getPage(
   id: number,
   partIndex: number,

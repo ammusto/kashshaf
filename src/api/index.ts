@@ -44,6 +44,23 @@ export interface CombinedSearchQuery {
 }
 
 /**
+ * Distribution of surface forms that match a lemma or root query.
+ * Returned by SearchAPI.getVariants.
+ */
+export interface Variant {
+  surface_tuple: string[];
+  freq: number;
+}
+
+export interface VariantsResponse {
+  variants: Variant[];
+  total_hits: number;
+  scanned_hits: number;
+  was_sampled: boolean;
+  elapsed_ms: number;
+}
+
+/**
  * Unified Search API interface
  * Both offline (Tauri) and online (HTTP) implementations use this interface
  */
@@ -63,6 +80,13 @@ export interface SearchAPI {
     limit: number,
     offset: number
   ): Promise<SearchResults>;
+
+  /** Distribution of surface forms matching a lemma/root query. Errors on surface mode. */
+  getVariants(
+    query: string,
+    mode: SearchMode,
+    filters: SearchFilters,
+  ): Promise<VariantsResponse>;
 
   proximitySearch(
     term1: string,
