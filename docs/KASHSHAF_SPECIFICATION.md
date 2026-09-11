@@ -90,6 +90,8 @@ Since 0.5.0 both hosts depend on one crate, `engine/` (`kashshaf-engine`), which
 
 The web build aliases every `@tauri-apps/*` import to stubs in `src/stubs/` (see `vite.config.ts`). The stubbed `invoke` throws, so any code path that reaches Tauri on web is a bug. `isWebTarget()` (`src/utils/platform.ts`) gates all desktop-only UI. The web build is always in online mode.
 
+**API server target.** `kashshaf-api` (`api/`) is built by `release.yml` as a static `x86_64-unknown-linux-musl` binary and installed on the production box as `/opt/kashshaf/api/bin/kashshaf-api-vX.Y.Z` behind an nginx reverse proxy (TLS, 10 req/s burst 30 per IP); `api/deploy/` holds the systemd unit, the nginx site, `install.sh` and the switch/smoke scripts. Configuration is by environment: `KASHSHAF_DATA_DIR`, `KASHSHAF_BIND`, `KASHSHAF_WARM_CACHE=1`, `KASHSHAF_RATE_LIMIT`, `KASHSHAF_MAX_CONCURRENT_WALKS=4` (§17.2). The desktop app and the API always ship the same version (one workspace version, §20).
+
 ### 3.2 Mode model
 
 `OperatingMode = 'online' | 'offline' | 'pending'` (`src/api/index.ts`). `pending` means the desktop app has no corpus and the user has not yet chosen; the download dialog is shown.
@@ -138,6 +140,8 @@ In desktop online mode the toolbar shows an amber **Online Mode** button. Clicki
 ---
 
 ## 4. Technology Stack
+
+*Since 2026-09-12 the three Rust crates form one Cargo workspace (`Cargo.toml` at the root: `engine`, `src-tauri`, `api`; `[workspace.package].version` is the single version number, `tauri.conf.json` reads `../package.json`). The API server adds `tower_governor` (per-IP rate limiting). Builds land in the root `target/` directory.*
 
 ### Frontend
 - React 18.3, TypeScript 5.6, Vite 6
@@ -233,17 +237,18 @@ kashshaf-app/
 
 ### 6.1 Inventory
 
-| File | Producer | Size (corpus 2.0.0) | Read by |
+| File | Producer | Size (corpus 2.0.0 → 4.0.0) | Read by |
 |---|---|---|---|
-| `tantivy_index/` | `indexer/` (Rust) | 13.0 GB (18 segments, 107 files) | `SearchEngine` (desktop and API) |
-| `corpus.db` | `build_sqlite_tokens.py` | 5.24 GB | `TokenCache`, variants, `db_info` check |
-| `metadata.db` | `build_sqlite_tokens.py` | small | All book/author/genre metadata commands |
+| `tantivy_index/` | `indexer/` (Rust) | 13.0 GB, 18 segments (2.0.0) → **6.03 GB, one reading-order segment, 7 files** (4.0.0 compound: `tokens` + `root_text`) | `SearchEngine` (desktop and API) |
+| `corpus.db` | `build_sqlite_tokens.py` | 5.24 GB → **2.92 GB** (schema 4: zstd-dictionary token blobs, `triples`) | `TokenCache`, `TripleMaps`, variants, `db_info` check |
+| `metadata.db` | `build_sqlite_tokens.py` | 41 MB | All book/author/genre metadata commands |
+| `triples.bin` | (planned sidecar of the triple maps; not built yet) | — | `TripleMaps::load` would read it instead of `corpus.db` (~2.3 s at startup today) |
 | `settings.db` | App at first run | small | History, saved searches, settings, collections |
 | `manifest.local.json` | Downloader | tiny | Corpus version and per-file completion |
 
-Sizes are decimal GB from `scripts/manifests/corpus_manifest.json` (total 18.26 GB, or 17.0 GiB). [REPORT.md](REPORT.md) measured 7,176 books, 5,711,697 pages, and 987,907,098 tokens for this corpus.
+Corpus 4.0.0 totals about 9.0 GB (decimal) for 7,177 books, 5,711,710 pages. [REPORT.md](REPORT.md) measured 7,176 books, 5,711,697 pages and 987,907,098 tokens for 2.0.0. The corpus manifest of 4.0.0 carries `base_url` (`https://cdn.kashshaf.com/corpus/4.0.0/`, §14.1) and lists `triples.bin` once the sidecar exists; `stats.json` next to it holds the counts for the website.
 
-**Stale copy:** the `corpus_manifest.json` in this repo's `scripts/manifests/` omits `metadata.db`, but the pipeline's `generate_manifest.py` (in `kashshaf-data-clean`) does hash and list it, and the app requires it to start. The copy here predates the 0.3.0 metadata.db distribution and should be refreshed from the R2 manifest or deleted.
+The stale `corpus_manifest.json` copy that used to live in `scripts/manifests/` was removed on 2026-09-12; the live manifest on R2 is the only copy.
 
 ### 6.2 Data directory resolution (`downloader::get_data_dir`)
 
@@ -653,8 +658,9 @@ Flows: sidebar save icon → SaveCollectionModal (name + description); Collectio
 ### 14.1 CDN endpoints (`downloader.rs`, `utils/announcements.ts`)
 | URL | Content |
 |---|---|
-| `https://cdn.kashshaf.com/corpus_manifest.json` | `{corpus_version, schema_version, min_app_version, built_at, files[{name, hash, size}]}` |
-| `https://cdn.kashshaf.com/<file.name>` | Corpus files (`corpus.db`, `tantivy_index/...`) |
+| `https://cdn.kashshaf.com/corpus_manifest.json` | `{corpus_version, schema_version, min_app_version, built_at, base_url?, files[{name, hash, size}]}` |
+| `<base_url><file.name>` | Corpus files under a **versioned prefix**, e.g. `https://cdn.kashshaf.com/corpus/4.0.0/corpus.db` (`base_url` since 4.0.0 / app 0.5.0; `RemoteManifest::file_url`). A manifest without `base_url` means the flat layout `https://cdn.kashshaf.com/<file.name>` (2.0.0). Every published version keeps its files, so a **rollback is one manifest upload**: `rclone copyto r2:<bucket>/archive/<version>/corpus_manifest.json r2:<bucket>/corpus_manifest.json` (`publish_corpus.py` archives the previous manifest before replacing it). |
+| `https://cdn.kashshaf.com/stats.json` | `{corpus_version, built_at, books, pages, tokens, index_bytes, db_bytes}` for the website |
 | `https://cdn.kashshaf.com/app_manifest.json` | `{latest_version, min_supported_version, releases[{version, released_at, required, notes, downloads{windows, macos, linux}}]}` |
 | `https://cdn.kashshaf.com/announcements.json` | `{schema_version: 1, announcements[]}` |
 
@@ -811,7 +817,7 @@ get_saved_searches(limit?=100) -> Vec<SavedSearchEntry>
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/health` | `status, version, index_docs, segments, reading_order, corpus_version, db_schema_version, max_supported_db_schema, max_limit, wildcard_grammar, exact_counts (always false), max_verified_hits, walks_active, walks_queued, max_concurrent_walks, prefix_cache_entries, prefix_cache_bytes, rss_mb, peak_rss_mb, private_mb` |
+| GET | `/health` | `status, version, index_docs, segments, reading_order, corpus_version, db_schema_version, max_supported_db_schema, max_limit, wildcard_grammar, exact_counts (always false), max_verified_hits, walks_active, walks_queued, max_concurrent_walks, prefix_cache_entries, prefix_cache_bytes, warm_cache (pending \| complete \| disabled), rss_mb, peak_rss_mb, private_mb` |
 | GET | `/search/status` | `key` (a `SearchResults.walk_key`) → `{verified_hits, was_capped, complete, incomplete}`; 404 once the walk has left the prefix cache |
 | GET | `/search` | `q`, `mode?=lemma`, `limit?=50` (1–250), `offset?`, `book_ids?` CSV |
 | POST | `/search/combined` | `{and_terms, or_terms, filters?, limit?, offset?}` |
@@ -918,14 +924,20 @@ Rust `PageKey { id: u64, page_id: u64 }` (no `part_index`). `KashshafError` vari
 
 ## 20. Release Process
 
-Summarized from [RELEASE_REF.MD](RELEASE_REF.MD) and `scripts/release.py`:
-1. `python scripts/release.py X.Y.Z [--min-supported-version A.B.C]` on a clean `main`: bumps `src-tauri/Cargo.toml`, `api/Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json`; prepends a release to `scripts/manifests/app_manifest.json`; commits `vX.Y.Z release`; tags and pushes.
-2. `release.yml` builds Windows MSI, Linux AppImage+deb, and a signed, notarized macOS universal DMG (`Kashshaf_X.Y.Z_macos.dmg`) and creates a **draft** GitHub release.
-3. Publish the release, then upload `app_manifest.json` to R2.
-4. API changes deploy automatically on push to `main` under `api/`.
-5. Corpus updates: upload files and a new `corpus_manifest.json` to R2; bump `schema_version` to force re-download, `min_app_version` to gate old apps.
+One version number, one path to production (the tag), dry runs by default. Details: [RELEASE_STREAMLINING.md](RELEASE_STREAMLINING.md) (analysis), `api/deploy/README.md`, [DEPLOY_BENCH.md](DEPLOY_BENCH.md).
 
-Version history: 0.1.0 (2026-01-05) → 0.2.0 full corpus (01-10) → 0.2.2 collections → 0.2.3 global page ids → 0.3.0 vol:page navigation, metadata.db, reading-order sort (required update, 2026-05-06) → 0.4.0 citations, metadata cleanup, sortable browsers → 0.4.1 lemma variants (2026-05-08).
+1. **Prepare.** `docs/changelog.md` gets a `## [X.Y.Z]` section (the release notes come from it). `python scripts/check_release.py --local` (also CI on every push): workspace version == `package.json`, every crate inherits the workspace version, the changelog section exists.
+2. **Tag.** `python scripts/release.py X.Y.Z [--min-supported-version A.B.C] [--dry-run]` on a clean `main`: bumps the workspace version in `Cargo.toml` and `package.json` (`tauri.conf.json` reads `../package.json`), writes a local preview of the app-manifest entry, writes `.release/min_supported_version` when asked, commits `vX.Y.Z release`, tags, pushes. `--dry-run` prints everything and touches nothing.
+3. **Dry run on the tag.** The tag push runs `release.yml` with `dry_run = true`: all installers and the static API binary are built, the deploy plan, release notes, manifest and web bundle are produced and printed, nothing leaves the runner.
+4. **Real release.** Actions → Release → Run workflow → tag `vX.Y.Z`, `dry_run = false`. Job graph: `build-windows`, `build-linux`, `build-macos`, `build-api` in parallel → `deploy-api` (scp the binary and `api/deploy/switch_release.sh` + `smoke.sh`; on the server: repoint `bin/current`, `systemctl restart`, wait for `/health.version == X.Y.Z` and `warm_cache == complete`, smoke test — search, proximity + status, wildcard, `/page/tokens` without `part_index`, a burst that must yield a JSON 429 — roll back to the previous binary on any failure, keep three; then `check_release.py --post-deploy` and `smoke.sh` again from outside against `https://api.kashshaf.com`) → `publish` (needs the three installers **and** `deploy-api`; `production` environment with a required reviewer; GitHub release, not a draft, notes from the changelog) → `manifest` (live `app_manifest.json` from the CDN, the release's assets from the GitHub API, `scripts/build_app_manifest.py` builds the entry from the **actual** URLs and HEAD-checks them, `min_supported_version` from the input or the marker file, archive + upload to R2, download back and diff, post-deploy check incl. `corpus_manifest.min_app_version <= latest_version`) and `web` (`npm run build:web`, `wrangler pages deploy`). The dependency on `deploy-api` is what stops 0.5.0 clients from meeting a 0.4.x server: the shim covers old clients on a new server, nothing covers new clients on an old server.
+5. **Hotfix redeploy** of an existing tag: Run workflow with `only_api = true`.
+6. **Corpus.** After the app manifest is live: `publish_corpus.py 4.0.0 --data-dir … --schema-version 4 --min-app-version 0.5.0 --check --dest r2:<bucket>` (§14.1, BUILD_CORPUS.md §8). Never before: `check_release.py` fails a corpus whose `min_app_version` is above the live `latest_version`.
+7. **Website and announcements.** `kashshaf-web`: push builds, `workflow_dispatch(dry_run=false)` deploys; the About page reads `stats.json`. `announcements.yml` validates `scripts/announcements/announcements.json` on every change and uploads on `workflow_dispatch(dry_run=false)`.
+8. **Bench from outside** (`bench --remote https://api.kashshaf.com --concurrency 16 --check-compat`, cold and warm) and put the off-box/warm column into §21.
+
+Secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET` (token scoped to that one bucket, write only), `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SERVER_SSH_KEY`, the Apple signing secrets; repository variables `API_SSH_HOST`, `API_SSH_USER`, `CF_PAGES_APP_PROJECT`, `CF_PAGES_WEB_PROJECT`; a `production` environment with a required reviewer. `docs/`, `scripts/release.py`, `scripts/check_release.py`, `scripts/build_app_manifest.py` and `scripts/announcements/` are tracked; the rest of `scripts/` and `releases/` stay ignored.
+
+Version history: 0.1.0 (2026-01-05) → 0.2.0 full corpus (01-10) → 0.2.2 collections → 0.2.3 global page ids → 0.3.0 vol:page navigation, metadata.db, reading-order sort (required update, 2026-05-06) → 0.4.0 citations, metadata cleanup, sortable browsers → 0.4.1 lemma variants (2026-05-08; the GitHub release stayed a draft) → 0.5.0 engine crate, compound corpus 4.0.0, walks, glob wildcards, release pipeline (in progress).
 
 ---
 
@@ -948,7 +960,7 @@ Measured on the full compound index (5,711,710 pages), release build, warm page 
 | Startup | <8 s | 3–7 s: triple maps ≈ 2.3 s, index open/verify ≈ 0.2 s, the rest page-cache misses; `KASHSHAF_WARM_CACHE=1` reads 8.3 GiB in ~10 s in the background |
 | Memory (API, full corpus) | <1 GiB private | 389 MiB private after open (188 MB triple maps); +23 MiB for `ابن ال*`; exact `الله ~10 قال` +280 MiB while cached; working set up to 1.1 GiB because mmapped postings pages are counted |
 
-Online mode adds network latency; requests are limited to 250 rows and, when `KASHSHAF_RATE_LIMIT` is set, to 10 requests/s (burst 30) per client IP.
+Online mode adds network latency; requests are limited to 250 rows and, when `KASHSHAF_RATE_LIMIT` is set, to 10 requests/s (burst 30) per client IP. The deployment bench ([DEPLOY_BENCH.md](DEPLOY_BENCH.md), `bench --remote`) measured the loopback overhead at 1–4 ms per 250-row page on a local server (on-box/warm; `engine/bench/reports/remote-localhost-warm.json`); the off-box cold/warm columns against `api.kashshaf.com` are still to be measured after the first real deploy and will replace the "Measured" column above.
 
 ---
 
@@ -973,7 +985,7 @@ Items found while reconciling this specification with the v0.4.1 code. None are 
 24. Wildcard grammars differ by index kind (§8.3); the frontend defaults to `glob` until `get_capabilities` / `/health` answers, so on a three-field index a glob-only pattern typed before that moment is rejected by the engine with the legacy message instead of inline.
 
 **Data / distribution**
-11. The `corpus_manifest.json` copy in `scripts/manifests/` is stale and omits `metadata.db` (§6.1).
+11. ~~The `corpus_manifest.json` copy in `scripts/manifests/` is stale and omits `metadata.db`~~ — removed 2026-09-12; the live manifest on R2 is the only copy (§6.1). *Also fixed the same day:* `deploy-api.yml`, which deployed whatever `main` was at the moment someone touched `api/`, is gone; the API deploys only from `release.yml` on a tag (§20). *Found while building the pipeline:* the live `app_manifest.json` points 0.4.1 downloads at assets that answer 404 (the v0.4.1 GitHub release was never published from draft, and the AppImage name in the manifest is lower-case while the real assets are `Kashshaf_X_amd64.AppImage`); the `manifest` job now builds entries from the actual asset URLs and HEAD-checks them.
 12. `settings.db` lives in the corpus data directory, contrary to the comment in `state.rs`; `archive_old_corpus` moves it (§6.2).
 13. `db_info` is the version table the app reads; CORPUS_DATA_MODEL.md documents `corpus_builds`.
 
@@ -1018,7 +1030,7 @@ Items found while reconciling this specification with the v0.4.1 code. None are 
 
 ## 24. Roadmap Pointers
 
-- [REPORT.md](REPORT.md) and [REPORT_IMPLEMENTATION_PLAN.md](REPORT_IMPLEMENTATION_PLAN.md): Phase A and Phase B code is complete in 0.5.0 (§25); the full-corpus 3.0.0 / 4.0.0 builds and their benchmarks are the remaining steps ([BUILD_CORPUS.md](BUILD_CORPUS.md)).
+- [REPORT.md](REPORT.md) and [REPORT_IMPLEMENTATION_PLAN.md](REPORT_IMPLEMENTATION_PLAN.md): Phase A and Phase B code is complete in 0.5.0 (§25). **Corpus 3.0.0 is cancelled**; the next public corpus is 4.0.0 (compound, schema 4, `min_app_version` 0.5.0), published with `publish_corpus.py` after the 0.5.0 app manifest is live ([BUILD_CORPUS.md](BUILD_CORPUS.md) §8). The deployment bench ([DEPLOY_BENCH.md](DEPLOY_BENCH.md)) runs from outside after the first real deploy and its off-box/warm column goes into §21.
 - Deferred: `triples.bin` sidecar (only if full-corpus startup exceeds ~1.5 s); frontend UI for the now-working date/genre/author filters.
 
 ---
