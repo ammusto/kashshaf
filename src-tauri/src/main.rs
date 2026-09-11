@@ -90,6 +90,7 @@ fn main() {
             commands::reload_app_state,
             commands::get_capabilities,
             commands::set_exact_counts,
+            commands::get_walk_status,
             // User settings commands (for online/offline mode)
             commands::get_user_setting,
             commands::set_user_setting,

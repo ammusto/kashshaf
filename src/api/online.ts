@@ -15,6 +15,7 @@ import type {
   Token,
   EngineCapabilities,
   WildcardGrammar,
+  WalkStatus,
 } from '../types';
 import { stripPunctuation } from '../utils/sanitize';
 
@@ -228,6 +229,14 @@ export class OnlineAPI implements SearchAPI {
     }
 
     return fetchAPI<SearchResults>(`/search/wildcard?${params}`);
+  }
+
+  async getWalkStatus(key: string): Promise<WalkStatus | null> {
+    try {
+      return await fetchAPI<WalkStatus>(`/search/status?key=${encodeURIComponent(key)}`);
+    } catch {
+      return null;
+    }
   }
 
   async getCapabilities(): Promise<EngineCapabilities> {

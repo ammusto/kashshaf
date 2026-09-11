@@ -10,6 +10,7 @@ pub mod collectors;
 pub mod corpus_db;
 pub mod forward;
 pub mod glob;
+pub mod memory;
 pub mod normalize;
 pub mod positional;
 pub mod search;
@@ -34,6 +35,10 @@ pub use search::{
     ProximityImpl, ProximityStats, SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm,
     WildcardGrammar, WildcardQueryInfo, WildcardType, PROXIMITY_MAX_VERIFY, WILDCARD_EXPANSION_THRESHOLD,
 };
-pub use walk::{WalkCache, WalkHit, WalkLimits, MAX_VERIFIED_HITS, WALK_BUDGET_MS};
+pub use memory::{process_memory, ProcessMemory};
+pub use walk::{
+    default_max_concurrent_walks, WalkCache, WalkHit, WalkLimits, WalkStats, WalkStatus, MAX_VERIFIED_HITS,
+    PREFIX_CACHE_BYTES, PREFIX_CACHE_ENTRIES, WALK_BUDGET_MS, WALK_INLINE_MS, WALK_QUEUE_MS,
+};
 pub use tokens::{PageKey, Token, TokenClitic, TokenField};
 pub use variants::{compute_variants, Variant, VariantsResponse, MAX_SCANNED_HITS};

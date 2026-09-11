@@ -10,8 +10,12 @@ use axum::{
 use kashshaf_engine::{
     check_corpus_schema_supported, compute_variants, ensure_corpus_indexes, EngineConfig, PageKey, PageWithMatches,
     SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, Token, TokenCache,
-    VariantsResponse, WildcardGrammar, MAX_SUPPORTED_DB_SCHEMA,
+    VariantsResponse, WalkStatus, WildcardGrammar, MAX_SUPPORTED_DB_SCHEMA,
 };
+use kashshaf_engine::memory::process_memory;
+use axum::response::IntoResponse;
+use std::net::SocketAddr;
+use tower_governor::{governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorError, GovernorLayer};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -184,6 +188,21 @@ struct HealthResponse {
     /// Always false on the server: walks stop at `max_verified_hits`.
     exact_counts: bool,
     max_verified_hits: usize,
+    /// Walk threads running / waiting for a permit, and the prefix cache.
+    walks_active: usize,
+    walks_queued: usize,
+    max_concurrent_walks: usize,
+    prefix_cache_entries: usize,
+    prefix_cache_bytes: usize,
+    /// Process memory, MiB (working set includes mmapped index pages).
+    rss_mb: f64,
+    peak_rss_mb: f64,
+    private_mb: f64,
+}
+
+#[derive(Deserialize)]
+struct WalkStatusQuery {
+    key: String,
 }
 
 #[derive(Serialize)]
@@ -216,6 +235,8 @@ struct ErrorResponse {
 // === Handlers ===
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
+    let ws = state.search_engine.walk_stats();
+    let mem = process_memory();
     Json(HealthResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -229,7 +250,27 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         wildcard_grammar: state.search_engine.wildcard_grammar(),
         exact_counts: false,
         max_verified_hits: state.search_engine.config().max_verified_hits,
+        walks_active: ws.walks_active,
+        walks_queued: ws.walks_queued,
+        max_concurrent_walks: ws.max_concurrent_walks,
+        prefix_cache_entries: ws.prefix_cache_entries,
+        prefix_cache_bytes: ws.prefix_cache_bytes,
+        rss_mb: mem.rss_mb(),
+        peak_rss_mb: mem.peak_rss_mb(),
+        private_mb: mem.private_mb(),
     })
+}
+
+/// Progress of a walk-backed search: poll with `SearchResults.walk_key`
+/// while `complete` is false. 404 once the walk has left the cache.
+async fn walk_status(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<WalkStatusQuery>,
+) -> Result<Json<WalkStatus>, ApiError> {
+    match state.search_engine.walk_status(&params.key) {
+        Some(s) => Ok(Json(s)),
+        None => Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: "unknown walk key".to_string() }))),
+    }
 }
 
 async fn simple_search(
@@ -483,7 +524,18 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Exact counts are a desktop-only setting; the server always caps walks.
-    let config = EngineConfig { exact_counts: false, ..EngineConfig::api_server() };
+    let mut config = EngineConfig { exact_counts: false, ..EngineConfig::api_server() };
+    if let Some(n) = std::env::var("KASHSHAF_MAX_WALKS").ok().and_then(|v| v.parse::<usize>().ok()) {
+        config.max_concurrent_walks = n.max(1);
+    }
+    tracing::info!(
+        "walks: max_concurrent={} cap={} budget={}ms prefix_cache={} entries / {} MiB",
+        config.max_concurrent_walks,
+        config.max_verified_hits,
+        config.walk_budget_ms,
+        config.prefix_cache_entries,
+        config.prefix_cache_bytes / (1024 * 1024)
+    );
     let mut search_engine = SearchEngine::open_with_corpus(&index_path, Some(&db_path), config)?;
     let token_cache = Arc::new(TokenCache::new(db_path.clone(), 1000)?);
     search_engine.set_token_cache(token_cache.clone());
@@ -506,10 +558,26 @@ async fn main() -> anyhow::Result<()> {
         db_schema_version,
     });
 
+    // Optional page-cache warm-up: read the index and corpus.db once so the
+    // first queries do not pay for cold disk reads. Never blocks readiness.
+    if std::env::var("KASHSHAF_WARM_CACHE").map(|v| v == "1").unwrap_or(false) {
+        let paths: Vec<PathBuf> = std::fs::read_dir(&index_path)
+            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_file()).collect::<Vec<PathBuf>>())
+            .unwrap_or_default()
+            .into_iter()
+            .chain(std::iter::once(db_path.clone()))
+            .collect();
+        std::thread::Builder::new()
+            .name("kashshaf-warm".into())
+            .spawn(move || warm_page_cache(&paths))
+            .ok();
+    }
+
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/search/status", get(walk_status))
         .route("/search", get(simple_search))
         .route("/search/combined", post(combined_search))
         .route("/search/proximity", post(proximity_search))
@@ -529,8 +597,83 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
+    // Per-client-IP rate limit, enabled by KASHSHAF_RATE_LIMIT ("1" for the
+    // defaults 10 req/s, burst 30; or "<per_second>[,<burst>]"). Off when
+    // unset so local runs are unaffected; production sits behind a proxy
+    // that limits as well.
+    let app = match rate_limit_from_env() {
+        Some((per_second, burst)) => {
+            let conf = GovernorConfigBuilder::default()
+                .per_millisecond((1000 / per_second.max(1)) as u64)
+                .burst_size(burst)
+                .key_extractor(SmartIpKeyExtractor)
+                .error_handler(|e: GovernorError| -> axum::response::Response {
+                    let (status, msg) = match e {
+                        GovernorError::TooManyRequests { wait_time, .. } => {
+                            (StatusCode::TOO_MANY_REQUESTS, format!("rate limit exceeded; retry in {} s", wait_time))
+                        }
+                        GovernorError::UnableToExtractKey => {
+                            (StatusCode::INTERNAL_SERVER_ERROR, "rate limiter could not read the client address".to_string())
+                        }
+                        GovernorError::Other { msg, .. } => {
+                            (StatusCode::INTERNAL_SERVER_ERROR, msg.unwrap_or_else(|| "rate limiter error".to_string()))
+                        }
+                    };
+                    (status, Json(ErrorResponse { error: msg })).into_response()
+                })
+                .finish()
+                .expect("rate limit configuration");
+            tracing::info!("rate limit: {} req/s, burst {}, per client IP", per_second, burst);
+            app.layer(GovernorLayer { config: Arc::new(conf) })
+        }
+        None => app,
+    };
+
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("Listening on http://{}", bind);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
+}
+
+/// `KASHSHAF_RATE_LIMIT` → (requests per second, burst). Unset, empty, "0" or
+/// "off" disables the limiter; "1"/"true"/"on" selects the defaults.
+fn rate_limit_from_env() -> Option<(u32, u32)> {
+    let raw = std::env::var("KASHSHAF_RATE_LIMIT").ok()?;
+    let v = raw.trim().to_ascii_lowercase();
+    if v.is_empty() || v == "0" || v == "off" || v == "false" {
+        return None;
+    }
+    if v == "1" || v == "true" || v == "on" {
+        return Some((10, 30));
+    }
+    let nums: Vec<u32> = v.split(|c: char| !c.is_ascii_digit()).filter(|t| !t.is_empty()).filter_map(|t| t.parse().ok()).collect();
+    match nums.as_slice() {
+        [r] => Some(((*r).max(1), (*r * 3).max(1))),
+        [r, b, ..] => Some(((*r).max(1), (*b).max(1))),
+        _ => Some((10, 30)),
+    }
+}
+
+/// Sequentially read every file once (8 MiB chunks) so the OS page cache
+/// holds it; logs the volume and the time.
+fn warm_page_cache(paths: &[PathBuf]) {
+    use std::io::Read;
+    let start = std::time::Instant::now();
+    let mut total: u64 = 0;
+    let mut buf = vec![0u8; 8 * 1024 * 1024];
+    for p in paths {
+        let Ok(mut f) = std::fs::File::open(p) else { continue };
+        loop {
+            match f.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => total += n as u64,
+            }
+        }
+    }
+    tracing::info!(
+        "page-cache warm-up: read {:.1} GiB from {} files in {:.1} s",
+        total as f64 / (1024.0 * 1024.0 * 1024.0),
+        paths.len(),
+        start.elapsed().as_secs_f64()
+    );
 }

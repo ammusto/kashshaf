@@ -23,7 +23,10 @@ use crate::normalize::{count_arabic_letters, normalize_arabic, normalize_root_qu
 use crate::positional::{PositionalHit, StreamSink};
 use crate::tokens::PageKey;
 use crate::triples::{triple_term, TripleMaps};
-use crate::walk::{Sink, WalkCache, WalkHit, WalkLimits, WalkWindow, Walker, MAX_VERIFIED_HITS, WALK_BUDGET_MS, WALK_CACHE_ENTRIES};
+use crate::walk::{
+    default_max_concurrent_walks, Sink, WalkCache, WalkHit, WalkLimits, WalkStats, WalkStatus, WalkWindow, Walker,
+    MAX_VERIFIED_HITS, PREFIX_CACHE_BYTES, PREFIX_CACHE_ENTRIES, WALK_BUDGET_MS,
+};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -217,10 +220,19 @@ pub struct SearchResults {
     pub total_hits: usize,
     pub results: Vec<SearchResult>,
     pub elapsed_ms: u64,
-    /// Set when `total_hits` is a lower bound because verification stopped at
-    /// a candidate cap (proximity in compound mode).
+    /// Set when `total_hits` is a lower bound: the walk stopped at the hit
+    /// cap or its budget, or is still running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub was_capped: Option<bool>,
+    /// Cache key of the walk behind this result (proximity, wide phrases,
+    /// verified boolean/name/wildcard); poll `walk_status` with it while
+    /// `complete` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walk_key: Option<String>,
+    /// For walk-backed results: whether the walk had finished when this
+    /// window was served (false → `total_hits` will still grow).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complete: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +278,11 @@ pub struct EngineConfig {
     /// Exact counts: walks have no hit cap and no budget and wait for
     /// completion. Desktop setting; always false on the API server.
     pub exact_counts: bool,
+    /// Detached walks allowed to run at once (`default_max_concurrent_walks`).
+    pub max_concurrent_walks: usize,
+    /// Prefix cache bounds: entries and approximate bytes, whichever first.
+    pub prefix_cache_entries: usize,
+    pub prefix_cache_bytes: usize,
 }
 
 /// Compound-index proximity implementations.
@@ -295,6 +312,15 @@ const WALK_PAGE_MEMO_ENTRIES: usize = 128;
 /// Glob expansions memoized per engine.
 const GLOB_CACHE_ENTRIES: usize = 64;
 
+/// Outcome of a walk-backed (or exact) compound phrase / wildcard search.
+struct Walked {
+    total: usize,
+    results: Vec<SearchResult>,
+    was_capped: bool,
+    walk_key: Option<String>,
+    complete: bool,
+}
+
 /// What the frontend needs to know about the engine it talks to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineCapabilities {
@@ -320,6 +346,9 @@ impl Default for EngineConfig {
             max_verified_hits: MAX_VERIFIED_HITS,
             walk_budget_ms: WALK_BUDGET_MS,
             exact_counts: false,
+            max_concurrent_walks: default_max_concurrent_walks(),
+            prefix_cache_entries: PREFIX_CACHE_ENTRIES,
+            prefix_cache_bytes: PREFIX_CACHE_BYTES,
         }
     }
 }
@@ -354,6 +383,10 @@ pub struct ProximityStats {
     pub from_cache: bool,
     /// Duration of the whole walk (0 while it is still running).
     pub walk_ms: u64,
+    /// Cache key of the walk (compound paths).
+    pub walk_key: Option<String>,
+    /// The walk had finished when the window was served (true for non-walk paths).
+    pub complete: bool,
     pub path: &'static str,
     /// Candidate pages matching the boolean (bag-of-words) query.
     pub candidates_total: usize,
@@ -650,7 +683,7 @@ impl SearchEngine {
             reader,
             fields,
             kind,
-            walks: WalkCache::new(WALK_CACHE_ENTRIES),
+            walks: WalkCache::with_limits(config.prefix_cache_entries, config.prefix_cache_bytes, config.max_concurrent_walks),
             walk_pages: std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(WALK_PAGE_MEMO_ENTRIES).unwrap())),
             glob_cache: std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(GLOB_CACHE_ENTRIES).unwrap())),
             exact_counts: AtomicBool::new(config.exact_counts),
@@ -691,6 +724,16 @@ impl SearchEngine {
     /// Block until every cached walk has finished (benchmarks, tests).
     pub fn wait_walks(&self) {
         self.walks.wait_all();
+    }
+
+    /// Progress of a cached walk by its `SearchResults::walk_key`.
+    pub fn walk_status(&self, key: &str) -> Option<WalkStatus> {
+        self.walks.status(key)
+    }
+
+    /// Walk threads, queue and prefix-cache size.
+    pub fn walk_stats(&self) -> WalkStats {
+        self.walks.stats()
     }
 
     pub fn clear_walk_cache(&self) {
@@ -1408,6 +1451,8 @@ impl SearchEngine {
                 results: Vec::new(),
                 elapsed_ms: 0,
                 was_capped: None,
+                walk_key: None,
+                complete: None,
             });
         }
         let searcher = self.reader.searcher();
@@ -1493,6 +1538,7 @@ impl SearchEngine {
             let key = self.walk_key("combined", &(and_terms, or_terms), filters);
             let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify)?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
+            let complete = w.done;
             let join = |ts: &[SearchTerm], sep: &str| ts.iter().map(|t| t.query.as_str()).collect::<Vec<_>>().join(sep);
             let query_display = if !and_terms.is_empty() && !or_terms.is_empty() {
                 format!("({}) AND ({})", join(and_terms, " AND "), join(or_terms, " OR "))
@@ -1508,6 +1554,8 @@ impl SearchEngine {
                 results,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 was_capped: if w.was_capped { Some(true) } else { None },
+                walk_key: Some(key),
+                complete: Some(complete),
             });
         }
         let (total_hits, addrs) = self
@@ -1562,6 +1610,8 @@ impl SearchEngine {
             results,
             elapsed_ms: start.elapsed().as_millis() as u64,
             was_capped: if was_capped { Some(true) } else { None },
+            walk_key: None,
+            complete: None,
         })
     }
 
@@ -1592,7 +1642,11 @@ impl SearchEngine {
                     self.proximity_forward(&searcher, key, final_query, sets1, sets2, max_distance, limit, offset)?
                 }
             }
-            IndexKind::ThreeField => self.proximity_postings(&searcher, &*final_query, term1, term2, max_distance, limit, offset)?,
+            IndexKind::ThreeField => {
+                let mut r = self.proximity_postings(&searcher, &*final_query, term1, term2, max_distance, limit, offset)?;
+                r.3.complete = true;
+                r
+            }
         };
         stats.total_us = start.elapsed().as_micros() as u64;
         if prox_debug() {
@@ -1628,6 +1682,8 @@ impl SearchEngine {
                 results,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 was_capped: if was_capped { Some(true) } else { None },
+                walk_key: stats.walk_key.clone(),
+                complete: if stats.walk_key.is_some() { Some(stats.complete) } else { None },
             },
             stats,
         ))
@@ -1658,20 +1714,22 @@ impl SearchEngine {
     /// index.
     #[allow(clippy::too_many_arguments)]
     fn phrase_positional(&self, searcher: &Searcher, term: &SearchTerm, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, start: std::time::Instant) -> Result<SearchResults> {
-        let (total_hits, results, was_capped) = self.phrase_positional_core(searcher, key, sets, filters, limit, offset)?;
+        let w = self.phrase_positional_core(searcher, key, sets, filters, limit, offset)?;
         Ok(SearchResults {
             query: term.query.clone(),
             mode: term.mode,
-            total_hits,
-            results,
+            total_hits: w.total,
+            results: w.results,
             elapsed_ms: start.elapsed().as_millis() as u64,
-            was_capped: if was_capped { Some(true) } else { None },
+            was_capped: if w.was_capped { Some(true) } else { None },
+            walk_key: w.walk_key,
+            complete: Some(w.complete),
         })
     }
 
     /// (total hits, result window, was_capped) for a compound phrase given
     /// its per-slot triple sets, through the walk cache.
-    fn phrase_positional_core(&self, searcher: &Searcher, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize) -> Result<(usize, Vec<SearchResult>, bool)> {
+    fn phrase_positional_core(&self, searcher: &Searcher, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize) -> Result<Walked> {
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
         let threshold = self.config.wildcard_expansion_threshold;
@@ -1761,7 +1819,7 @@ impl SearchEngine {
             }
         })?;
         let results = self.walk_window_results(searcher, &key_for_memo, offset, limit, &w)?;
-        Ok((w.total, results, w.was_capped))
+        Ok(Walked { total: w.total, results, was_capped: w.was_capped, walk_key: Some(key_for_memo), complete: w.done })
     }
 
     /// Compound proximity, single-word sides: positional intersection on the
@@ -1805,9 +1863,11 @@ impl SearchEngine {
         stats.verified_hits = w.total;
         stats.from_cache = w.from_cache;
         stats.walk_ms = w.walk_elapsed_ms;
+        stats.complete = w.done;
         let td = std::time::Instant::now();
         let results = self.walk_window_results(searcher, &key_for_memo, offset, limit, &w)?;
         stats.doc_fetch_us = td.elapsed().as_micros() as u64;
+        stats.walk_key = Some(key_for_memo);
         Ok((results, w.total, w.was_capped, stats))
     }
 
@@ -1908,9 +1968,11 @@ impl SearchEngine {
         stats.verified_hits = w.total;
         stats.from_cache = w.from_cache;
         stats.walk_ms = w.walk_elapsed_ms;
+        stats.complete = w.done;
         let td = std::time::Instant::now();
         let results = self.walk_window_results(searcher, &key_for_memo, offset, limit, &w)?;
         stats.doc_fetch_us = td.elapsed().as_micros() as u64;
+        stats.walk_key = Some(key_for_memo);
         Ok((results, w.total, w.was_capped, stats))
     }
 
@@ -1925,6 +1987,8 @@ impl SearchEngine {
             results: Vec::new(),
             elapsed_ms: 0,
             was_capped: None,
+            walk_key: None,
+            complete: None,
         };
         if patterns_by_form.is_empty() || patterns_by_form.iter().all(|p| p.is_empty()) {
             return Ok(empty());
@@ -2009,6 +2073,8 @@ impl SearchEngine {
                 results,
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 was_capped: if w.was_capped { Some(true) } else { None },
+                walk_key: Some(key),
+                complete: Some(w.done),
             });
         }
         let (total_hits, addrs) = self.paged(&searcher, &*final_query, limit, offset)?;
@@ -2045,6 +2111,8 @@ impl SearchEngine {
             results,
             elapsed_ms: start.elapsed().as_millis() as u64,
             was_capped: if was_capped { Some(true) } else { None },
+            walk_key: None,
+            complete: None,
         })
     }
 
@@ -2109,7 +2177,7 @@ impl SearchEngine {
         let searcher = self.reader.searcher();
         let cache = cache.or(self.cache.as_deref());
 
-        let (total_hits, mut results, was_capped) = match self.kind {
+        let walked = match self.kind {
             IndexKind::ThreeField => {
                 let what = format!("{}*{}", info.prefix, info.suffix.as_deref().unwrap_or(""));
                 let text_query = self.wildcard_query_three_field(&info)?;
@@ -2144,20 +2212,23 @@ impl SearchEngine {
                         }
                     }
                 }
-                (total, results, false)
+                Walked { total, results, was_capped: false, walk_key: None, complete: true }
             }
             IndexKind::Compound => self.wildcard_compound(&searcher, &normalized, &info, filters, limit, offset)?,
         };
+        let Walked { total, mut results, was_capped, walk_key, complete } = walked;
         if !self.reading_order {
             sort_results_by_reading_order(&mut results);
         }
         Ok(SearchResults {
             query: query.to_string(),
             mode: SearchMode::Surface,
-            total_hits,
+            total_hits: total,
             results,
             elapsed_ms: start.elapsed().as_millis() as u64,
             was_capped: if was_capped { Some(true) } else { None },
+            complete: if walk_key.is_some() { Some(complete) } else { None },
+            walk_key,
         })
     }
 
@@ -2191,14 +2262,14 @@ impl SearchEngine {
 
     /// Compound wildcard: (total, window, was_capped). See
     /// [`Self::wildcard_search_with_cache`] for the path choice.
-    fn wildcard_compound(&self, searcher: &Searcher, normalized: &str, info: &WildcardQueryInfo, filters: &SearchFilters, limit: usize, offset: usize) -> Result<(usize, Vec<SearchResult>, bool)> {
+    fn wildcard_compound(&self, searcher: &Searcher, normalized: &str, info: &WildcardQueryInfo, filters: &SearchFilters, limit: usize, offset: usize) -> Result<Walked> {
         let sets = self.wildcard_sets(info);
         let sizes: Vec<usize> = sets.iter().map(|s| s.len()).collect();
         if sets.iter().any(|s| s.is_empty()) {
             if prox_debug() {
                 eprintln!("[wildcard] empty slot sizes={:?}", sizes);
             }
-            return Ok((0, Vec::new(), false));
+            return Ok(Walked { total: 0, results: Vec::new(), was_capped: false, walk_key: None, complete: true });
         }
         // Every id adds at least one trie node, so a phrase whose ids alone
         // exceed the budget skips the (sort-heavy) trie count.
@@ -2222,7 +2293,7 @@ impl SearchEngine {
                     total
                 );
             }
-            return Ok((total, results, false));
+            return Ok(Walked { total, results, was_capped: false, walk_key: None, complete: true });
         }
         if prox_debug() {
             eprintln!("[wildcard] path=walk sizes={:?} trie_nodes={} threshold={}", sizes, states, self.config.wildcard_expansion_threshold);
@@ -2497,12 +2568,12 @@ fn candidates_sorted(searcher: &Searcher, query: &dyn Query) -> Result<(usize, V
 }
 
 /// Adapter from the positional stream to a walk sink.
-struct WalkStreamSink<'a, 'b> {
-    sink: &'a mut Sink<'b>,
+struct WalkStreamSink<'a> {
+    sink: &'a mut Sink,
     positions_cap: usize,
 }
 
-impl StreamSink for WalkStreamSink<'_, '_> {
+impl StreamSink for WalkStreamSink<'_> {
     fn want_positions(&mut self, _hits_so_far: usize) -> bool {
         true
     }

@@ -13,6 +13,7 @@ import type {
   SearchResult,
   Token,
   EngineCapabilities,
+  WalkStatus,
 } from '../types';
 import * as tauri from './tauri';
 
@@ -93,6 +94,10 @@ export class OfflineAPI implements SearchAPI {
 
   async getCapabilities(): Promise<EngineCapabilities> {
     return tauri.getCapabilities();
+  }
+
+  async getWalkStatus(key: string): Promise<WalkStatus | null> {
+    return tauri.getWalkStatus(key);
   }
 
   async getPage(

@@ -95,7 +95,42 @@ function generateNameDisplayLabel(forms: NameFormData[]): string {
 
 export function useSearch(options: UseSearchOptions): UseSearchReturn {
   const { selectedBookIds, loadResultIntoTab, api } = options;
-  const { activeTab, createTab: createTabFromContext, updateTab } = useSearchTabsContext();
+  const { activeTab, createTab: createTabFromContext, updateTab, updateTabWith } = useSearchTabsContext();
+
+  // A walk-backed response that came back before its walk finished carries
+  // `complete: false`. Poll the walk once after 500 ms and once more after a
+  // further 2 s if it is still running, and update the header counts in
+  // place; the rows are never re-rendered from a poll.
+  const scheduleStatusPolls = useCallback((tabId: string, results: SearchResults) => {
+    const key = results.walk_key;
+    if (!key || results.complete !== false) return;
+    const poll = async (): Promise<boolean> => {
+      try {
+        const status = await api.getWalkStatus(key);
+        if (!status) return true;
+        updateTabWith(tabId, tab => {
+          const current = tab.searchResults;
+          if (!current || current.walk_key !== key) return {};
+          return {
+            searchResults: {
+              ...current,
+              total_hits: Math.max(current.total_hits, status.verified_hits),
+              was_capped: status.was_capped,
+              complete: status.complete,
+            },
+          };
+        });
+        return status.complete;
+      } catch (err) {
+        console.warn('walk status poll failed:', err);
+        return true;
+      }
+    };
+    setTimeout(async () => {
+      const done = await poll();
+      if (!done) setTimeout(() => { poll(); }, 2000);
+    }, 500);
+  }, [api, updateTabWith]);
 
   // Wrapper to match the old createTab signature
   const createTab = useCallback((label: string, fullQuery: string, tabType: AppSearchMode, searchContext: SearchContext): string => {
@@ -151,6 +186,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
         const filters = getFilters();
         const results = await api.wildcardSearch(wildcardInput.query, filters, PAGE_SIZE, 0);
         updateTab(tabId, { searchResults: results, loading: false });
+        scheduleStatusPolls(tabId, results);
 
         if (results.results.length > 0) {
           loadResultIntoTab(tabId, results.results[0]);
@@ -176,6 +212,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       const filters = getFilters();
       const results = await api.combinedSearch(combined, filters, PAGE_SIZE, 0);
       updateTab(tabId, { searchResults: results, loading: false });
+      scheduleStatusPolls(tabId, results);
 
       if (results.results.length > 0) {
         loadResultIntoTab(tabId, results.results[0]);
@@ -187,7 +224,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       updateTab(tabId, { errorMessage: `Search failed: ${err}`, loading: false });
       console.error('Search failed:', err);
     }
-  }, [createTab, updateTab, getFilters, addSearchToHistory, loadResultIntoTab, api]);
+  }, [createTab, updateTab, getFilters, addSearchToHistory, loadResultIntoTab, api, scheduleStatusPolls]);
 
   // Proximity search handler
   const handleProximitySearch = useCallback(async (query: ProximitySearchQuery) => {
@@ -214,6 +251,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       );
 
       updateTab(tabId, { searchResults: results, loading: false });
+      scheduleStatusPolls(tabId, results);
 
       if (results.results.length > 0) {
         loadResultIntoTab(tabId, results.results[0]);
@@ -232,7 +270,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       updateTab(tabId, { errorMessage: `Proximity search failed: ${err}`, loading: false });
       console.error('Proximity search failed:', err);
     }
-  }, [createTab, updateTab, getFilters, addSearchToHistory, loadResultIntoTab, api]);
+  }, [createTab, updateTab, getFilters, addSearchToHistory, loadResultIntoTab, api, scheduleStatusPolls]);
 
   // Name search handler - returns displayPatterns so caller can update state
   const handleNameSearch = useCallback(async (nameFormData: NameFormData[]): Promise<{ displayPatterns: string[][] }> => {
@@ -255,6 +293,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       const filters = getFilters();
       const results = await api.nameSearch(forms, filters, PAGE_SIZE, 0);
       updateTab(tabId, { searchResults: results, loading: false });
+      scheduleStatusPolls(tabId, results);
 
       if (results.results.length > 0) {
         loadResultIntoTab(tabId, results.results[0]);
@@ -271,7 +310,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
     }
 
     return { displayPatterns };
-  }, [createTab, updateTab, getFilters, addSearchToHistory, loadResultIntoTab, api]);
+  }, [createTab, updateTab, getFilters, addSearchToHistory, loadResultIntoTab, api, scheduleStatusPolls]);
 
   // Load more results handler (works for all search types)
   const handleLoadMore = useCallback(async () => {
@@ -322,10 +361,13 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
           results: [...searchResults.results, ...moreResults.results],
           total_hits: Math.max(searchResults.total_hits, moreResults.total_hits),
           was_capped: moreResults.was_capped,
+          walk_key: moreResults.walk_key ?? searchResults.walk_key,
+          complete: moreResults.complete,
           loadedAll: moreResults.results.length === 0,
         },
         loadingMore: false,
       });
+      scheduleStatusPolls(activeTab.id, moreResults);
     } catch (err) {
       updateTab(activeTab.id, {
         errorMessage: `Failed to load more results: ${err}`,
@@ -333,7 +375,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       });
       console.error('Failed to load more:', err);
     }
-  }, [activeTab, getFilters, updateTab, api]);
+  }, [activeTab, getFilters, updateTab, api, scheduleStatusPolls]);
 
   // Export handler - re-runs the search with up to EXPORT_MAX_RESULTS
   const handleExportResults = useCallback(async (): Promise<SearchResult[]> => {

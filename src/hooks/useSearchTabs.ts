@@ -20,6 +20,8 @@ export interface UseSearchTabsResult {
   setActiveTabId: (id: string | null) => void;
   createTab: (config: CreateTabConfig) => string;
   updateTab: (tabId: string, updates: Partial<SearchTab>) => void;
+  /** Update a tab from its current state (for asynchronous patches such as count polling). */
+  updateTabWith: (tabId: string, updater: (tab: SearchTab) => Partial<SearchTab>) => void;
   closeTab: (tabId: string) => void;
 }
 
@@ -34,6 +36,12 @@ export function useSearchTabs(): UseSearchTabsResult {
   const updateTab = useCallback((tabId: string, updates: Partial<SearchTab>) => {
     setTabs(prev => prev.map(tab =>
       tab.id === tabId ? { ...tab, ...updates } : tab
+    ));
+  }, []);
+
+  const updateTabWith = useCallback((tabId: string, updater: (tab: SearchTab) => Partial<SearchTab>) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === tabId ? { ...tab, ...updater(tab) } : tab
     ));
   }, []);
 
@@ -91,6 +99,7 @@ export function useSearchTabs(): UseSearchTabsResult {
     setActiveTabId,
     createTab,
     updateTab,
+    updateTabWith,
     closeTab,
   };
 }

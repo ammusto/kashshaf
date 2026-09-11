@@ -14,6 +14,7 @@ import type {
   AppUpdateStatus,
   CorpusStatus,
   EngineCapabilities,
+  WalkStatus,
 } from '../types';
 import { stripPunctuation } from '../utils/sanitize';
 
@@ -459,6 +460,11 @@ export async function getCapabilities(): Promise<EngineCapabilities> {
  */
 export async function setExactCounts(enabled: boolean): Promise<EngineCapabilities> {
   return invoke('set_exact_counts', { enabled });
+}
+
+/** Progress of a walk-backed search (SearchResults.walk_key). */
+export async function getWalkStatus(key: string): Promise<WalkStatus | null> {
+  return invoke('get_walk_status', { key });
 }
 
 // ============ User Settings API ============

@@ -13,6 +13,7 @@ import type {
   SearchResult,
   Token,
   EngineCapabilities,
+  WalkStatus,
 } from '../types';
 import type { NameSearchForm } from './tauri';
 
@@ -157,6 +158,9 @@ export interface SearchAPI {
 
   /** Wildcard grammar, exact-counts state and walk cap of the engine behind this API. */
   getCapabilities(): Promise<EngineCapabilities>;
+
+  /** Progress of a walk-backed search; null once the walk has left the cache. */
+  getWalkStatus(key: string): Promise<WalkStatus | null>;
 
   // Metadata operations
   getAllBooks(): Promise<BookMetadata[]>;

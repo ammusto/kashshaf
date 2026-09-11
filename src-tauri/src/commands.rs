@@ -2,6 +2,7 @@
 
 use anyhow;
 use kashshaf_lib::error::KashshafError;
+use kashshaf_engine::{process_memory, WalkStatus};
 use kashshaf_lib::search::{
     validate_wildcard_query, EngineCapabilities, PageWithMatches, SearchFilters, SearchMode,
     SearchResult, SearchResults, SearchTerm,
@@ -529,13 +530,32 @@ pub fn get_stats(state: State<'_, ManagedAppState>) -> Result<serde_json::Value,
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     let (cache_size, cache_capacity) = app_state.token_cache.stats();
+    let ws = app_state.search_engine.walk_stats();
+    let mem = process_memory();
 
     Ok(serde_json::json!({
         "indexed_pages": doc_count,
         "total_books": book_count,
         "token_cache_size": cache_size,
         "token_cache_capacity": cache_capacity,
+        "walks_active": ws.walks_active,
+        "walks_queued": ws.walks_queued,
+        "max_concurrent_walks": ws.max_concurrent_walks,
+        "prefix_cache_entries": ws.prefix_cache_entries,
+        "prefix_cache_bytes": ws.prefix_cache_bytes,
+        "exact_counts": app_state.search_engine.exact_counts(),
+        "rss_mb": mem.rss_mb(),
+        "peak_rss_mb": mem.peak_rss_mb(),
+        "private_mb": mem.private_mb(),
     }))
+}
+
+/// Progress of a walk-backed search (`SearchResults.walk_key`): `None` once
+/// the walk has left the prefix cache.
+#[tauri::command]
+pub fn get_walk_status(state: State<'_, ManagedAppState>, key: String) -> Result<Option<WalkStatus>, KashshafError> {
+    let app_state = require_state(&state)?;
+    Ok(app_state.search_engine.walk_status(&key))
 }
 
 fn token_field_to_search_mode(field: TokenField) -> SearchMode {

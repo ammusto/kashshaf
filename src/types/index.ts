@@ -43,6 +43,18 @@ export interface SearchResults {
   was_capped?: boolean;
   /** Frontend-only: a load-more returned no rows, so nothing more can be fetched. */
   loadedAll?: boolean;
+  /** Walk-backed results: key for getWalkStatus while `complete` is false. */
+  walk_key?: string;
+  /** Walk-backed results: the walk had finished when this page was served. */
+  complete?: boolean;
+}
+
+/** Progress of a walk-backed search (Tauri get_walk_status, API /search/status). */
+export interface WalkStatus {
+  verified_hits: number;
+  was_capped: boolean;
+  complete: boolean;
+  incomplete: boolean;
 }
 
 /** Which wildcard grammar the engine validates with (see utils/wildcardValidation.ts). */
