@@ -10,6 +10,10 @@ interface VirtualizedResultsListProps {
   onLoadMore: () => void;
   loadingMore: boolean;
   totalHits: number;
+  /** totalHits is a lower bound (the walk may still yield more rows). */
+  wasCapped?: boolean;
+  /** A load-more came back empty: nothing more to fetch. */
+  loadedAll?: boolean;
   maxResults: number;
 }
 
@@ -19,6 +23,8 @@ export function VirtualizedResultsList({
   onLoadMore,
   loadingMore,
   totalHits,
+  wasCapped = false,
+  loadedAll = false,
   maxResults,
 }: VirtualizedResultsListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -39,16 +45,16 @@ export function VirtualizedResultsList({
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
 
       if (distanceFromBottom < 200 && !loadingMore) {
-        const hasMore = results.length < totalHits && results.length < maxResults;
+        const hasMore = !loadedAll && (results.length < totalHits || wasCapped) && results.length < maxResults;
         if (hasMore) onLoadMore();
       }
     };
 
     scrollElement.addEventListener('scroll', handleScroll);
     return () => scrollElement.removeEventListener('scroll', handleScroll);
-  }, [results.length, totalHits, maxResults, loadingMore, onLoadMore]);
+  }, [results.length, totalHits, wasCapped, loadedAll, maxResults, loadingMore, onLoadMore]);
 
-  const hasMore = results.length < totalHits && results.length < maxResults;
+  const hasMore = !loadedAll && (results.length < totalHits || wasCapped) && results.length < maxResults;
 
   return (
     <div ref={parentRef} className="flex-1 overflow-auto">
@@ -105,8 +111,10 @@ export function VirtualizedResultsList({
         <div className="h-10 flex items-center justify-center">
           <span className="text-xs text-app-text-tertiary">
             {results.length >= maxResults
-              ? `Showing ${results.length.toLocaleString()} of ${totalHits.toLocaleString()} (max reached)`
-              : `All ${results.length.toLocaleString()} results loaded`}
+              ? `Showing ${results.length.toLocaleString()} of ${totalHits.toLocaleString()}${wasCapped ? '+' : ''} (max reached)`
+              : wasCapped
+                ? `Showing the first ${results.length.toLocaleString()} verified pages (count is a lower bound)`
+                : `All ${results.length.toLocaleString()} results loaded`}
           </span>
         </div>
       )}

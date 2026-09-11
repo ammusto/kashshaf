@@ -39,6 +39,7 @@ export function Toolbar({
   const [isManualCheck, setIsManualCheck] = useState(false);
   const [showNoUpdateModal, setShowNoUpdateModal] = useState(false);
   const [showDeleteDataModal, setShowDeleteDataModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Desktop-only: App updates and menu listeners
   useEffect(() => {
@@ -47,6 +48,7 @@ export function Toolbar({
 
     let unlistenUpdates: (() => void) | null = null;
     let unlistenDelete: (() => void) | null = null;
+    let unlistenSettings: (() => void) | null = null;
 
     async function setupDesktopFeatures() {
       try {
@@ -65,6 +67,11 @@ export function Toolbar({
         unlistenDelete = await listen('delete-local-data', () => {
           setShowDeleteDataModal(true);
         });
+
+        // Listen for "Settings" from menu
+        unlistenSettings = await listen('open-settings', () => {
+          setShowSettingsModal(true);
+        });
       } catch (err) {
         console.error('Failed to setup desktop features:', err);
       }
@@ -75,6 +82,7 @@ export function Toolbar({
     return () => {
       unlistenUpdates?.();
       unlistenDelete?.();
+      unlistenSettings?.();
     };
   }, [isWebTarget]);
 
@@ -192,12 +200,18 @@ export function Toolbar({
     onCancel: () => void;
   }> | null>(null);
 
+  const [SettingsModal, setSettingsModal] = useState<React.ComponentType<{
+    onClose: () => void;
+    isOnlineMode: boolean;
+  }> | null>(null);
+
   useEffect(() => {
     if (isWebTarget) return;
 
     // Lazy load modals for desktop
     import('./modals/AppUpdateModal').then(m => setAppUpdateModal(() => m.AppUpdateModal));
     import('./modals/DeleteDataModal').then(m => setDeleteDataModal(() => m.DeleteDataModal));
+    import('./modals/SettingsModal').then(m => setSettingsModal(() => m.SettingsModal));
   }, [isWebTarget]);
 
   return (
@@ -354,6 +368,10 @@ export function Toolbar({
       )}
 
       {/* Delete Local Data Modal - desktop only */}
+      {!isWebTarget && showSettingsModal && SettingsModal && (
+        <SettingsModal onClose={() => setShowSettingsModal(false)} isOnlineMode={!!isOnlineMode} />
+      )}
+
       {!isWebTarget && showDeleteDataModal && DeleteDataModal && (
         <DeleteDataModal
           onConfirm={handleDeleteData}

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import type { SearchAPI, OperatingMode } from '../api';
+import type { EngineCapabilities } from '../types';
 import { getOnlineAPI } from '../api/online';
 import { isWebTarget } from '../utils/platform';
 import { getUserSetting, setUserSetting } from '../utils/storage';
@@ -17,6 +18,10 @@ interface OperatingModeContextValue {
   setMode: (mode: 'online' | 'offline') => void;
   /** Check and update corpus existence status */
   refreshCorpusStatus: () => Promise<void>;
+  /** Wildcard grammar, exact-counts state and walk cap of the active engine (null until known). */
+  capabilities: EngineCapabilities | null;
+  /** Re-read the capabilities (after toggling exact counts or reloading the corpus). */
+  refreshCapabilities: () => Promise<void>;
 }
 
 const OperatingModeContext = createContext<OperatingModeContextValue | null>(null);
@@ -34,6 +39,23 @@ export function OperatingModeProvider({ children }: OperatingModeProviderProps) 
   const [corpusDownloaded, setCorpusDownloaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [api, setApi] = useState<SearchAPI>(getOnlineAPI());
+  const [capabilities, setCapabilities] = useState<EngineCapabilities | null>(null);
+
+  // Ask the active engine which wildcard grammar it validates with and whether
+  // exact counts are on. Fails quietly before the corpus is ready.
+  const refreshCapabilities = useCallback(async () => {
+    try {
+      setCapabilities(await api.getCapabilities());
+    } catch (err) {
+      console.warn('Engine capabilities unavailable:', err);
+      setCapabilities(null);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    if (mode === 'pending' || loading) return;
+    refreshCapabilities();
+  }, [api, mode, loading, refreshCapabilities]);
 
   // Initialize mode based on corpus existence and user settings
   useEffect(() => {
@@ -140,6 +162,8 @@ export function OperatingModeProvider({ children }: OperatingModeProviderProps) 
     api,
     setMode,
     refreshCorpusStatus,
+    capabilities,
+    refreshCapabilities,
   };
 
   return (

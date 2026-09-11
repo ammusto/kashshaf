@@ -88,6 +88,8 @@ fn main() {
             commands::get_data_directory,
             commands::archive_old_corpus,
             commands::reload_app_state,
+            commands::get_capabilities,
+            commands::set_exact_counts,
             // User settings commands (for online/offline mode)
             commands::get_user_setting,
             commands::set_user_setting,
@@ -121,8 +123,10 @@ fn main() {
                     }
                 }
                 "settings" => {
-                    // Settings does nothing for now - can be implemented later
-                    println!("Settings clicked");
+                    // Emit event to frontend to open the settings modal
+                    if let Err(e) = app.emit("open-settings", ()) {
+                        eprintln!("Failed to emit open-settings event: {}", e);
+                    }
                 }
                 _ => {}
             }

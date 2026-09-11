@@ -279,7 +279,9 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
 
     const { searchContext, searchResults } = activeTab;
     const currentCount = searchResults.results.length;
-    if (currentCount >= MAX_RESULTS || currentCount >= searchResults.total_hits) return;
+    // A capped count is a lower bound: keep paging until a page comes back empty.
+    if (currentCount >= MAX_RESULTS || searchResults.loadedAll) return;
+    if (currentCount >= searchResults.total_hits && !searchResults.was_capped) return;
 
     updateTab(activeTab.id, { loadingMore: true });
 
@@ -312,10 +314,15 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
         return;
       }
 
+      // Later pages come from the engine's cached walk, whose count settles as
+      // the walk completes: take the newest total and capped flag.
       updateTab(activeTab.id, {
         searchResults: {
           ...searchResults,
           results: [...searchResults.results, ...moreResults.results],
+          total_hits: Math.max(searchResults.total_hits, moreResults.total_hits),
+          was_capped: moreResults.was_capped,
+          loadedAll: moreResults.results.length === 0,
         },
         loadingMore: false,
       });

@@ -35,6 +35,26 @@ export interface SearchResults {
   total_hits: number;
   results: SearchResult[];
   elapsed_ms: number;
+  /**
+   * True when total_hits is a lower bound: the verified walk stopped at the
+   * hit cap (20,000) or its time budget, or is still running. Shown as `+`
+   * after the count.
+   */
+  was_capped?: boolean;
+  /** Frontend-only: a load-more returned no rows, so nothing more can be fetched. */
+  loadedAll?: boolean;
+}
+
+/** Which wildcard grammar the engine validates with (see utils/wildcardValidation.ts). */
+export type WildcardGrammar = 'glob' | 'legacy';
+
+/** What the engine reports about itself (Tauri `get_capabilities`, API `/health`). */
+export interface EngineCapabilities {
+  wildcard_grammar: WildcardGrammar;
+  /** Walks run to completion with exact counts (desktop setting; always false online). */
+  exact_counts: boolean;
+  /** Verified hits after which a capped walk stops. */
+  max_verified_hits: number;
 }
 
 // Combined page content with match positions (from single Tantivy query)

@@ -218,7 +218,20 @@ export function ResultsPanel({
           {viewMode === 'variants' && variantsData
             ? `${variantsData.variants.length.toLocaleString()} variants · ${variantsData.elapsed_ms}ms`
             : results && results.total_hits > 0
-              ? `${results.results.length.toLocaleString()} / ${results.total_hits.toLocaleString()} · ${results.elapsed_ms}ms`
+              ? (
+                <>
+                  {results.results.length.toLocaleString()} / {results.total_hits.toLocaleString()}
+                  {results.was_capped && (
+                    <span
+                      className="cursor-help text-app-accent"
+                      title={`Lower bound: the search stopped after verifying ${results.total_hits.toLocaleString()} matching pages (verified-hit cap or time budget). Turn on "Exact counts" in Settings (offline mode) for the exact total.`}
+                    >
+                      +
+                    </span>
+                  )}
+                  {` · ${results.elapsed_ms}ms`}
+                </>
+              )
               : ''}
         </span>
       </div>
@@ -250,6 +263,8 @@ export function ResultsPanel({
           onLoadMore={onLoadMore}
           loadingMore={loadingMore}
           totalHits={results.total_hits}
+          wasCapped={!!results.was_capped}
+          loadedAll={!!results.loadedAll}
           maxResults={maxResults}
         />
       )}
