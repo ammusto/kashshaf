@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "announcements": [
+    {
+      "id": "20260110-introducing-the-kashshāf-beta",
+      "title": "Introducing the Kashshāf Beta!",
+      "body": "I'm excited to share this resource, and I look forward to working with you and others to make it as useful as possible for researchers of the Arabic textual tradition.\n\nKashshaf provides linguistically precise search across a corpus of medieval Arabic texts (≤1348/1930 AH/CE), with features including:\n\n• **Lemma and Root search** - Find all morphological variants of a word\n• **Proximity search** - Locate terms appearing near each other\n• **Name search** - Search for Arabic personal names with pattern generation\n• **Token overlay** - Click any word to see its morphological analysis\n\nThis is an ongoing project. If you encounter issues or have suggestions, please reach out via [GitHub](https://github.com/ammusto/kashshaf) or the feedback form.\n\nThank you for being an early user!",
+      "body_format": "markdown",
+      "type": "info",
+      "priority": "normal",
+      "target": "all",
+      "min_app_version": "0.2.0",
+      "max_app_version": null,
+      "starts_at": "2026-01-10T20:44:51.982327",
+      "expires_at": null,
+      "dismissible": true,
+      "show_once": true,
+      "action": null
+    }
+  ],
+  "archived": []
+}
