@@ -1,9 +1,9 @@
 [package]
 name = "kashshaf"
-version = "0.5.0"
+version.workspace = true
 description = "Medieval Arabic Text Research Environment"
 authors = ["Kashshaf"]
-edition = "2021"
+edition.workspace = true
 default-run = "kashshaf"
 
 [lib]
@@ -38,7 +38,3 @@ futures-util = "0.3"
 hex = "0.4"
 dirs = "5"
 
-[profile.release]
-lto = true
-opt-level = 3
-codegen-units = 1

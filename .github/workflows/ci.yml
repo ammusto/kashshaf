@@ -1,0 +1,44 @@
+name: CI
+
+# Every push and pull request: the version numbers agree, the workspace
+# type-checks, the engine's unit tests pass, the frontend type-checks.
+# No side effects.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release consistency (versions, changelog section)
+        run: python3 scripts/check_release.py --local
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tauri build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - name: cargo check --workspace
+        run: cargo check --workspace --locked || cargo check --workspace
+
+      - name: Engine unit tests
+        run: cargo test --release -p kashshaf-engine
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Frontend type check
+        run: npx tsc --noEmit -p tsconfig.json
