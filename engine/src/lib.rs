@@ -4,6 +4,9 @@
 //! Both hosts open the same artifacts (`tantivy_index/`, `corpus.db`) through
 //! this crate; the only per-host differences are in [`search::EngineConfig`].
 
+pub mod bench_cases;
+#[cfg(feature = "remote")]
+pub mod bench_remote;
 pub mod blob;
 pub mod cache;
 pub mod collectors;

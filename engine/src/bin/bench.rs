@@ -15,36 +15,14 @@
 
 use anyhow::{Context, Result};
 use kashshaf_engine::{
-    compute_variants, EngineConfig, PageKey, SearchEngine, SearchFilters, SearchMode, SearchTerm, TokenCache,
+    compute_variants, EngineConfig, PageKey, SearchEngine, SearchFilters, TokenCache,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::env;
 use std::path::PathBuf;
 use std::time::Instant;
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum QuerySpec {
-    Term { query: String, mode: SearchMode, #[serde(default)] offset: usize },
-    Combined { and_terms: Vec<SearchTerm>, or_terms: Vec<SearchTerm> },
-    Proximity { term1: SearchTerm, term2: SearchTerm, distance: usize, #[serde(default)] offset: usize },
-    Wildcard { query: String, #[serde(default)] offset: usize },
-    Name { forms: Vec<Vec<String>> },
-    Variants { query: String, mode: SearchMode },
-    PageLoad { pages: Vec<(u64, u64, u64)> },
-}
-
-#[derive(Debug, Deserialize)]
-struct QueryCase {
-    name: String,
-    #[serde(flatten)]
-    spec: QuerySpec,
-    #[serde(default)]
-    book_ids: Option<Vec<u64>>,
-    /// Per-case override of the engine's exact-counts flag.
-    #[serde(default)]
-    exact_counts: Option<bool>,
-}
+use kashshaf_engine::bench_cases::{pct, QueryCase, QuerySpec};
 
 #[derive(Debug, Serialize)]
 struct CaseReport {
@@ -172,14 +150,6 @@ fn run_micro(cache: &TokenCache, n: usize) -> Result<()> {
     Ok(())
 }
 
-fn pct(sorted: &[f64], p: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let idx = ((sorted.len() - 1) as f64 * p).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
-}
-
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let mut index: Option<PathBuf> = None;
@@ -198,13 +168,18 @@ fn main() -> Result<()> {
     let mut wildcard_threshold: Option<usize> = None;
     let mut walk_budget: Option<u64> = None;
     let mut exact_counts = false;
+    let mut remote: Option<String> = None;
+    let mut concurrency: Option<usize> = None;
+    let mut check_compat = false;
+    let mut rps = 8.0f64;
+    let mut query_files: Vec<PathBuf> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         let val = |i: usize| args.get(i + 1).cloned().context("missing value");
         match args[i].as_str() {
             "--index" => { index = Some(PathBuf::from(val(i)?)); i += 1; }
             "--corpus-db" => { corpus_db = Some(PathBuf::from(val(i)?)); i += 1; }
-            "--queries" => { queries = Some(PathBuf::from(val(i)?)); i += 1; }
+            "--queries" => { let p = PathBuf::from(val(i)?); query_files.push(p.clone()); queries = Some(p); i += 1; }
             "--out" => { out = Some(PathBuf::from(val(i)?)); i += 1; }
             "--runs" => { runs = val(i)?.parse()?; i += 1; }
             "--limit" => { limit = val(i)?.parse()?; i += 1; }
@@ -218,9 +193,36 @@ fn main() -> Result<()> {
             "--wildcard-threshold" => { wildcard_threshold = Some(val(i)?.parse()?); i += 1; }
             "--walk-budget-ms" => { walk_budget = Some(val(i)?.parse()?); i += 1; }
             "--exact-counts" => exact_counts = true,
+            "--remote" => { remote = Some(val(i)?); i += 1; }
+            "--concurrency" => { concurrency = Some(val(i)?.parse()?); i += 1; }
+            "--check-compat" => check_compat = true,
+            "--rps" => { rps = val(i)?.parse()?; i += 1; }
             other => anyhow::bail!("unknown argument {}", other),
         }
         i += 1;
+    }
+    if let Some(base) = remote {
+        #[cfg(feature = "remote")]
+        {
+            if query_files.is_empty() {
+                query_files = vec![PathBuf::from("engine/bench/queries.json"), PathBuf::from("engine/bench/proximity.json")];
+            }
+            return kashshaf_engine::bench_remote::run(kashshaf_engine::bench_remote::RemoteOpts {
+                base,
+                queries: query_files,
+                runs,
+                limit,
+                concurrency,
+                check_compat,
+                out,
+                rps,
+            });
+        }
+        #[cfg(not(feature = "remote"))]
+        {
+            let _ = (base, concurrency, check_compat, rps, &query_files);
+            anyhow::bail!("this bench binary was built without the `remote` feature (cargo build -p kashshaf-engine --features remote --bin bench)");
+        }
     }
     let index = index.context("--index is required")?;
     let corpus_db = corpus_db.context("--corpus-db is required")?;
