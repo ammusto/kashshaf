@@ -154,7 +154,25 @@ venv\Scripts\python build_sqlite_tokens.py --data-dir data\sample --recompress -
 
 ## 8. Publishing
 
-Ship order is fixed: API server first (it must read schema 3 and the zstd store before any client switches), then the app release (0.5.0), then the corpus files and `corpus_manifest.json` to R2. The `min_app_version` gate stops 0.4.x from downloading a corpus it cannot read. Keep 2.0.0 under a versioned prefix on R2 so a manifest rollback is one upload. See [RELEASE_REF.MD](RELEASE_REF.MD) for the R2 and GitHub steps.
+Corpus 3.0.0 is cancelled; the next public corpus is **4.0.0** (compound index, `corpus.db` schema 4, `min_app_version` 0.5.0). Ship order is fixed and enforced by `check_release.py`: the 0.5.0 app release first (its API deploy, installers and `app_manifest.json`), **then** the corpus. Publishing a manifest whose `min_app_version` is above the live `app_manifest.latest_version` fails the check because clients would be told to update to a version that does not exist.
+
+One command does the whole publish (`publish_corpus.py`, this directory):
+
+```
+python publish_corpus.py 4.0.0 --data-dir data/compound-work --schema-version 4 --min-app-version 0.5.0 --check --dest r2:<bucket>
+```
+
+It refuses to continue unless `check_order` reports a single reading-order segment and both databases pass a sanity pass (`--check`); stamps `db_info.corpus_version` in `corpus.db` and `metadata.db`; runs `generate_manifest.py` with `base_url = https://cdn.kashshaf.com/corpus/4.0.0/` (files, including `triples.bin` when the sidecar exists, live under a **versioned prefix**); writes `stats.json` (books, pages, tokens, sizes) for the website; `rclone copy --checksum` of every file to `corpus/4.0.0/`; archives the live manifest to `archive/<old version>/corpus_manifest.json`; uploads `stats.json` and, **last**, `corpus_manifest.json`; downloads the manifest back and verifies every hash and size; prints the `min_app_version` it set. `--dry-run` prints the rclone commands without running them; `--dest ./publish-test/` rehearses the whole flow against a local directory.
+
+Apps from 0.5.0 read `base_url` from the manifest (`downloader.rs`, `RemoteManifest::file_url`); a manifest without it still means the flat pre-0.5.0 layout under the CDN root, so 2.0.0 keeps working for 0.4.x clients until they update.
+
+**Rollback** is one manifest upload, no re-copy of 12 GB: the files of every published version stay under `corpus/<version>/`.
+
+```
+rclone copyto r2:<bucket>/archive/3.0.0/corpus_manifest.json r2:<bucket>/corpus_manifest.json
+```
+
+Then verify: `python scripts/check_release.py --post-deploy --tag v<app> --corpus-manifest https://cdn.kashshaf.com/corpus_manifest.json --app-manifest https://cdn.kashshaf.com/app_manifest.json`.
 
 ---
 

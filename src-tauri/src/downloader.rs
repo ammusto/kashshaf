@@ -28,7 +28,25 @@ pub struct RemoteManifest {
     pub schema_version: i64,
     pub min_app_version: String,
     pub built_at: String,
+    /// Where the files live, e.g. `https://cdn.kashshaf.com/corpus/4.0.0/`
+    /// (versioned prefix; a rollback is one manifest upload). Absent in
+    /// manifests up to 3.x, whose files sit flat under the CDN root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     pub files: Vec<RemoteFile>,
+}
+
+impl RemoteManifest {
+    /// Download URL of one manifest entry: `base_url` + name when the
+    /// manifest carries a base URL, else the flat layout under the CDN root.
+    pub fn file_url(&self, name: &str) -> String {
+        let base = self.base_url.as_deref().filter(|b| !b.is_empty()).unwrap_or(DATA_BASE_URL);
+        if base.ends_with('/') {
+            format!("{}{}", base, name)
+        } else {
+            format!("{}/{}", base, name)
+        }
+    }
 }
 
 /// Remote file entry in manifest
@@ -609,7 +627,7 @@ pub async fn download_corpus(
         }
 
         let local_path = data_dir.join(&file.name);
-        let url = format!("{}{}", DATA_BASE_URL, file.name);
+        let url = remote.file_url(&file.name);
 
         progress.current_file = file.name.clone();
         progress.file_bytes_downloaded = 0;
