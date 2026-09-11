@@ -436,4 +436,6 @@ jobs:
           command: pages deploy dist --project-name ${{ vars.CF_PAGES_APP_PROJECT || 'kashshaf-app' }} --branch main
       - name: Dry run — would deploy
         if: env.DRY_RUN == 'true'
-        run: echo "would run: wrangler pages deploy dist --project-name ${{ vars.CF_PAGES_APP_PROJECT || 'kashshaf-app' }}"; du -sh dist
+        run: |
+          echo "would run wrangler pages deploy dist --project-name ${{ vars.CF_PAGES_APP_PROJECT || 'kashshaf-app' }}"
+          du -sh dist
