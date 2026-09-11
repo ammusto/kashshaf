@@ -220,49 +220,62 @@ function WildcardsTab() {
     <div className="space-y-4">
       <Section title="Wildcard Search">
         <p className="text-app-text-secondary leading-relaxed">
-          Wildcards allow you to search for words matching a pattern. Use the asterisk (*) character
-          to match any sequence of characters.
+          Wildcards allow you to search for words matching a pattern. Use the asterisk (*) to match
+          any sequence of letters, anywhere in the word and as often as you need.
         </p>
       </Section>
 
       <Section title="Wildcard Rules">
         <ul className="list-disc list-inside text-app-text-secondary space-y-2">
           <li><strong>Surface mode only:</strong> Wildcards only work in Surface search mode</li>
-          <li><strong>One wildcard per term:</strong> Each search term can have at most one *</li>
-          <li><strong>No leading wildcard:</strong> The * cannot be at the start of a word (*كتاب is invalid)</li>
-          <li><strong>Internal wildcards need 2+ chars:</strong> For wildcards in the middle of a word, at least 2 characters must precede the *</li>
+          <li><strong>At least 2 letters:</strong> Every word with a * must contain at least two ordinary letters (ا* is too short, اب* is fine)</li>
+          <li><strong>Any position, any number:</strong> The * may start, end or sit inside a word, and a word may contain several (مع*رف*)</li>
+          <li><strong>Phrases:</strong> Any word of a phrase may carry wildcards; each word is expanded on its own</li>
         </ul>
       </Section>
 
       <Section title="Wildcard Types">
         <div className="space-y-3">
           <div>
-            <p className="font-medium text-app-text-primary">Prefix Wildcard (word ending)</p>
+            <p className="font-medium text-app-text-primary">Prefix (word beginning)</p>
             <p className="text-app-text-secondary">
               <code className="bg-app-surface-variant px-1 rounded">كتا*</code> matches "كتاب", "كتابة", "كتابه", etc.
             </p>
           </div>
           <div>
-            <p className="font-medium text-app-text-primary">Internal Wildcard</p>
+            <p className="font-medium text-app-text-primary">Suffix (word ending)</p>
             <p className="text-app-text-secondary">
-              <code className="bg-app-surface-variant px-1 rounded">مع*ة</code> matches "معرفة", "معاملة", "معاينة", etc.
+              <code className="bg-app-surface-variant px-1 rounded">*ية</code> matches "عربية", "إسلامية", "الشافعية", etc.
+            </p>
+          </div>
+          <div>
+            <p className="font-medium text-app-text-primary">Internal</p>
+            <p className="text-app-text-secondary">
+              <code className="bg-app-surface-variant px-1 rounded">أح*مد</code> matches "أحمد", "أحامد", etc.
+            </p>
+          </div>
+          <div>
+            <p className="font-medium text-app-text-primary">Contains</p>
+            <p className="text-app-text-secondary">
+              <code className="bg-app-surface-variant px-1 rounded">*قول*</code> matches "قول", "يقول", "مقولة", "الأقوال", etc.
+            </p>
+          </div>
+          <div>
+            <p className="font-medium text-app-text-primary">Several stars</p>
+            <p className="text-app-text-secondary">
+              <code className="bg-app-surface-variant px-1 rounded">مع*رف*</code> matches "معرف", "معارف", "معرفة", "معترفون", etc.
             </p>
           </div>
         </div>
       </Section>
 
-      <Section title="Performance Considerations">
-        <p className="text-app-text-secondary leading-relaxed mb-2">
-          Some wildcard patterns are more "expensive" (slower) than others:
-        </p>
+      <Section title="Counts and Performance">
         <ul className="list-disc list-inside text-app-text-secondary space-y-2">
-          <li><strong>Faster:</strong> Longer prefixes before the * (e.g., "استكت*" is faster than "كت*")</li>
-          <li><strong>Slower:</strong> Short prefixes match many more terms and take longer</li>
-          <li><strong>Phrase wildcards:</strong> Multi-word wildcard searches (e.g., "معر*فة الله") require additional verification and may be slower</li>
+          <li><strong>Single words</strong> always return an exact count, however broad the pattern (ال* alone matches most of the corpus and takes under a second)</li>
+          <li><strong>Phrases</strong> with a very broad wildcard word (e.g. "ابن ال*") are verified page by page in reading order. The search stops after 20,000 verified pages and shows the count with a "+" (a lower bound); scrolling continues through the verified pages without re-running the search</li>
+          <li><strong>Exact counts:</strong> In offline mode, Menu → Settings → "Exact counts" makes these searches run to the end and report exact totals, at the cost of a few extra seconds on very common words</li>
+          <li><strong>Faster patterns:</strong> A longer literal beginning (استكت*) is quicker to expand than a very short one; patterns starting with * scan the whole vocabulary but still finish in well under a second</li>
         </ul>
-        <p className="text-app-text-secondary leading-relaxed mt-2">
-          For best performance, use the longest prefix you can while still matching your target words.
-        </p>
       </Section>
     </div>
   );

@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import type { SearchInput, CombinedSearchQuery } from '../../types/search';
 import { SearchInputRow } from './SearchInputRow';
 import { validateWildcard } from '../../utils/wildcardValidation';
+import { useOperatingMode } from '../../contexts/OperatingModeContext';
 
 interface BooleanSearchPanelProps {
   onSearch: (combined: CombinedSearchQuery) => void;
@@ -24,6 +25,8 @@ export function BooleanSearchPanel({
     { id: 1, query: '', mode: 'surface', cliticToggle: false }
   ]);
   const nextIdRef = useRef(2);
+  const { capabilities } = useOperatingMode();
+  const wildcardGrammar = capabilities?.wildcard_grammar ?? 'glob';
 
   const currentInputs = activeTab === 'and' ? andInputs : orInputs;
   const setCurrentInputs = activeTab === 'and' ? setAndInputs : setOrInputs;
@@ -63,16 +66,9 @@ export function BooleanSearchPanel({
 
     const allInputs = [...validAndInputs, ...validOrInputs];
 
-    // Check that only one wildcard exists across all inputs
-    const inputsWithWildcard = allInputs.filter(inp => inp.query.includes('*'));
-    if (inputsWithWildcard.length > 1) {
-      showToast('Only one wildcard (*) allowed per search term');
-      return;
-    }
-
-    // Validate each input's wildcard usage
+    // Validate each input's wildcard usage under the engine's grammar
     for (const input of allInputs) {
-      const validation = validateWildcard(input.query, input.mode);
+      const validation = validateWildcard(input.query, input.mode, wildcardGrammar);
       if (!validation.valid) {
         showToast(validation.error || 'Invalid wildcard usage');
         return;

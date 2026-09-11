@@ -12,6 +12,7 @@ import type {
   BookMetadata,
   SearchResult,
   Token,
+  EngineCapabilities,
 } from '../types';
 import * as tauri from './tauri';
 
@@ -88,6 +89,10 @@ export class OfflineAPI implements SearchAPI {
     offset: number
   ): Promise<SearchResults> {
     return tauri.wildcardSearch(query, filters, limit, offset);
+  }
+
+  async getCapabilities(): Promise<EngineCapabilities> {
+    return tauri.getCapabilities();
   }
 
   async getPage(

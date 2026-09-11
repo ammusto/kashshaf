@@ -1,26 +1,43 @@
 /**
- * Wildcard validation for Arabic text search
+ * Wildcard validation for Arabic text search.
  *
- * Rules:
- * 1. Only one `*` per search input
- * 2. `*` cannot be at start of word (`*منصور` invalid)
- * 3. Internal `*` requires 2+ chars before (`أح*مد` valid, `أ*مد` invalid)
- * 4. Wildcard can be any word position in phrase
- * 5. Solo wildcard term valid (`أب*` alone is fine)
- * 6. Surface mode only - block if used with Lemma/Root mode
+ * Two grammars, chosen by the engine (`EngineCapabilities.wildcard_grammar`):
+ *
+ * `glob` (compound index): `*`-only glob, any number of `*` per word, any
+ * position (`أب*`, `*رف`, `أح*مد`, `*قول*`, `مع*رف*`). Rules:
+ *   1. every word containing `*` has at least 2 literal Arabic letters
+ *   2. surface mode only
+ * Several wildcard words in one phrase are fine; each slot expands on its own.
+ *
+ * `legacy` (three-field index, RegexQuery path):
+ *   1. only one `*` per search input
+ *   2. `*` cannot be at the start of a word
+ *   3. surface mode only
+ *
+ * The Rust twin is `validate_wildcard_query` in `engine/src/search.rs`;
+ * keep the rules and the error strings identical.
  */
 
-import type { SearchMode } from '../types';
+import type { SearchMode, WildcardGrammar } from '../types';
 
 export interface WildcardValidationResult {
   valid: boolean;
   error?: string;
 }
 
+export const WILDCARD_ERR_MODE = 'Wildcards only supported in Surface mode';
+export const WILDCARD_ERR_LETTERS = 'A wildcard word needs at least 2 letters besides *';
+export const WILDCARD_ERR_ONE = 'Only one wildcard (*) allowed per search term';
+export const WILDCARD_ERR_START = 'Wildcard cannot be at start of word';
+
 /**
- * Validates a search query for wildcard usage
+ * Validates a search query for wildcard usage under the given grammar.
  */
-export function validateWildcard(query: string, mode: SearchMode): WildcardValidationResult {
+export function validateWildcard(
+  query: string,
+  mode: SearchMode,
+  grammar: WildcardGrammar = 'glob'
+): WildcardValidationResult {
   const trimmedQuery = query.trim();
 
   // No wildcard in query - always valid
@@ -28,61 +45,39 @@ export function validateWildcard(query: string, mode: SearchMode): WildcardValid
     return { valid: true };
   }
 
-  // Rule 6: Wildcard only in Surface mode
+  // Wildcard only in Surface mode
   if (mode !== 'surface') {
-    return {
-      valid: false,
-      error: 'Wildcards only supported in Surface mode'
-    };
+    return { valid: false, error: WILDCARD_ERR_MODE };
   }
 
-  // Rule 1: Only one `*` per search input
-  const wildcardCount = (trimmedQuery.match(/\*/g) || []).length;
-  if (wildcardCount > 1) {
-    return {
-      valid: false,
-      error: 'Only one wildcard (*) allowed per search term'
-    };
-  }
-
-  // Split into words and check each word for wildcard rules
   const words = trimmedQuery.split(/\s+/);
+
+  if (grammar === 'legacy') {
+    const wildcardCount = (trimmedQuery.match(/\*/g) || []).length;
+    if (wildcardCount > 1) {
+      return { valid: false, error: WILDCARD_ERR_ONE };
+    }
+    for (const word of words) {
+      if (word.startsWith('*')) {
+        return { valid: false, error: WILDCARD_ERR_START };
+      }
+    }
+    return { valid: true };
+  }
 
   for (const word of words) {
     if (!word.includes('*')) continue;
-
-    const wildcardIndex = word.indexOf('*');
-
-    // Rule 2: `*` cannot be at start of word
-    if (wildcardIndex === 0) {
-      return {
-        valid: false,
-        error: 'Wildcard cannot be at start of word'
-      };
-    }
-
-    // Rule 3: Internal `*` requires 2+ chars before
-    // Internal means there are characters after the wildcard
-    const hasCharsAfter = wildcardIndex < word.length - 1;
-    if (hasCharsAfter) {
-      // Count characters before wildcard (excluding diacritics)
-      const prefix = word.substring(0, wildcardIndex);
-      const charCount = countArabicLetters(prefix);
-
-      if (charCount < 2) {
-        return {
-          valid: false,
-          error: 'Internal wildcard requires at least 2 characters before it'
-        };
-      }
+    const literal = word.replace(/\*/g, '');
+    if (countArabicLetters(literal) < 2) {
+      return { valid: false, error: WILDCARD_ERR_LETTERS };
     }
   }
-
   return { valid: true };
 }
 
 /**
- * Count Arabic letters (excluding diacritics/tashkeel)
+ * Count Arabic letters (excluding diacritics/tashkeel). Mirrors
+ * `normalize::count_arabic_letters` in the engine.
  */
 function countArabicLetters(text: string): number {
   let count = 0;

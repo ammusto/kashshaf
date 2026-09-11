@@ -13,6 +13,8 @@ import type {
   BookMetadata,
   SearchResult,
   Token,
+  EngineCapabilities,
+  WildcardGrammar,
 } from '../types';
 import { stripPunctuation } from '../utils/sanitize';
 
@@ -226,6 +228,19 @@ export class OnlineAPI implements SearchAPI {
     }
 
     return fetchAPI<SearchResults>(`/search/wildcard?${params}`);
+  }
+
+  async getCapabilities(): Promise<EngineCapabilities> {
+    const health = await fetchAPI<{
+      wildcard_grammar?: WildcardGrammar;
+      exact_counts?: boolean;
+      max_verified_hits?: number;
+    }>('/health');
+    return {
+      wildcard_grammar: health.wildcard_grammar ?? 'legacy',
+      exact_counts: false,
+      max_verified_hits: health.max_verified_hits ?? 20000,
+    };
   }
 
   async getPage(

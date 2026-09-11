@@ -6,7 +6,9 @@
  * Punctuation marks to strip from search queries.
  * Includes English punctuation, Arabic punctuation, and common symbols.
  */
-const PUNCTUATION_PATTERN = /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~،؛؟«»‹›""''「」『』【】〈〉《》〔〕…—–·•°¬¨´¸'"٪٫٬۔。、]/g;
+// NOTE: `*` is deliberately absent from this class — it is the wildcard
+// marker and must survive sanitization (see wildcardValidation.ts).
+const PUNCTUATION_PATTERN = /[!"#$%&'()+,\-./:;<=>?@[\\\]^_`{|}~،؛؟«»‹›""''「」『』【】〈〉《》〔〕…—–·•°¬¨´¸'"٪٫٬۔。、]/g;
 
 /**
  * Strip punctuation from a search query.

@@ -12,6 +12,7 @@ import type {
   BookMetadata,
   SearchResult,
   Token,
+  EngineCapabilities,
 } from '../types';
 import type { NameSearchForm } from './tauri';
 
@@ -153,6 +154,9 @@ export interface SearchAPI {
     pageId: number,
     patterns: string[]
   ): Promise<number[]>;
+
+  /** Wildcard grammar, exact-counts state and walk cap of the engine behind this API. */
+  getCapabilities(): Promise<EngineCapabilities>;
 
   // Metadata operations
   getAllBooks(): Promise<BookMetadata[]>;
