@@ -1,0 +1,59 @@
+name: Announcements
+
+# Validate scripts/announcements/announcements.json on every change (a dry
+# run); publishing it to R2 (https://cdn.kashshaf.com/announcements.json) is
+# a workflow_dispatch with dry_run = false. The live file is archived under
+# archive/announcements.<timestamp>.json before it is replaced.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/announcements/announcements.json'
+      - 'scripts/announcements/validate.py'
+      - '.github/workflows/announcements.yml'
+  pull_request:
+    paths:
+      - 'scripts/announcements/announcements.json'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Validate only; do not upload'
+        type: boolean
+        default: true
+        required: true
+
+env:
+  DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != false }}
+  CDN_URL: https://cdn.kashshaf.com
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate
+        run: python3 scripts/announcements/validate.py scripts/announcements/announcements.json
+      - name: Diff against the live file
+        run: |
+          curl -fsSL "$CDN_URL/announcements.json" -o live.json || { echo "no live file (first publish)"; exit 0; }
+          diff <(python3 -m json.tool live.json) <(python3 -m json.tool scripts/announcements/announcements.json) || true
+      - name: Upload to R2
+        if: env.DRY_RUN != 'true'
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone config create r2 s3 provider Cloudflare access_key_id "$R2_ACCESS_KEY_ID" secret_access_key "$R2_SECRET_ACCESS_KEY" endpoint "$R2_ENDPOINT" acl private >/dev/null
+          if [ -f live.json ]; then rclone copyto live.json "r2:$R2_BUCKET/archive/announcements.$(date -u +%Y%m%dT%H%M%SZ).json"; fi
+          rclone copyto scripts/announcements/announcements.json "r2:$R2_BUCKET/announcements.json"
+          sleep 5
+          curl -fsSL "$CDN_URL/announcements.json" -o back.json
+          diff <(python3 -m json.tool scripts/announcements/announcements.json) <(python3 -m json.tool back.json) && echo "round trip ok"
+      - name: Dry run
+        if: env.DRY_RUN == 'true'
+        run: echo "valid; would archive the live announcements.json and upload this one to R2"
