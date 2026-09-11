@@ -169,7 +169,7 @@ def generate_app_manifest(version: str, notes: str, min_supported: str | None) -
         "downloads": {
             "windows": f"https://github.com/ammusto/kashshaf/releases/download/v{version}/Kashshaf_{version}_x64_en-US.msi",
             "macos": f"https://github.com/ammusto/kashshaf/releases/download/v{version}/Kashshaf_{version}_macos.dmg",
-            "linux": f"https://github.com/ammusto/kashshaf/releases/download/v{version}/kashshaf_{version}_amd64.AppImage",
+            "linux": f"https://github.com/ammusto/kashshaf/releases/download/v{version}/Kashshaf_{version}_amd64.AppImage",
         },
     }
     manifest_path = ROOT / "scripts/manifests/app_manifest.json"

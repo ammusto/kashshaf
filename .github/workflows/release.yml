@@ -1,87 +1,148 @@
 name: Release
-run-name: Release ${{ github.ref_name }}
+run-name: Release ${{ inputs.tag || github.ref_name }}${{ (github.event_name == 'push' || inputs.dry_run != false) && ' (dry run)' || '' }}
+
+# One path to production: a tag.
+#
+#   * A tag push runs the whole pipeline as a DRY RUN: every build happens,
+#     every deploy/publish/upload step prints what it would do, nothing
+#     leaves the runner.
+#   * The real release is "Run workflow" with the tag and dry_run = false.
+#     The publish job is bound to the `production` environment, so it also
+#     needs one approval click there.
+#   * only_api = true redeploys an existing tag's API binary (hotfix); the
+#     installers, GitHub release, manifest and web deploy are skipped.
+#
+# Job graph:  build-windows ─┐
+#             build-linux   ─┼─► publish ─► manifest
+#             build-macos   ─┤      │
+#             build-api ─► deploy-api      └─► web
+#
+# publish depends on deploy-api's health check: the GitHub release and the
+# manifest never go out unless the new API is live and reports the tag's
+# version, so 0.5.0 clients cannot meet a 0.4.x server.
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (vX.Y.Z); must already exist'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run: build and verify, but do not deploy, publish or upload'
+        required: true
+        type: boolean
+        default: true
+      only_api:
+        description: 'Only rebuild and redeploy the API for this tag (hotfix redeploy)'
+        required: false
+        type: boolean
+        default: false
+      min_supported_version:
+        description: 'Override min_supported_version in the app manifest (X.Y.Z); default: the .release marker or the live value'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  # push events have no inputs: always a dry run.
+  DRY_RUN: ${{ github.event_name == 'push' || inputs.dry_run != false }}
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  ONLY_API: ${{ inputs.only_api == true }}
+  API_URL: https://api.kashshaf.com
+  API_SSH_HOST: ${{ vars.API_SSH_HOST || '5.161.127.18' }}
+  API_SSH_USER: ${{ vars.API_SSH_USER || 'kashshaf' }}
+  CDN_URL: https://cdn.kashshaf.com
 
 jobs:
+  meta:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      dry_run: ${{ env.DRY_RUN }}
+      only_api: ${{ env.ONLY_API }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - id: v
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "not a release tag: $TAG"; exit 1;; esac
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG dry_run=$DRY_RUN only_api=$ONLY_API"
+      - name: Versions agree with the tag
+        run: python3 scripts/check_release.py --local --tag "$RELEASE_TAG"
+
   build-windows:
+    needs: meta
+    if: needs.meta.outputs.only_api != 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run tauri build
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm run tauri build
+      - uses: actions/upload-artifact@v4
         with:
           name: kashshaf-windows
-          path: src-tauri/target/release/bundle/msi/*.msi
+          path: target/release/bundle/msi/*.msi
 
   build-linux:
-    runs-on: ubuntu-latest
+    needs: meta
+    if: needs.meta.outputs.only_api != 'true'
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install dependencies
-        run: |
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run tauri build
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - run: npm ci
+      - run: npm run tauri build
+      - uses: actions/upload-artifact@v4
         with:
           name: kashshaf-linux
           path: |
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
 
   build-macos:
+    needs: meta
+    if: needs.meta.outputs.only_api != 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: |
             aarch64-apple-darwin
             x86_64-apple-darwin
-
+      - uses: Swatinem/rust-cache@v2
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -94,89 +155,285 @@ jobs:
           security import cert.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
           security set-keychain-settings -t 7200 -u build.keychain
-
-      - name: Install dependencies
-        run: npm ci
-
+      - run: npm ci
       - name: Build arm64 (no notarization)
         run: npm run tauri build -- --target aarch64-apple-darwin
         env:
           SKIP_NOTARIZATION: true
-
       - name: Build x86_64 (no notarization)
         run: npm run tauri build -- --target x86_64-apple-darwin
         env:
           SKIP_NOTARIZATION: true
-
       - name: Create universal app
         run: |
-          ARM_APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Kashshaf.app"
-          INTEL_APP="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Kashshaf.app"
-          UNIVERSAL_APP="src-tauri/target/universal/Kashshaf.app"
-
-          mkdir -p src-tauri/target/universal
+          ARM_APP="target/aarch64-apple-darwin/release/bundle/macos/Kashshaf.app"
+          INTEL_APP="target/x86_64-apple-darwin/release/bundle/macos/Kashshaf.app"
+          UNIVERSAL_APP="target/universal/Kashshaf.app"
+          mkdir -p target/universal
           cp -R "$ARM_APP" "$UNIVERSAL_APP"
-
           lipo -create \
             "$ARM_APP/Contents/MacOS/kashshaf" \
             "$INTEL_APP/Contents/MacOS/kashshaf" \
             -output "$UNIVERSAL_APP/Contents/MacOS/kashshaf"
-
       - name: Re-sign universal app
         run: |
           codesign --force --deep --options runtime \
             --sign "Developer ID Application: Antonio Musto (ALLW8R237Y)" \
-            src-tauri/target/universal/Kashshaf.app
-
+            target/universal/Kashshaf.app
       - name: Notarize
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          ditto -c -k --keepParent \
-            src-tauri/target/universal/Kashshaf.app \
-            Kashshaf.zip
-
+          ditto -c -k --keepParent target/universal/Kashshaf.app Kashshaf.zip
           xcrun notarytool submit Kashshaf.zip \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_PASSWORD" \
-            --wait
-
-      - name: Staple
-        run: |
-          xcrun stapler staple src-tauri/target/universal/Kashshaf.app
-
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_PASSWORD" --wait
+      - run: xcrun stapler staple target/universal/Kashshaf.app
       - name: Create DMG
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          hdiutil create -volname "Kashshaf" -srcfolder src-tauri/target/universal/Kashshaf.app -ov -format UDZO Kashshaf_${VERSION}_macos.dmg
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          VERSION=${RELEASE_TAG#v}
+          hdiutil create -volname "Kashshaf" -srcfolder target/universal/Kashshaf.app -ov -format UDZO Kashshaf_${VERSION}_macos.dmg
+      - uses: actions/upload-artifact@v4
         with:
           name: kashshaf-macos
           path: Kashshaf_*_macos.dmg
-  create-release:
-      needs: [build-windows, build-linux, build-macos]
-      runs-on: ubuntu-latest
-      permissions:
-        contents: write
-      if: startsWith(github.ref, 'refs/tags/')
-      steps:
-        - name: Download artifacts
-          uses: actions/download-artifact@v4
 
-        - name: List files
-          run: find . -type f -name "*.msi" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.dmg"
+  build-api:
+    needs: meta
+    # Static musl binary: it does not depend on the server's glibc, so the
+    # runner's Ubuntu release does not matter. If a musl build ever fails
+    # to link (rusqlite bundled and tantivy's zstd both compile with
+    # musl-gcc today), switch to `container: ubuntu:<server release>` and a
+    # glibc build; see api/deploy/README.md.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build kashshaf-api (static)
+        run: cargo build --release -p kashshaf-api --target x86_64-unknown-linux-musl
+      - name: Verify the binary is static and reports the tag's version
+        run: |
+          set -euo pipefail
+          BIN=target/x86_64-unknown-linux-musl/release/kashshaf-api
+          file "$BIN"
+          if ldd "$BIN" 2>&1 | grep -q "not a dynamic executable\|statically linked"; then echo "static: ok"; else echo "binary is dynamically linked"; exit 1; fi
+          # The server reports CARGO_PKG_VERSION on /health; it must equal the tag.
+          grep -q "${RELEASE_TAG#v}" Cargo.toml
+          cp "$BIN" "kashshaf-api-${RELEASE_TAG}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kashshaf-api
+          path: kashshaf-api-v*
 
-        - name: Create Release
-          uses: softprops/action-gh-release@v1
-          with:
-            draft: true
-            prerelease: false
-            files: |
-              kashshaf-windows/**/*.msi
-              kashshaf-linux/**/*.AppImage
-              kashshaf-linux/**/*.deb
-              kashshaf-macos/**/*.dmg
+  deploy-api:
+    needs: [meta, build-api]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: kashshaf-api
+          path: dist-api
+      - name: Plan
+        run: |
+          set -euo pipefail
+          ls -l dist-api
+          cat <<EOF
+          deploy plan for $RELEASE_TAG (dry_run=$DRY_RUN):
+            scp dist-api/kashshaf-api-$RELEASE_TAG  ->  $API_SSH_USER@$API_SSH_HOST:/opt/kashshaf/api/bin/kashshaf-api-$RELEASE_TAG
+            scp api/deploy/switch_release.sh api/deploy/smoke.sh  ->  /opt/kashshaf/api/
+            ssh: sudo /opt/kashshaf/api/switch_release.sh $RELEASE_TAG
+                 (repoint /opt/kashshaf/api/bin/current, systemctl restart kashshaf-api,
+                  wait for /health.version == ${RELEASE_TAG#v} and warm_cache == complete,
+                  smoke test; on failure repoint to the previous binary, restart, exit 1;
+                  keep the last three binaries)
+            then: scripts/check_release.py --post-deploy --tag $RELEASE_TAG --api $API_URL --no-manifest-version
+          EOF
+      - name: Copy binary and scripts to the server
+        if: env.DRY_RUN != 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.API_SSH_HOST }}
+          username: ${{ env.API_SSH_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "dist-api/kashshaf-api-${{ env.RELEASE_TAG }},api/deploy/switch_release.sh,api/deploy/smoke.sh"
+          target: /opt/kashshaf/api/incoming
+          strip_components: 1
+      - name: Switch release on the server (health check, smoke test, rollback)
+        if: env.DRY_RUN != 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.API_SSH_HOST }}
+          username: ${{ env.API_SSH_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/kashshaf/api
+            mkdir -p bin
+            mv -f incoming/kashshaf-api-${{ env.RELEASE_TAG }} bin/kashshaf-api-${{ env.RELEASE_TAG }}
+            mv -f incoming/switch_release.sh incoming/smoke.sh .
+            chmod +x bin/kashshaf-api-${{ env.RELEASE_TAG }} switch_release.sh smoke.sh
+            sudo ./switch_release.sh ${{ env.RELEASE_TAG }}
+      - name: Post-deploy checks from outside
+        if: env.DRY_RUN != 'true'
+        run: |
+          python3 scripts/check_release.py --post-deploy --tag "$RELEASE_TAG" --api "$API_URL" --no-manifest-version
+          bash api/deploy/smoke.sh "$API_URL" "${RELEASE_TAG#v}"
+      - name: Dry run — rehearse the smoke test script against nothing
+        if: env.DRY_RUN == 'true'
+        run: bash -n api/deploy/switch_release.sh && bash -n api/deploy/smoke.sh && echo "scripts parse; no server contacted"
+
+  publish:
+    needs: [meta, build-windows, build-linux, build-macos, deploy-api]
+    if: needs.meta.outputs.only_api != 'true'
+    runs-on: ubuntu-22.04
+    # Needs one approval click in the `production` environment (configure
+    # it in Settings → Environments with a required reviewer).
+    environment: ${{ needs.meta.outputs.dry_run == 'true' && 'dry-run' || 'production' }}
+    outputs:
+      notes_path: RELEASE_NOTES.md
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Release notes from docs/changelog.md
+        run: |
+          python3 - <<'PY'
+          import os, re, pathlib
+          v = os.environ["RELEASE_TAG"][1:]
+          text = pathlib.Path("docs/changelog.md").read_text(encoding="utf-8")
+          m = re.search(rf"^## \[{re.escape(v)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, flags=re.M | re.S)
+          if not m or not m.group(1).strip():
+              raise SystemExit(f"docs/changelog.md has no ## [{v}] section")
+          pathlib.Path("RELEASE_NOTES.md").write_text(m.group(1).strip() + "\n", encoding="utf-8")
+          print(open("RELEASE_NOTES.md", encoding="utf-8").read()[:2000])
+          PY
+      - name: Assets
+        run: find artifacts -type f \( -name "*.msi" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.dmg" \) -exec ls -l {} \;
+      - name: Publish GitHub release
+        if: env.DRY_RUN != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: false
+          prerelease: false
+          body_path: RELEASE_NOTES.md
+          files: |
+            artifacts/kashshaf-windows/**/*.msi
+            artifacts/kashshaf-linux/**/*.AppImage
+            artifacts/kashshaf-linux/**/*.deb
+            artifacts/kashshaf-macos/**/*.dmg
+      - name: Dry run — would publish
+        if: env.DRY_RUN == 'true'
+        run: echo "would create GitHub release $RELEASE_TAG (draft=false) with the assets above and RELEASE_NOTES.md as body"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
+
+  manifest:
+    needs: [meta, publish]
+    if: needs.meta.outputs.only_api != 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+      - name: Fetch the live app manifest (public read)
+        run: curl -fsSL "$CDN_URL/app_manifest.json" -o live_app_manifest.json && python3 -m json.tool live_app_manifest.json | head -20
+      - name: List the release's assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            # No release exists in a dry run: synthesize the asset list from
+            # the naming the builds produce, so the manifest step is exercised.
+            V="${RELEASE_TAG#v}"
+            python3 - "$V" <<'PY' > assets.json
+          import json, sys
+          v = sys.argv[1]
+          base = f"https://github.com/ammusto/kashshaf/releases/download/v{v}/"
+          print(json.dumps([{"name": n, "browser_download_url": base + n} for n in
+              (f"Kashshaf_{v}_x64_en-US.msi", f"Kashshaf_{v}_macos.dmg", f"Kashshaf_{v}_amd64.AppImage", f"Kashshaf_{v}_amd64.deb")]))
+          PY
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.assets | map({name, browser_download_url})' > assets.json
+          fi
+          cat assets.json
+      - name: Build the new manifest from the actual assets
+        run: |
+          set -euo pipefail
+          MIN="${{ inputs.min_supported_version }}"
+          if [ -z "$MIN" ] && [ -f .release/min_supported_version ]; then MIN=$(cat .release/min_supported_version); fi
+          python3 scripts/build_app_manifest.py \
+            --base live_app_manifest.json --tag "$RELEASE_TAG" --assets assets.json \
+            --notes-file RELEASE_NOTES.md ${MIN:+--min-supported-version "$MIN"} \
+            $( [ "$DRY_RUN" = "true" ] && echo --no-head ) \
+            --out app_manifest.json
+          python3 -m json.tool app_manifest.json | head -40
+      - name: Upload to R2 and verify the round trip
+        if: env.DRY_RUN != 'true'
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
+          rclone config create r2 s3 provider Cloudflare access_key_id "$R2_ACCESS_KEY_ID" secret_access_key "$R2_SECRET_ACCESS_KEY" endpoint "$R2_ENDPOINT" acl private >/dev/null
+          rclone copyto live_app_manifest.json "r2:$R2_BUCKET/archive/app_manifest.$(date -u +%Y%m%dT%H%M%SZ).json"
+          rclone copyto app_manifest.json "r2:$R2_BUCKET/app_manifest.json"
+          sleep 5
+          curl -fsSL "$CDN_URL/app_manifest.json" -o back.json
+          diff <(python3 -m json.tool app_manifest.json) <(python3 -m json.tool back.json) && echo "round trip ok"
+          python3 scripts/check_release.py --post-deploy --tag "$RELEASE_TAG" --api "$API_URL" \
+            --app-manifest "$CDN_URL/app_manifest.json" --corpus-manifest "$CDN_URL/corpus_manifest.json"
+      - name: Dry run — would upload
+        if: env.DRY_RUN == 'true'
+        run: echo "would archive the live manifest under archive/, upload app_manifest.json to R2, download it back and diff"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-manifest
+          path: app_manifest.json
+
+  web:
+    needs: [meta, publish]
+    if: needs.meta.outputs.only_api != 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build:web
+      - name: Deploy to Cloudflare Pages (app.kashshaf.com)
+        if: env.DRY_RUN != 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name ${{ vars.CF_PAGES_APP_PROJECT || 'kashshaf-app' }} --branch main
+      - name: Dry run — would deploy
+        if: env.DRY_RUN == 'true'
+        run: echo "would run: wrangler pages deploy dist --project-name ${{ vars.CF_PAGES_APP_PROJECT || 'kashshaf-app' }}"; du -sh dist

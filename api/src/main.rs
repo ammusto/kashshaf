@@ -32,7 +32,13 @@ struct AppState {
     metadata_db_path: PathBuf,
     corpus_version: Option<String>,
     db_schema_version: Option<i64>,
+    /// Page-cache warm-up: 0 disabled, 1 pending, 2 complete (`/health.warm_cache`).
+    warm_cache: Arc<std::sync::atomic::AtomicU8>,
 }
+
+const WARM_DISABLED: u8 = 0;
+const WARM_PENDING: u8 = 1;
+const WARM_COMPLETE: u8 = 2;
 
 type ApiError = (StatusCode, Json<ErrorResponse>);
 
@@ -194,6 +200,9 @@ struct HealthResponse {
     max_concurrent_walks: usize,
     prefix_cache_entries: usize,
     prefix_cache_bytes: usize,
+    /// Page-cache warm-up state: `pending`, `complete` or `disabled`
+    /// (`KASHSHAF_WARM_CACHE`). Deploys wait for `complete` before the smoke test.
+    warm_cache: String,
     /// Process memory, MiB (working set includes mmapped index pages).
     rss_mb: f64,
     peak_rss_mb: f64,
@@ -255,6 +264,12 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         max_concurrent_walks: ws.max_concurrent_walks,
         prefix_cache_entries: ws.prefix_cache_entries,
         prefix_cache_bytes: ws.prefix_cache_bytes,
+        warm_cache: match state.warm_cache.load(std::sync::atomic::Ordering::SeqCst) {
+            WARM_PENDING => "pending",
+            WARM_COMPLETE => "complete",
+            _ => "disabled",
+        }
+        .to_string(),
         rss_mb: mem.rss_mb(),
         peak_rss_mb: mem.peak_rss_mb(),
         private_mb: mem.private_mb(),
@@ -525,7 +540,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Exact counts are a desktop-only setting; the server always caps walks.
     let mut config = EngineConfig { exact_counts: false, ..EngineConfig::api_server() };
-    if let Some(n) = std::env::var("KASHSHAF_MAX_WALKS").ok().and_then(|v| v.parse::<usize>().ok()) {
+    // KASHSHAF_MAX_CONCURRENT_WALKS is the documented name (api/deploy/); the
+    // shorter KASHSHAF_MAX_WALKS is accepted as an alias.
+    let max_walks_env = std::env::var("KASHSHAF_MAX_CONCURRENT_WALKS").or_else(|_| std::env::var("KASHSHAF_MAX_WALKS"));
+    if let Some(n) = max_walks_env.ok().and_then(|v| v.parse::<usize>().ok()) {
         config.max_concurrent_walks = n.max(1);
     }
     tracing::info!(
@@ -550,26 +568,33 @@ async fn main() -> anyhow::Result<()> {
         db_schema_version
     );
 
+    let warm_enabled = std::env::var("KASHSHAF_WARM_CACHE").map(|v| v == "1").unwrap_or(false);
+    let warm_cache = Arc::new(std::sync::atomic::AtomicU8::new(if warm_enabled { WARM_PENDING } else { WARM_DISABLED }));
     let state = Arc::new(AppState {
         search_engine,
         token_cache,
         metadata_db_path,
         corpus_version,
         db_schema_version,
+        warm_cache: warm_cache.clone(),
     });
 
     // Optional page-cache warm-up: read the index and corpus.db once so the
     // first queries do not pay for cold disk reads. Never blocks readiness.
-    if std::env::var("KASHSHAF_WARM_CACHE").map(|v| v == "1").unwrap_or(false) {
+    if warm_enabled {
         let paths: Vec<PathBuf> = std::fs::read_dir(&index_path)
             .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_file()).collect::<Vec<PathBuf>>())
             .unwrap_or_default()
             .into_iter()
             .chain(std::iter::once(db_path.clone()))
             .collect();
+        let flag = warm_cache.clone();
         std::thread::Builder::new()
             .name("kashshaf-warm".into())
-            .spawn(move || warm_page_cache(&paths))
+            .spawn(move || {
+                warm_page_cache(&paths);
+                flag.store(WARM_COMPLETE, std::sync::atomic::Ordering::SeqCst);
+            })
             .ok();
     }
 

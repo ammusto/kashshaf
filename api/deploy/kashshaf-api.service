@@ -1,0 +1,49 @@
+# /etc/systemd/system/kashshaf-api.service
+#
+# The binary is a static build uploaded by release.yml to
+# /opt/kashshaf/api/bin/kashshaf-api-vX.Y.Z; /opt/kashshaf/api/bin/current
+# is a symlink to the live one (switch_release.sh repoints it and restarts).
+# Data lives in /opt/kashshaf/data (corpus.db, metadata.db, tantivy_index/).
+
+[Unit]
+Description=Kashshaf search API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kashshaf
+Group=kashshaf
+WorkingDirectory=/opt/kashshaf/api
+ExecStart=/opt/kashshaf/api/bin/current
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+# --- Kashshaf configuration ------------------------------------------------
+# Directory holding tantivy_index/, corpus.db, metadata.db.
+Environment=KASHSHAF_DATA_DIR=/opt/kashshaf/data
+# Bind behind the reverse proxy only.
+Environment=KASHSHAF_BIND=127.0.0.1:3000
+# Read the index and corpus.db once at startup so the first queries are not
+# cold; /health.warm_cache reports pending|complete and the deploy waits for it.
+Environment=KASHSHAF_WARM_CACHE=1
+# In-process rate limit as a second line behind the proxy: 10 req/s, burst
+# 30, per client IP (X-Forwarded-For from nginx). "0" disables it.
+Environment=KASHSHAF_RATE_LIMIT=1
+# Detached walks running at once. The default is available_parallelism - 2;
+# on the 8-vCPU box that would be 6, which leaves too little for the tokio
+# workers and the doc-store reads, so pin it to 4.
+Environment=KASHSHAF_MAX_CONCURRENT_WALKS=4
+Environment=RUST_LOG=info
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/kashshaf/api
+ReadOnlyPaths=/opt/kashshaf/data
+
+[Install]
+WantedBy=multi-user.target
