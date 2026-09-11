@@ -21,15 +21,21 @@ pub struct Token {
     pub clitics: Vec<TokenClitic>,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+/// Cache key for a page: the full `page_tokens` primary key.
+///
+/// `page_id` is **not** unique within a book — 45 books in corpus 3.0.0 restart
+/// page numbering per part (28,846 colliding `(book_id, page_id)` pairs), so
+/// `part_index` is required to address a page.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PageKey {
     pub id: u64,
+    pub part_index: u64,
     pub page_id: u64,
 }
 
 impl PageKey {
-    pub fn new(id: u64, page_id: u64) -> Self {
-        Self { id, page_id }
+    pub fn new(id: u64, part_index: u64, page_id: u64) -> Self {
+        Self { id, part_index, page_id }
     }
 }
 

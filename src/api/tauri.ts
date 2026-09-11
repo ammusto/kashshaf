@@ -13,6 +13,7 @@ import type {
   SavedSearchEntry,
   AppUpdateStatus,
   CorpusStatus,
+  EngineCapabilities,
 } from '../types';
 import { stripPunctuation } from '../utils/sanitize';
 
@@ -123,19 +124,21 @@ export async function proximitySearch(
 
 export async function getPageTokens(
   id: number,
-  _partIndex: number,
+  partIndex: number,
   pageId: number
 ): Promise<Token[]> {
-  // Note: Tauri backend doesn't use partIndex, but we accept it for API consistency
-  return invoke('get_page_tokens', { id, pageId });
+  // part_index is required: page_id is not unique within a book (45 books
+  // restart page numbering per part).
+  return invoke('get_page_tokens', { id, partIndex, pageId });
 }
 
 export async function getTokenAt(
   id: number,
+  partIndex: number,
   pageId: number,
   idx: number
 ): Promise<Token | null> {
-  return invoke('get_token_at', { id, pageId, idx });
+  return invoke('get_token_at', { id, partIndex, pageId, idx });
 }
 
 export async function getCacheStats(): Promise<[number, number]> {
@@ -441,6 +444,21 @@ export async function archiveOldCorpus(version: string): Promise<string> {
  */
 export async function reloadAppState(): Promise<boolean> {
   return invoke('reload_app_state');
+}
+
+// ============ Engine capabilities / exact counts ============
+
+/** Wildcard grammar, exact-counts state and walk cap of the open index. */
+export async function getCapabilities(): Promise<EngineCapabilities> {
+  return invoke('get_capabilities');
+}
+
+/**
+ * Turn "Exact counts" on or off for the running engine (no restart) and
+ * persist it in user_settings.exact_counts.
+ */
+export async function setExactCounts(enabled: boolean): Promise<EngineCapabilities> {
+  return invoke('set_exact_counts', { enabled });
 }
 
 // ============ User Settings API ============

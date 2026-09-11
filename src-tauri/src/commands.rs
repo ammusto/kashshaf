@@ -3,8 +3,8 @@
 use anyhow;
 use kashshaf_lib::error::KashshafError;
 use kashshaf_lib::search::{
-    validate_wildcard_query, PageWithMatches, SearchFilters, SearchMode, SearchResult,
-    SearchResults, SearchTerm,
+    validate_wildcard_query, EngineCapabilities, PageWithMatches, SearchFilters, SearchMode,
+    SearchResult, SearchResults, SearchTerm,
 };
 use kashshaf_lib::state::AppState;
 use kashshaf_lib::tokens::{Token, TokenField};
@@ -104,10 +104,10 @@ pub async fn get_variants(
     let mode = mode.unwrap_or_default();
     let filters = filters.unwrap_or_default();
     let search_engine = app_state.search_engine.clone();
-    let corpus_db_path = app_state.db_path.clone();
+    let token_cache = app_state.token_cache.clone();
 
     tokio::task::spawn_blocking(move || {
-        compute_variants(&search_engine, &corpus_db_path, &query, mode, &filters)
+        compute_variants(&search_engine, &token_cache, &query, mode, &filters)
             .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
     })
     .await
@@ -594,11 +594,12 @@ pub async fn proximity_search(
 pub fn get_page_tokens(
     state: State<'_, ManagedAppState>,
     id: u64,
+    part_index: u64,
     page_id: u64,
 ) -> Result<Vec<Token>, KashshafError> {
     use kashshaf_lib::tokens::PageKey;
     let app_state = require_state(&state)?;
-    let key = PageKey::new(id, page_id);
+    let key = PageKey::new(id, part_index, page_id);
     let tokens = app_state
         .token_cache
         .get(&key)
@@ -610,12 +611,13 @@ pub fn get_page_tokens(
 pub fn get_token_at(
     state: State<'_, ManagedAppState>,
     id: u64,
+    part_index: u64,
     page_id: u64,
     idx: usize,
 ) -> Result<Option<Token>, KashshafError> {
     use kashshaf_lib::tokens::PageKey;
     let app_state = require_state(&state)?;
-    let key = PageKey::new(id, page_id);
+    let key = PageKey::new(id, part_index, page_id);
     app_state
         .token_cache
         .get_token_at(&key, idx)
@@ -768,47 +770,25 @@ pub async fn wildcard_search(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<SearchResults, KashshafError> {
-    use kashshaf_lib::search::parse_wildcard_query;
-    use kashshaf_lib::tokens::PageKey;
-
     let app_state = require_state(&state)?;
     let filters = filters.unwrap_or_default();
     let limit = limit.unwrap_or(50);
     let offset = offset.unwrap_or(0);
 
-    // Validate the query first
-    if let Err(e) = validate_wildcard_query(&query, SearchMode::Surface) {
+    let search_engine = app_state.search_engine.clone();
+    let token_cache = app_state.token_cache.clone();
+
+    // Validate the query first, under the grammar of the open index.
+    if let Err(e) = validate_wildcard_query(&query, SearchMode::Surface, search_engine.wildcard_grammar()) {
         return Err(KashshafError::Search(e.message));
     }
 
-    let search_engine = app_state.search_engine.clone();
-    let token_cache = app_state.token_cache.clone();
-    let query_clone = query.clone();
-
+    // The engine verifies adjacency itself (RegexPhraseQuery) and computes
+    // exact highlight positions from the token cache in one batched pass.
     tokio::task::spawn_blocking(move || {
-        let mut results = search_engine
-            .wildcard_search(&query_clone, &filters, limit, offset)
-            .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))?;
-
-        // For multi-word wildcard phrases, recalculate matched_token_indices
-        // using the token cache to ensure only complete phrase matches are highlighted
-        let query_info = parse_wildcard_query(&query_clone);
-        if query_info.terms.len() > 1 {
-            for result in &mut results.results {
-                let page_key = PageKey::new(result.id, result.page_id);
-                if let Ok(positions) = token_cache.find_wildcard_phrase_positions(
-                    &page_key,
-                    &query_info.prefix,
-                    query_info.suffix.as_deref(),
-                    query_info.wildcard_term_index,
-                    &query_info.terms,
-                ) {
-                    result.matched_token_indices = positions;
-                }
-            }
-        }
-
-        Ok(results)
+        search_engine
+            .wildcard_search_with_cache(&query, &filters, limit, offset, Some(&token_cache))
+            .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
     })
     .await
     .map_err(|e| KashshafError::Search(format!("Task join error: {}", e)))?
@@ -1330,6 +1310,26 @@ pub async fn reload_app_state(state: State<'_, ManagedAppState>) -> Result<bool,
             Ok(false)
         }
     }
+}
+
+// ============ Engine capabilities / exact counts ============
+
+/// What the frontend needs to know about the open index: wildcard grammar,
+/// exact-counts state, walk cap.
+#[tauri::command]
+pub fn get_capabilities(state: State<'_, ManagedAppState>) -> Result<EngineCapabilities, KashshafError> {
+    let app_state = require_state(&state)?;
+    Ok(app_state.search_engine.capabilities())
+}
+
+/// Apply the "Exact counts" setting to the running engine (no restart) and
+/// persist it in `user_settings.exact_counts`.
+#[tauri::command]
+pub fn set_exact_counts(state: State<'_, ManagedAppState>, enabled: bool) -> Result<EngineCapabilities, KashshafError> {
+    set_user_setting("exact_counts".to_string(), if enabled { "true".to_string() } else { "false".to_string() })?;
+    let app_state = require_state(&state)?;
+    app_state.search_engine.set_exact_counts(enabled);
+    Ok(app_state.search_engine.capabilities())
 }
 
 // ============ User Settings Commands ============

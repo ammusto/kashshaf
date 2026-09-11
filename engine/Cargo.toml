@@ -1,0 +1,29 @@
+[package]
+name = "kashshaf-engine"
+version = "0.5.0"
+edition = "2021"
+description = "Shared search engine for the Kashshaf desktop backend and API server"
+
+[lib]
+name = "kashshaf_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[dependencies]
+# The index is built by kashshaf-data-clean/indexer with the same Tantivy
+# version and a zstd-compressed doc store; every reader needs this feature.
+tantivy = { version = "0.25", features = ["zstd-compression"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+zstd = "0.13"
+lru = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1.0"
+
+# Peak-RSS logging in the bench binary (PeakWorkingSetSize on Windows,
+# VmHWM from /proc/self/status elsewhere).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

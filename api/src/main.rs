@@ -1,8 +1,5 @@
-mod cache;
-mod error;
-mod search;
-mod tokens;
-mod variants;
+//! Kashshaf API server (axum). Thin HTTP layer over `kashshaf-engine`, the
+//! same engine the desktop app embeds.
 
 use axum::{
     extract::{Query, State},
@@ -10,19 +7,45 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use cache::TokenCache;
-use search::{SearchEngine, SearchFilters, SearchMode, SearchResults, SearchTerm, PageWithMatches};
+use kashshaf_engine::{
+    check_corpus_schema_supported, compute_variants, ensure_corpus_indexes, EngineConfig, PageKey, PageWithMatches,
+    SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, Token, TokenCache,
+    VariantsResponse, WildcardGrammar, MAX_SUPPORTED_DB_SCHEMA,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokens::{PageKey, Token};
 use tower_http::cors::{Any, CorsLayer};
+
+/// Upper bound on `limit` for every search endpoint. Matches the desktop
+/// client's page size (`PAGE_SIZE = 250`) so online load-more never skips rows.
+const MAX_LIMIT: usize = 250;
+const DEFAULT_LIMIT: usize = 50;
 
 struct AppState {
     search_engine: SearchEngine,
-    token_cache: TokenCache,
-    db_path: PathBuf,
+    token_cache: Arc<TokenCache>,
     metadata_db_path: PathBuf,
+    corpus_version: Option<String>,
+    db_schema_version: Option<i64>,
+}
+
+type ApiError = (StatusCode, Json<ErrorResponse>);
+
+fn internal(e: impl std::fmt::Display) -> ApiError {
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+}
+
+fn bad_request(e: impl std::fmt::Display) -> ApiError {
+    (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e.to_string() }))
+}
+
+fn clamp_limit(limit: Option<usize>) -> usize {
+    limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
+}
+
+fn parse_book_ids(s: Option<String>) -> Option<Vec<u64>> {
+    s.map(|s| s.split(',').filter_map(|id| id.trim().parse().ok()).collect())
 }
 
 // === Request/Response types ===
@@ -77,8 +100,18 @@ struct WildcardSearchQuery {
 }
 
 #[derive(Deserialize)]
+struct VariantsRequest {
+    query: String,
+    mode: Option<SearchMode>,
+    filters: Option<SearchFilters>,
+}
+
+#[derive(Deserialize)]
 struct PageQuery {
     id: u64,
+    /// Optional for clients built before 0.5.0 (they addressed pages by
+    /// `(id, page_id)` only); defaults to the first part.
+    #[serde(default)]
     part_index: u64,
     page_id: u64,
 }
@@ -93,6 +126,9 @@ struct PageByLabelQuery {
 #[derive(Deserialize)]
 struct TokensQuery {
     id: u64,
+    /// Optional for clients built before 0.5.0 (they addressed pages by
+    /// `(id, page_id)` only); defaults to the first part.
+    #[serde(default)]
     part_index: u64,
     page_id: u64,
 }
@@ -100,15 +136,9 @@ struct TokensQuery {
 #[derive(Deserialize)]
 struct MatchPositionsQuery {
     id: u64,
-    part_index: u64,
-    page_id: u64,
-    q: String,
-    mode: Option<SearchMode>,
-}
-
-#[derive(Deserialize)]
-struct PageWithMatchesQuery {
-    id: u64,
+    /// Optional for clients built before 0.5.0 (they addressed pages by
+    /// `(id, page_id)` only); defaults to the first part.
+    #[serde(default)]
     part_index: u64,
     page_id: u64,
     q: String,
@@ -118,6 +148,9 @@ struct PageWithMatchesQuery {
 #[derive(Deserialize)]
 struct MatchPositionsCombinedRequest {
     id: u64,
+    /// Optional for clients built before 0.5.0 (they addressed pages by
+    /// `(id, page_id)` only); defaults to the first part.
+    #[serde(default)]
     part_index: u64,
     page_id: u64,
     terms: Vec<SearchTerm>,
@@ -126,6 +159,9 @@ struct MatchPositionsCombinedRequest {
 #[derive(Deserialize)]
 struct NameMatchPositionsRequest {
     id: u64,
+    /// Optional for clients built before 0.5.0 (they addressed pages by
+    /// `(id, page_id)` only); defaults to the first part.
+    #[serde(default)]
     part_index: u64,
     page_id: u64,
     patterns: Vec<String>,
@@ -134,7 +170,20 @@ struct NameMatchPositionsRequest {
 #[derive(Serialize)]
 struct HealthResponse {
     status: String,
+    version: String,
     index_docs: u64,
+    segments: usize,
+    reading_order: bool,
+    corpus_version: Option<String>,
+    db_schema_version: Option<i64>,
+    max_supported_db_schema: i64,
+    max_limit: usize,
+    /// `glob` (compound index) or `legacy` (three-field index); the client
+    /// validates wildcard input with the matching rules.
+    wildcard_grammar: WildcardGrammar,
+    /// Always false on the server: walks stop at `max_verified_hits`.
+    exact_counts: bool,
+    max_verified_hits: usize,
 }
 
 #[derive(Serialize)]
@@ -167,263 +216,246 @@ struct ErrorResponse {
 // === Handlers ===
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let doc_count = state.search_engine.doc_count().unwrap_or(0);
     Json(HealthResponse {
         status: "ok".to_string(),
-        index_docs: doc_count,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        index_docs: state.search_engine.doc_count().unwrap_or(0),
+        segments: state.search_engine.segment_count(),
+        reading_order: state.search_engine.reading_order(),
+        corpus_version: state.corpus_version.clone(),
+        db_schema_version: state.db_schema_version,
+        max_supported_db_schema: MAX_SUPPORTED_DB_SCHEMA,
+        max_limit: MAX_LIMIT,
+        wildcard_grammar: state.search_engine.wildcard_grammar(),
+        exact_counts: false,
+        max_verified_hits: state.search_engine.config().max_verified_hits,
     })
 }
 
 async fn simple_search(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SimpleSearchQuery>,
-) -> Result<Json<SearchResults>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<SearchResults>, ApiError> {
     let mode = params.mode.unwrap_or(SearchMode::Lemma);
-    let limit = params.limit.unwrap_or(50).min(100);
+    let limit = clamp_limit(params.limit);
     let offset = params.offset.unwrap_or(0);
-
-    let filters = SearchFilters {
-        author_id: None,
-        genre_id: None,
-        death_ah_min: None,
-        death_ah_max: None,
-        century_ah: None,
-        book_ids: params.book_ids.map(|s| {
-            s.split(',').filter_map(|id| id.trim().parse().ok()).collect()
-        }),
-    };
-
-    state.search_engine.search(&params.q, mode, &filters, limit, offset)
+    let filters = SearchFilters { book_ids: parse_book_ids(params.book_ids), ..Default::default() };
+    state
+        .search_engine
+        .search(&params.q, mode, &filters, limit, offset)
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn combined_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CombinedSearchRequest>,
-) -> Result<Json<SearchResults>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<SearchResults>, ApiError> {
     let filters = req.filters.unwrap_or_default();
-    let limit = req.limit.unwrap_or(50).min(100);
-    let offset = req.offset.unwrap_or(0);
-
-    state.search_engine.combined_search(&req.and_terms, &req.or_terms, &filters, limit, offset)
+    state
+        .search_engine
+        .combined_search(&req.and_terms, &req.or_terms, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
-}
-
-#[derive(Deserialize)]
-struct VariantsRequest {
-    query: String,
-    mode: Option<SearchMode>,
-    filters: Option<SearchFilters>,
+        .map_err(internal)
 }
 
 async fn search_variants(
     State(state): State<Arc<AppState>>,
     Json(req): Json<VariantsRequest>,
-) -> Result<Json<variants::VariantsResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<VariantsResponse>, ApiError> {
     let mode = req.mode.unwrap_or_default();
+    if mode == SearchMode::Surface {
+        return Err(bad_request("variants are only available for lemma and root searches"));
+    }
     let filters = req.filters.unwrap_or_default();
-
-    // Match the existing search handler pattern: run synchronously inside the
-    // tokio task. Variants do real CPU + SQLite work, so this can stall other
-    // requests; if that becomes a problem, wrap SearchEngine in Arc and move
-    // to spawn_blocking. Out of scope here.
-    variants::compute_variants(&state.search_engine, &state.db_path, &req.query, mode, &filters)
+    compute_variants(&state.search_engine, &state.token_cache, &req.query, mode, &filters)
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn proximity_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ProximitySearchRequest>,
-) -> Result<Json<SearchResults>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<SearchResults>, ApiError> {
     let filters = req.filters.unwrap_or_default();
-    let limit = req.limit.unwrap_or(50).min(100);
-    let offset = req.offset.unwrap_or(0);
-
-    state.search_engine.proximity_search(&req.term1, &req.term2, req.distance, &filters, limit, offset)
+    state
+        .search_engine
+        .proximity_search(&req.term1, &req.term2, req.distance, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn name_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NameSearchRequest>,
-) -> Result<Json<SearchResults>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<SearchResults>, ApiError> {
     let filters = req.filters.unwrap_or_default();
-    let limit = req.limit.unwrap_or(50).min(100);
-    let offset = req.offset.unwrap_or(0);
-
     let patterns_by_form: Vec<Vec<String>> = req.forms.into_iter().map(|f| f.patterns).collect();
-
-    state.search_engine.name_search(&patterns_by_form, &filters, limit, offset)
+    state
+        .search_engine
+        .name_search(&patterns_by_form, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn wildcard_search(
     State(state): State<Arc<AppState>>,
     Query(params): Query<WildcardSearchQuery>,
-) -> Result<Json<SearchResults>, (StatusCode, Json<ErrorResponse>)> {
-    let limit = params.limit.unwrap_or(50).min(100);
-    let offset = params.offset.unwrap_or(0);
-
-    let filters = SearchFilters {
-        author_id: None,
-        genre_id: None,
-        death_ah_min: None,
-        death_ah_max: None,
-        century_ah: None,
-        book_ids: params.book_ids.map(|s| {
-            s.split(',').filter_map(|id| id.trim().parse().ok()).collect()
-        }),
-    };
-
-    state.search_engine.wildcard_search(&params.q, &filters, limit, offset)
+) -> Result<Json<SearchResults>, ApiError> {
+    if let Err(e) = kashshaf_engine::validate_wildcard_query(&params.q, SearchMode::Surface, state.search_engine.wildcard_grammar()) {
+        return Err(bad_request(e.message));
+    }
+    let filters = SearchFilters { book_ids: parse_book_ids(params.book_ids), ..Default::default() };
+    state
+        .search_engine
+        .wildcard_search_with_cache(
+            &params.q,
+            &filters,
+            clamp_limit(params.limit),
+            params.offset.unwrap_or(0),
+            Some(state.token_cache.as_ref()),
+        )
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn get_page(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PageQuery>,
-) -> Result<Json<Option<search::SearchResult>>, (StatusCode, Json<ErrorResponse>)> {
-    state.search_engine.get_page(params.id, params.part_index, params.page_id)
+) -> Result<Json<Option<SearchResult>>, ApiError> {
+    state
+        .search_engine
+        .get_page(params.id, params.part_index, params.page_id)
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn get_page_by_label(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PageByLabelQuery>,
-) -> Result<Json<Option<search::SearchResult>>, (StatusCode, Json<ErrorResponse>)> {
-    state.search_engine.get_page_by_label(params.id, &params.part_label, &params.page_number)
+) -> Result<Json<Option<SearchResult>>, ApiError> {
+    state
+        .search_engine
+        .get_page_by_label(params.id, &params.part_label, &params.page_number)
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn get_page_tokens(
     State(state): State<Arc<AppState>>,
     Query(params): Query<TokensQuery>,
-) -> Result<Json<Vec<Token>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<Vec<Token>>, ApiError> {
     let key = PageKey::new(params.id, params.part_index, params.page_id);
-    state.token_cache.get(&key)
+    state
+        .token_cache
+        .get(&key)
         .map(|tokens| Json((*tokens).clone()))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn get_match_positions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MatchPositionsQuery>,
-) -> Result<Json<Vec<u32>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<Vec<u32>>, ApiError> {
     let mode = params.mode.unwrap_or(SearchMode::Lemma);
-    state.search_engine.get_match_positions(params.id, params.part_index, params.page_id, &params.q, mode)
+    state
+        .search_engine
+        .get_match_positions(params.id, params.part_index, params.page_id, &params.q, mode)
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn get_page_with_matches(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<PageWithMatchesQuery>,
-) -> Result<Json<Option<PageWithMatches>>, (StatusCode, Json<ErrorResponse>)> {
+    Query(params): Query<MatchPositionsQuery>,
+) -> Result<Json<Option<PageWithMatches>>, ApiError> {
     let mode = params.mode.unwrap_or(SearchMode::Lemma);
-    state.search_engine.get_page_with_matches(params.id, params.part_index, params.page_id, &params.q, mode)
+    state
+        .search_engine
+        .get_page_with_matches(params.id, params.part_index, params.page_id, &params.q, mode)
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn get_match_positions_combined(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MatchPositionsCombinedRequest>,
-) -> Result<Json<Vec<u32>>, (StatusCode, Json<ErrorResponse>)> {
-    state.search_engine.get_match_positions_combined(req.id, req.part_index, req.page_id, &req.terms)
+) -> Result<Json<Vec<u32>>, ApiError> {
+    state
+        .search_engine
+        .get_match_positions_combined(req.id, req.part_index, req.page_id, &req.terms)
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
 async fn get_name_match_positions(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NameMatchPositionsRequest>,
-) -> Result<Json<Vec<u32>>, (StatusCode, Json<ErrorResponse>)> {
-    state.search_engine.get_name_match_positions(req.id, req.part_index, req.page_id, &req.patterns)
+) -> Result<Json<Vec<u32>>, ApiError> {
+    state
+        .search_engine
+        .get_name_match_positions(req.id, req.part_index, req.page_id, &req.patterns)
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))
+        .map_err(internal)
 }
 
-async fn get_all_books(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<BookMetadata>>, (StatusCode, Json<ErrorResponse>)> {
-    let conn = rusqlite::Connection::open(&state.metadata_db_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
-                original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json
-         FROM books ORDER BY death_ah ASC NULLS LAST, id ASC"
-    ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
-
-    let books = stmt.query_map([], |row| {
-        Ok(BookMetadata {
-            id: row.get(0)?,
-            corpus: row.get(1)?,
-            title: row.get(2)?,
-            author_id: row.get(3)?,
-            death_ah: row.get(4)?,
-            century_ah: row.get(5)?,
-            genre_id: row.get(6)?,
-            page_count: row.get(7)?,
-            token_count: row.get(8)?,
-            original_id: row.get(9)?,
-            paginated: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
-            tags: row.get(11)?,
-            book_meta: row.get(12)?,
-            author_meta: row.get(13)?,
-            in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
-            parts: row.get(15)?,
-            metadata_json: row.get(16)?,
-            citation_json: row.get(17)?,
+async fn get_all_books(State(state): State<Arc<AppState>>) -> Result<Json<Vec<BookMetadata>>, ApiError> {
+    let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
+                    original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json
+             FROM books ORDER BY death_ah ASC NULLS LAST, id ASC",
+        )
+        .map_err(internal)?;
+    let books = stmt
+        .query_map([], |row| {
+            Ok(BookMetadata {
+                id: row.get(0)?,
+                corpus: row.get(1)?,
+                title: row.get(2)?,
+                author_id: row.get(3)?,
+                death_ah: row.get(4)?,
+                century_ah: row.get(5)?,
+                genre_id: row.get(6)?,
+                page_count: row.get(7)?,
+                token_count: row.get(8)?,
+                original_id: row.get(9)?,
+                paginated: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
+                tags: row.get(11)?,
+                book_meta: row.get(12)?,
+                author_meta: row.get(13)?,
+                in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
+                parts: row.get(15)?,
+                metadata_json: row.get(16)?,
+                citation_json: row.get(17)?,
+            })
         })
-    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
+        .map_err(internal)?
         .filter_map(|r| r.ok())
         .collect();
-
     Ok(Json(books))
 }
 
-async fn get_all_authors(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<(i64, String)>>, (StatusCode, Json<ErrorResponse>)> {
-    let conn = rusqlite::Connection::open(&state.metadata_db_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
-
-    let mut stmt = conn.prepare("SELECT id, author FROM authors ORDER BY id")
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
-
-    let authors = stmt.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
+async fn get_all_authors(State(state): State<Arc<AppState>>) -> Result<Json<Vec<(i64, String)>>, ApiError> {
+    let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
+    let mut stmt = conn.prepare("SELECT id, author FROM authors ORDER BY id").map_err(internal)?;
+    let authors = stmt
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        .map_err(internal)?
         .filter_map(|r| r.ok())
         .collect();
-
     Ok(Json(authors))
 }
 
-async fn get_all_genres(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<(i64, String)>>, (StatusCode, Json<ErrorResponse>)> {
-    let conn = rusqlite::Connection::open(&state.metadata_db_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
-
-    let mut stmt = conn.prepare("SELECT id, genre FROM genres ORDER BY id")
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?;
-
-    let genres = stmt.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() })))?
+async fn get_all_genres(State(state): State<Arc<AppState>>) -> Result<Json<Vec<(i64, String)>>, ApiError> {
+    let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
+    let mut stmt = conn.prepare("SELECT id, genre FROM genres ORDER BY id").map_err(internal)?;
+    let genres = stmt
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        .map_err(internal)?
         .filter_map(|r| r.ok())
         .collect();
-
     Ok(Json(genres))
 }
 
@@ -431,32 +463,50 @@ async fn get_all_genres(
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let index_path = PathBuf::from("/opt/kashshaf/data/tantivy_index");
-    let db_path = PathBuf::from("/opt/kashshaf/data/corpus.db");
-    let metadata_db_path = PathBuf::from("/opt/kashshaf/data/metadata.db");
+    let data_dir = PathBuf::from(std::env::var("KASHSHAF_DATA_DIR").unwrap_or_else(|_| "/opt/kashshaf/data".to_string()));
+    let bind = std::env::var("KASHSHAF_BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let index_path = data_dir.join("tantivy_index");
+    let db_path = data_dir.join("corpus.db");
+    let metadata_db_path = data_dir.join("metadata.db");
 
-    // Idempotent migration: ensure indexes the variants scanner relies on exist.
-    {
+    // Refuse schemas newer than this build understands; make sure the lookup
+    // indexes exist on older schemas (schema 3 ships with both).
+    let info = check_corpus_schema_supported(&db_path)?;
+    let db_schema_version = info.as_ref().map(|i| i.schema_version);
+    let corpus_version = info.as_ref().map(|i| i.corpus_version.clone());
+    if db_schema_version.unwrap_or(0) < 3 {
         let conn = rusqlite::Connection::open(&db_path)?;
-        conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_token_def_lemma ON token_definitions(lemma_id);",
-        )?;
+        let created = ensure_corpus_indexes(&conn)?;
+        if !created.is_empty() {
+            tracing::info!("created corpus.db indexes: {:?}", created);
+        }
     }
 
-    let search_engine = SearchEngine::open(&index_path)?;
-    let token_cache = TokenCache::new(db_path.clone(), 1000);
+    // Exact counts are a desktop-only setting; the server always caps walks.
+    let config = EngineConfig { exact_counts: false, ..EngineConfig::api_server() };
+    let mut search_engine = SearchEngine::open_with_corpus(&index_path, Some(&db_path), config)?;
+    let token_cache = Arc::new(TokenCache::new(db_path.clone(), 1000)?);
+    search_engine.set_token_cache(token_cache.clone());
+    tracing::info!(
+        "engine ready: {:?} index, {} docs, {} segments, reading_order={}, codec={}, corpus={:?} schema={:?}",
+        search_engine.kind(),
+        search_engine.doc_count()?,
+        search_engine.segment_count(),
+        search_engine.reading_order(),
+        token_cache.has_codec(),
+        corpus_version,
+        db_schema_version
+    );
 
     let state = Arc::new(AppState {
         search_engine,
         token_cache,
-        db_path,
         metadata_db_path,
+        corpus_version,
+        db_schema_version,
     });
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let app = Router::new()
         .route("/health", get(health))
@@ -479,9 +529,8 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
-    tracing::info!("Listening on http://127.0.0.1:3000");
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    tracing::info!("Listening on http://{}", bind);
     axum::serve(listener, app).await?;
-
     Ok(())
 }
