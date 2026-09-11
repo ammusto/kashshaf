@@ -1,0 +1,108 @@
+{
+  "n": 16,
+  "distinct": true,
+  "wall_ms": 484.2337000009138,
+  "errors": [],
+  "first_window_ms": {
+    "p50": 331.41129999421537,
+    "p95": 471.1951000208501,
+    "min": 160.1616000116337,
+    "max": 479.6085999987554
+  },
+  "totals": [
+    [
+      1677,
+      true,
+      false
+    ],
+    [
+      2110,
+      true,
+      false
+    ],
+    [
+      2318,
+      true,
+      false
+    ],
+    [
+      2449,
+      true,
+      false
+    ],
+    [
+      256,
+      true,
+      false
+    ],
+    [
+      2567,
+      true,
+      false
+    ],
+    [
+      2682,
+      true,
+      false
+    ],
+    [
+      2863,
+      true,
+      false
+    ],
+    [
+      2876,
+      true,
+      false
+    ],
+    [
+      3076,
+      true,
+      false
+    ],
+    [
+      3140,
+      true,
+      false
+    ],
+    [
+      3190,
+      true,
+      false
+    ],
+    [
+      4313,
+      true,
+      false
+    ],
+    [
+      5065,
+      true,
+      false
+    ],
+    [
+      5129,
+      true,
+      false
+    ],
+    [
+      5809,
+      true,
+      false
+    ]
+  ],
+  "walks_queued_peak": 10,
+  "walks_active_peak": 8,
+  "max_concurrent_walks": 6,
+  "health_ms_max": 126.57670001499355,
+  "health_ms_p50": 1.5407500031869859,
+  "page_ms_max": 180.82710000453517,
+  "page_ms_p50": 1.060250011505559,
+  "side_samples": 16,
+  "side_errors": 0,
+  "rss_mb_before": 416.3359375,
+  "peak_rss_mb_after": 535.1328125,
+  "private_mb_after": 503.40234375,
+  "prefix_cache_entries": 32,
+  "prefix_cache_bytes": 32491704
+}

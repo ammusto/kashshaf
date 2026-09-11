@@ -1,0 +1,22 @@
+[
+  {
+    "name": "wildcard single ال* (one-letter-ish, widest)",
+    "kind": "wildcard",
+    "query": "ال*"
+  },
+  {
+    "name": "wildcard phrase ابن ال*",
+    "kind": "wildcard",
+    "query": "ابن ال*"
+  },
+  {
+    "name": "wildcard internal م*رف (1 letter before *)",
+    "kind": "wildcard",
+    "query": "م*رف"
+  },
+  {
+    "name": "wildcard single الم*",
+    "kind": "wildcard",
+    "query": "الم*"
+  }
+]

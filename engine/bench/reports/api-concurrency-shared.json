@@ -1,0 +1,33 @@
+{
+  "n": 16,
+  "distinct": false,
+  "wall_ms": 54.551999986870214,
+  "errors": [],
+  "first_window_ms": {
+    "p50": 42.85500000696629,
+    "p95": 50.65150000154972,
+    "min": 31.75059999921359,
+    "max": 52.846399979898706
+  },
+  "totals": [
+    [
+      20000,
+      true,
+      true
+    ]
+  ],
+  "walks_queued_peak": 0,
+  "walks_active_peak": 0,
+  "max_concurrent_walks": 6,
+  "health_ms_max": 6.797200010623783,
+  "health_ms_p50": 1.2952000106452033,
+  "page_ms_max": 13.825800007907674,
+  "page_ms_p50": 1.0741000151028857,
+  "side_samples": 4,
+  "side_errors": 0,
+  "rss_mb_before": 363.6171875,
+  "peak_rss_mb_after": 456.98828125,
+  "private_mb_after": 393.8359375,
+  "prefix_cache_entries": 1,
+  "prefix_cache_bytes": 1051336
+}

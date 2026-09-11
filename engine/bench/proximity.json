@@ -1,0 +1,10 @@
+[
+  {"name": "prox_common_surface_x_productive_root", "kind": "proximity",
+     "term1": {"query": "الله", "mode": "surface"}, "term2": {"query": "عرف", "mode": "root"}, "distance": 10},
+  {"name": "prox_common_surface_x_common_lemma", "kind": "proximity",
+     "term1": {"query": "الله", "mode": "surface"}, "term2": {"query": "قال", "mode": "lemma"}, "distance": 10},
+  {"name": "prox_rare_x_rare", "kind": "proximity",
+     "term1": {"query": "المستصفى", "mode": "surface"}, "term2": {"query": "الغزالي", "mode": "surface"}, "distance": 10},
+  {"name": "prox_common_x_rare", "kind": "proximity",
+     "term1": {"query": "الله", "mode": "surface"}, "term2": {"query": "المستصفى", "mode": "surface"}, "distance": 10}
+]

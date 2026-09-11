@@ -1,0 +1,118 @@
+[
+  {
+    "name": "wc prefix ال*",
+    "kind": "wildcard",
+    "query": "ال*"
+  },
+  {
+    "name": "wc prefix الم*",
+    "kind": "wildcard",
+    "query": "الم*"
+  },
+  {
+    "name": "wc suffix *ية",
+    "kind": "wildcard",
+    "query": "*ية"
+  },
+  {
+    "name": "wc contains *قول*",
+    "kind": "wildcard",
+    "query": "*قول*"
+  },
+  {
+    "name": "wc multi مع*رف*",
+    "kind": "wildcard",
+    "query": "مع*رف*"
+  },
+  {
+    "name": "wc infix م*رف",
+    "kind": "wildcard",
+    "query": "م*رف"
+  },
+  {
+    "name": "wc phrase ابن ال*",
+    "kind": "wildcard",
+    "query": "ابن ال*"
+  },
+  {
+    "name": "wc phrase ابن ال* page 20",
+    "kind": "wildcard",
+    "query": "ابن ال*",
+    "offset": 4750
+  },
+  {
+    "name": "wc phrase ابو *الله",
+    "kind": "wildcard",
+    "query": "ابو *الله"
+  },
+  {
+    "name": "prox الله ~10 root:عرف page 1",
+    "kind": "proximity",
+    "term1": {
+      "query": "الله",
+      "mode": "surface"
+    },
+    "term2": {
+      "query": "عرف",
+      "mode": "root"
+    },
+    "distance": 10
+  },
+  {
+    "name": "prox الله ~10 root:عرف page 20",
+    "kind": "proximity",
+    "term1": {
+      "query": "الله",
+      "mode": "surface"
+    },
+    "term2": {
+      "query": "عرف",
+      "mode": "root"
+    },
+    "distance": 10,
+    "offset": 4750
+  },
+  {
+    "name": "prox الله ~10 lemma:قال capped",
+    "kind": "proximity",
+    "exact_counts": false,
+    "term1": {
+      "query": "الله",
+      "mode": "surface"
+    },
+    "term2": {
+      "query": "قال",
+      "mode": "lemma"
+    },
+    "distance": 10
+  },
+  {
+    "name": "prox الله ~10 lemma:قال exact",
+    "kind": "proximity",
+    "exact_counts": true,
+    "term1": {
+      "query": "الله",
+      "mode": "surface"
+    },
+    "term2": {
+      "query": "قال",
+      "mode": "lemma"
+    },
+    "distance": 10
+  },
+  {
+    "name": "prox الله ~10 lemma:قال exact page 20",
+    "kind": "proximity",
+    "exact_counts": true,
+    "term1": {
+      "query": "الله",
+      "mode": "surface"
+    },
+    "term2": {
+      "query": "قال",
+      "mode": "lemma"
+    },
+    "distance": 10,
+    "offset": 4750
+  }
+]
