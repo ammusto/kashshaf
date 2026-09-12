@@ -4,10 +4,14 @@
 #
 #   sudo bash install.sh [--with-nginx] [--with-certbot]
 #
-# Creates the kashshaf user, /opt/kashshaf/{api/bin,data}, installs the
-# systemd unit and (optionally) the nginx site, and makes sure jq and curl
-# (used by switch_release.sh / smoke.sh) are present. The corpus data must
-# be placed in /opt/kashshaf/data separately (rclone from R2 or scp).
+# Creates the kashshaf user and /opt/kashshaf/api/{bin,incoming}, installs
+# the systemd unit and (optionally) the nginx site, and makes sure jq and
+# curl (used by switch_release.sh / smoke.sh) are present. The corpus is
+# placed separately (rclone from R2 or scp) in a VERSIONED directory,
+# /opt/kashshaf/data-<version>/, and /opt/kashshaf/data is a symlink to the
+# live one (README.md, "Corpus layout"). This script never creates
+# /opt/kashshaf/data as a real directory: the unit relies on it being a
+# symlink (no ReadOnlyPaths=), and a real directory here would shadow it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,7 +27,10 @@ apt-get install -y -qq jq curl rsync >/dev/null
 
 echo "== user and directories"
 id -u kashshaf >/dev/null 2>&1 || useradd --system --home /opt/kashshaf --shell /usr/sbin/nologin kashshaf
-install -d -o kashshaf -g kashshaf -m 755 /opt/kashshaf /opt/kashshaf/api /opt/kashshaf/api/bin /opt/kashshaf/api/incoming /opt/kashshaf/data
+install -d -o kashshaf -g kashshaf -m 755 /opt/kashshaf /opt/kashshaf/api /opt/kashshaf/api/bin /opt/kashshaf/api/incoming
+if [ -d /opt/kashshaf/data ] && [ ! -L /opt/kashshaf/data ]; then
+  echo "   WARNING: /opt/kashshaf/data is a real directory; the intended layout is a symlink to data-<version>/ (see README.md)"
+fi
 install -o kashshaf -g kashshaf -m 755 "$HERE/switch_release.sh" /opt/kashshaf/api/switch_release.sh
 install -o kashshaf -g kashshaf -m 755 "$HERE/smoke.sh" /opt/kashshaf/api/smoke.sh
 
@@ -55,6 +62,7 @@ if [ "$WITH_NGINX" -eq 1 ]; then
 fi
 
 echo "== done"
-echo "   data dir: /opt/kashshaf/data  (corpus.db, metadata.db, tantivy_index/)"
+echo "   data dir: /opt/kashshaf/data -> data-<version>/  (corpus.db, metadata.db, triples.bin, tantivy_index/)"
+echo "             e.g. rclone copy r2:<bucket>/corpus/4.0.0/ /opt/kashshaf/data-4.0.0/ && ln -sfn data-4.0.0 /opt/kashshaf/data"
 echo "   unit:     systemctl status kashshaf-api"
 echo "   deploy:   Actions -> Release -> run workflow (dry_run=false) or only_api=true for a redeploy"

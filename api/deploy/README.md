@@ -6,7 +6,7 @@ by `.github/workflows/release.yml` (with `dry_run: false`).
 
 | File | Purpose |
 |---|---|
-| `kashshaf-api.service` | systemd unit: user `kashshaf`, `ExecStart=/opt/kashshaf/api/bin/current`, environment (below) |
+| `kashshaf-api.service` | systemd unit: user `kashshaf`, `ExecStart=/opt/kashshaf/api/bin/current`, environment (below); `ProtectSystem=full` and no `ReadOnlyPaths=` because the data directory is a symlink (see "Corpus layout") |
 | `nginx-api.kashshaf.com.conf` | reverse proxy with TLS (certbot), 10 req/s burst 30 per IP, JSON 429, `/health` never limited |
 | `install.sh` | one-time setup: packages, user, directories, sudoers rule, unit, optional nginx + certbot |
 | `switch_release.sh` | run by the workflow over SSH: repoint `bin/current`, restart, wait for `/health.version` and `warm_cache == complete`, smoke test, roll back on failure, keep three binaries |
@@ -68,7 +68,46 @@ curl -s http://127.0.0.1:3000/health | jq .version
 
 ```
 sudo bash api/deploy/install.sh --with-nginx --with-certbot
-rclone copy r2:<bucket>/corpus/4.0.0/ /opt/kashshaf/data/   # or scp
+sudo -u kashshaf rclone copy r2:<bucket>/corpus/4.0.0/ /opt/kashshaf/data-4.0.0/   # or scp
+sudo ln -sfn data-4.0.0 /opt/kashshaf/data
 ```
 
 Then run the release workflow (or `only_api: true` for a tag that already exists).
+
+## Corpus layout: `/opt/kashshaf/data` is a symlink
+
+`KASHSHAF_DATA_DIR=/opt/kashshaf/data` never points at a real directory. Each
+corpus version lives in its own directory beside it and `data` is a relative
+symlink to the live one:
+
+```
+/opt/kashshaf/
+├── api/…
+├── data -> data-4.0.0/
+├── data-4.0.0/   corpus.db  metadata.db  triples.bin  tantivy_index/
+└── data-3.0.0/   (previous, kept for rollback)
+```
+
+Swapping corpora is therefore the same shape as a binary deploy: unpack the
+new version beside the old one, repoint the link, restart, and the old
+version stays for rollback.
+
+```
+sudo -u kashshaf rclone copy --checksum r2:<bucket>/corpus/4.1.0/ /opt/kashshaf/data-4.1.0/
+sudo ln -sfn data-4.1.0 /opt/kashshaf/data      # atomic: replaces the link, not the directory
+sudo systemctl restart kashshaf-api
+curl -s http://127.0.0.1:3000/health | jq '{version, corpus_version, warm_cache}'
+# rollback: sudo ln -sfn data-4.0.0 /opt/kashshaf/data && sudo systemctl restart kashshaf-api
+```
+
+**Why the unit has no `ReadOnlyPaths=/opt/kashshaf/data`.** systemd's
+`ReadOnlyPaths=` bind-mounts the given path into the service's mount
+namespace without resolving a symlink there, so with the layout above the
+process sees `/opt/kashshaf/data` as an empty or dangling mount and SQLite
+fails at startup with `unable to open database file` (error 14). Confirmed
+by elimination on the production box: `ProtectSystem=strict` and `full`
+both work without `ReadOnlyPaths=`, and adding it in any form fails. The
+unit uses `ProtectSystem=full` (`/usr`, `/boot`, `/efi`, `/etc` read-only)
+and `ReadWritePaths=/opt/kashshaf/api`; the API only ever opens the data
+files read-only anyway. Do not reintroduce `ReadOnlyPaths=` for the data
+path, and do not replace the symlink with a real directory to "fix" it.

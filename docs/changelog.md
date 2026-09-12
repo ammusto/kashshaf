@@ -27,6 +27,7 @@ re-runs the search.
 showing where your corpus lives.
 
 ### Fixed
+- **API unit vs. symlinked data directory.** `api/deploy/kashshaf-api.service` had `ReadOnlyPaths=/opt/kashshaf/data`; with `/opt/kashshaf/data -> data-4.0.0/` the bind mount does not resolve the symlink inside the service namespace and SQLite fails at startup with "unable to open database file" (error 14). Removed; `ProtectSystem=full`. The symlink-per-version layout is now the documented way to swap corpora on the server (api/deploy/README.md "Corpus layout", spec §20, BUILD_CORPUS.md); `install.sh` no longer creates `data` as a real directory.
 - Corpus download failed on Windows when the app was installed to the default
   Program Files location. The corpus and settings now go to `%APPDATA%\Kashshaf`.
   Existing portable installs are unaffected.
