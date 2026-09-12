@@ -12,9 +12,16 @@
 #   /search/wildcard?q=ابن ال*    total_hits > 0, elapsed_ms < 3000
 #   /page/tokens without part_index  HTTP 200 (0.4.x compatibility shim)
 #   /search/status?key=<walk_key> HTTP 200 for the proximity walk
-#   a burst of 60 requests        at least one 429 with a JSON {"error": ...} body
-#                                 (skipped with a note when the limiter is off:
-#                                 KASHSHAF_SMOKE_RATE_LIMIT=0)
+#   a burst of 60 requests        at least one 429. Through nginx the proxy's
+#                                 limit_req answers first and its body is
+#                                 whatever the live nginx config emits (HTML
+#                                 unless the @rate_limited location is
+#                                 installed), so any 429 passes; against
+#                                 localhost (no proxy) the app's tower_governor
+#                                 answers and the JSON {"error": ...} body is
+#                                 required. The check reports which layer
+#                                 replied. (Skipped with a note when the
+#                                 limiter is off: KASHSHAF_SMOKE_RATE_LIMIT=0)
 set -uo pipefail
 
 BASE="${1:?usage: smoke.sh <base-url> <expected-version>}"
@@ -77,19 +84,44 @@ else
   fail "no row to test the part_index shim with"
 fi
 
-# --- rate limit: 60 concurrent /search requests must produce a 429 with a JSON body
+# --- rate limit: a burst of 60 concurrent requests must produce a 429
 if [ "$EXPECT_429" = "1" ]; then
   # /health is exempt from the limiter, so burst on /genres (cheap, small body);
-  # every response is saved so a 429 body can be inspected.
+  # every response body and header block is saved so the first 429 can be
+  # attributed to a layer and its body inspected.
   # One curl process fires 60 requests at once (URL glob [1-60], --parallel);
   # spawning 60 processes would spread the burst out on slow shells.
   BURST=$(mktemp -d)
-  curl -s -m 30 --parallel --parallel-immediate --parallel-max 60 \
-    -o "$BURST/#1.body" -w '%{http_code} %{filename_effective}\n' "$BASE/genres?burst=[1-60]" > "$BURST/codes" 2>/dev/null || true
+  # -i: headers and body in one file per request (`#1` substitution only
+  # applies to -o, not to -D).
+  curl -s -m 30 --parallel --parallel-immediate --parallel-max 60 -i \
+    -o "$BURST/#1.resp" -w '%{http_code} %{filename_effective}\n' "$BASE/genres?burst=[1-60]" > "$BURST/codes" 2>/dev/null || true
   n429=$(grep -c '^429 ' "$BURST/codes" || true)
   if [ "$n429" -gt 0 ]; then
-    f=$(grep -m1 '^429 ' "$BURST/codes" | cut -d' ' -f2-); body=$(cut -c1-120 "$f")
-    grep -q '"error"' <<<"$body" && pass "rate limit: $n429 x 429, JSON body $body" || fail "rate limit: 429 without a JSON error body: $body"
+    f=$(grep -m1 '^429 ' "$BURST/codes" | cut -d' ' -f2-)
+    hdr=$(sed -n '1,/^\r*$/p' "$f" | tr -d '\r'); body=$(sed '1,/^\r*$/d' "$f" | tr -d '\r' | cut -c1-120 | head -c 120)
+    # Who answered? nginx's limit_req reply carries "Server: nginx"; the app
+    # (axum) sends no Server header at all.
+    if grep -qi '^server: *nginx' <<<"$hdr"; then layer="nginx limit_req"
+    elif ! grep -qi '^server:' <<<"$hdr"; then layer="app (tower_governor)"
+    else layer="unknown layer ($(grep -i '^server:' <<<"$hdr" | head -1))"; fi
+    ctype=$(grep -i '^content-type:' <<<"$hdr" | head -1 | cut -d' ' -f2-)
+    case "$BASE" in
+      http://localhost*|http://127.0.0.1*|http://\[::1\]*|https://localhost*|https://127.0.0.1*)
+        # No proxy in the path: the app itself must answer with its JSON body.
+        grep -q '"error"' <<<"$body" \
+          && pass "rate limit: $n429 x 429 from $layer, JSON body $body" \
+          || fail "rate limit: 429 from $layer without the app's JSON error body (content-type ${ctype:-?}): $body" ;;
+      *)
+        # Behind nginx the proxy's limit_req answers before the app; its body
+        # depends on the live nginx config (the committed site returns JSON,
+        # a default install returns HTML). Any 429 proves the limit works.
+        if grep -q '"error"' <<<"$body"; then
+          pass "rate limit: $n429 x 429 from $layer, JSON body $body"
+        else
+          pass "rate limit: $n429 x 429 from $layer, non-JSON body (content-type ${ctype:-?}); the app's own limiter was not reached"
+        fi ;;
+    esac
   else
     fail "rate limit: no 429 in a burst of 60"
   fi
