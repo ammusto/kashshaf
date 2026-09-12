@@ -289,15 +289,32 @@ jobs:
           ls -l dist-api
           cat <<EOF
           deploy plan for $RELEASE_TAG (dry_run=$DRY_RUN):
-            scp dist-api/kashshaf-api-$RELEASE_TAG  ->  $API_SSH_USER@$API_SSH_HOST:/opt/kashshaf/api/bin/kashshaf-api-$RELEASE_TAG
-            scp api/deploy/switch_release.sh api/deploy/smoke.sh  ->  /opt/kashshaf/api/
-            ssh: sudo /opt/kashshaf/api/switch_release.sh $RELEASE_TAG
+            stage/{kashshaf-api-$RELEASE_TAG,switch_release.sh,smoke.sh} (mode 755)
+              -> scp (tar, strip_components 1) -> $API_SSH_USER@$API_SSH_HOST:/opt/kashshaf/api/incoming/
+            ssh: mv incoming/kashshaf-api-$RELEASE_TAG bin/, mv the two scripts to /opt/kashshaf/api/, chmod 755,
+                 sudo /opt/kashshaf/api/switch_release.sh $RELEASE_TAG
                  (repoint /opt/kashshaf/api/bin/current, systemctl restart kashshaf-api,
                   wait for /health.version == ${RELEASE_TAG#v} and warm_cache == complete,
                   smoke test; on failure repoint to the previous binary, restart, exit 1;
                   keep the last three binaries)
             then: scripts/check_release.py --post-deploy --tag $RELEASE_TAG --api $API_URL --no-manifest-version
           EOF
+      # appleboy/scp-action (drone-scp) packs the `source` paths into one tar
+      # exactly as written and extracts it on the server with
+      # `tar -zxf … --strip-components N -C <target>`, so every source gets
+      # the same number of leading components removed. The old list mixed
+      # depths: `dist-api/<bin>` lost its one component, but
+      # `api/deploy/*.sh` kept `deploy/` and landed in incoming/deploy/.
+      # Stage everything in one flat directory first so the depth is uniform,
+      # and make it executable here (download-artifact drops the mode bit;
+      # tar preserves it).
+      - name: Stage the files the server receives
+        run: |
+          set -euo pipefail
+          rm -rf stage && mkdir stage
+          cp "dist-api/kashshaf-api-$RELEASE_TAG" api/deploy/switch_release.sh api/deploy/smoke.sh stage/
+          chmod 755 stage/*
+          ls -l stage
       - name: Copy binary and scripts to the server
         if: env.DRY_RUN != 'true'
         uses: appleboy/scp-action@v0.1.7
@@ -305,9 +322,10 @@ jobs:
           host: ${{ env.API_SSH_HOST }}
           username: ${{ env.API_SSH_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "dist-api/kashshaf-api-${{ env.RELEASE_TAG }},api/deploy/switch_release.sh,api/deploy/smoke.sh"
+          source: "stage/kashshaf-api-${{ env.RELEASE_TAG }},stage/switch_release.sh,stage/smoke.sh"
           target: /opt/kashshaf/api/incoming
           strip_components: 1
+          overwrite: true
       - name: Switch release on the server (health check, smoke test, rollback)
         if: env.DRY_RUN != 'true'
         uses: appleboy/ssh-action@v1
@@ -317,12 +335,25 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             set -euo pipefail
+            TAG="${{ env.RELEASE_TAG }}"
             cd /opt/kashshaf/api
             mkdir -p bin
-            mv -f incoming/kashshaf-api-${{ env.RELEASE_TAG }} bin/kashshaf-api-${{ env.RELEASE_TAG }}
-            mv -f incoming/switch_release.sh incoming/smoke.sh .
-            chmod +x bin/kashshaf-api-${{ env.RELEASE_TAG }} switch_release.sh smoke.sh
-            sudo ./switch_release.sh ${{ env.RELEASE_TAG }}
+            echo "incoming/ holds:"; find incoming -type f | sort
+            # Accept either layout (flat, or nested under a stripped-short
+            # directory) so a future change to the source list cannot
+            # strand the files again. `-print -quit`, not `| head`: pipefail.
+            for f in "kashshaf-api-$TAG" switch_release.sh smoke.sh; do
+              src=$(find incoming -type f -name "$f" -print -quit)
+              [ -n "$src" ] || { echo "$f not found anywhere under incoming/"; exit 1; }
+              case "$f" in kashshaf-api-*) dest="bin/$f" ;; *) dest="./$f" ;; esac
+              mv -f "$src" "$dest"
+            done
+            # The artifact download strips the executable bit; switch_release.sh
+            # requires [ -x "$BIN" ], and the scripts are run directly.
+            chmod 755 "bin/kashshaf-api-$TAG" switch_release.sh smoke.sh
+            rm -rf incoming/* || true
+            ls -l "bin/kashshaf-api-$TAG" switch_release.sh smoke.sh
+            sudo ./switch_release.sh "$TAG"
       - name: Post-deploy checks from outside
         if: env.DRY_RUN != 'true'
         run: |
@@ -330,7 +361,16 @@ jobs:
           bash api/deploy/smoke.sh "$API_URL" "${RELEASE_TAG#v}"
       - name: Dry run — rehearse the smoke test script against nothing
         if: env.DRY_RUN == 'true'
-        run: bash -n api/deploy/switch_release.sh && bash -n api/deploy/smoke.sh && echo "scripts parse; no server contacted"
+        run: |
+          set -euo pipefail
+          bash -n api/deploy/switch_release.sh && bash -n api/deploy/smoke.sh && echo "scripts parse; no server contacted"
+          # What the server would receive: flat and executable.
+          test -x "stage/kashshaf-api-$RELEASE_TAG" && test -x stage/switch_release.sh && test -x stage/smoke.sh
+          tar -czf stage.tgz "stage/kashshaf-api-$RELEASE_TAG" stage/switch_release.sh stage/smoke.sh
+          mkdir -p incoming-rehearsal && tar -xzf stage.tgz --strip-components 1 -C incoming-rehearsal
+          ls -l incoming-rehearsal
+          test -x "incoming-rehearsal/kashshaf-api-$RELEASE_TAG" && test -f incoming-rehearsal/switch_release.sh && test -f incoming-rehearsal/smoke.sh
+          echo "staged files extract flat with strip_components 1"
 
   publish:
     needs: [meta, build-windows, build-linux, build-macos, deploy-api]
