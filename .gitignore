@@ -30,7 +30,6 @@ Thumbs.db
 
 # Rust
 **/*.rs.bk
-Cargo.lock
 
 # TypeScript
 *.tsbuildinfo
@@ -43,6 +42,6 @@ scripts/*
 !scripts/build_app_manifest.py
 !scripts/generate_announcement.py
 !scripts/announcements/
-docs/
+dev-docs/
 # Release marker written by scripts/release.py, read by the workflow
 .release/
