@@ -7,8 +7,8 @@ by `.github/workflows/release.yml` (with `dry_run: false`).
 | File | Purpose |
 |---|---|
 | `kashshaf-api.service` | systemd unit: user `kashshaf`, `ExecStart=/opt/kashshaf/api/bin/current`, environment (below); `ProtectSystem=full` and no `ReadOnlyPaths=` because the data directory is a symlink (see "Corpus layout") |
-| `nginx-api.kashshaf.com.conf` | reverse proxy with TLS (certbot), 10 req/s burst 30 per IP, JSON 429, `/health` never limited |
-| `install.sh` | one-time setup: packages, user, directories, sudoers rule, unit, optional nginx + certbot |
+| `nginx-api.kashshaf.com.conf` | reverse proxy with TLS, 10 req/s burst 30 per IP (`limit_req` inside `location /`; `/health` has none, which is how nginx exempts a location), JSON 429. The `ssl_certificate` lines are live and point at certbot's paths, so the file passes `nginx -t` wherever the certificate exists; the TLS `server` block sits between `begin/end tls server` markers so `install.sh` can leave it out until certbot has run |
+| `install.sh` | one-time setup: packages, user, directories, sudoers rule, unit, optional nginx + certbot. Without a certificate it installs the port-80 site only, runs `certbot certonly --nginx`, then installs the full site; with one it installs the full site directly |
 | `switch_release.sh` | run by the workflow over SSH: repoint `bin/current`, restart, wait for `/health.version` and `warm_cache == complete`, smoke test, roll back on failure, keep three binaries |
 | `smoke.sh` | the post-deploy checks (also run from the runner against the public URL) |
 

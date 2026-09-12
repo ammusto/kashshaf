@@ -54,11 +54,37 @@ fi
 
 if [ "$WITH_NGINX" -eq 1 ]; then
   echo "== nginx site"
-  install -m 644 "$HERE/nginx-api.kashshaf.com.conf" /etc/nginx/sites-available/api.kashshaf.com
-  ln -sfn /etc/nginx/sites-available/api.kashshaf.com /etc/nginx/sites-enabled/api.kashshaf.com
-  nginx -t
-  systemctl reload nginx
-  [ "$WITH_CERTBOT" -eq 1 ] && certbot --nginx -d api.kashshaf.com --non-interactive --agree-tos --redirect -m admin@kashshaf.com || true
+  SITE=/etc/nginx/sites-available/api.kashshaf.com
+  CERT=/etc/letsencrypt/live/api.kashshaf.com/fullchain.pem
+  ln -sfn "$SITE" /etc/nginx/sites-enabled/api.kashshaf.com
+  if [ ! -f "$CERT" ]; then
+    # No certificate yet: the TLS server block would fail nginx -t (missing
+    # ssl_certificate files). Install the site without it, get the
+    # certificate through the port-80 server, then install the full file.
+    echo "   no certificate at $CERT yet: installing the port-80 site only"
+    sed '/^# --- begin tls server/,/^# --- end tls server/d' "$HERE/nginx-api.kashshaf.com.conf" > "$SITE"
+    chmod 644 "$SITE"
+    nginx -t
+    systemctl reload nginx
+    if [ "$WITH_CERTBOT" -eq 1 ]; then
+      # certonly: certbot authenticates through the running nginx and writes
+      # the certificate, but does not edit the site (our file already has
+      # the ssl_* lines). Renewal is certbot's timer, reloading nginx.
+      certbot certonly --nginx -d api.kashshaf.com --non-interactive --agree-tos -m admin@kashshaf.com
+      [ -f /etc/letsencrypt/renewal-hooks/deploy/nginx-reload.sh ] || {
+        install -d /etc/letsencrypt/renewal-hooks/deploy
+        printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/nginx-reload.sh
+        chmod 755 /etc/letsencrypt/renewal-hooks/deploy/nginx-reload.sh
+      }
+    else
+      echo "   run: certbot certonly --nginx -d api.kashshaf.com   then re-run this script to install the TLS server"
+    fi
+  fi
+  if [ -f "$CERT" ]; then
+    install -m 644 "$HERE/nginx-api.kashshaf.com.conf" "$SITE"
+    nginx -t
+    systemctl reload nginx
+  fi
 fi
 
 echo "== done"
