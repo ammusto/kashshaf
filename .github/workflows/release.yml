@@ -156,6 +156,16 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
           security set-keychain-settings -t 7200 -u build.keychain
       - run: npm ci
+      # rust-cache saves the whole target/ tree, and its cleanup only prunes
+      # cargo's own directories, so a previous run's signed bundles come back
+      # with the cache. Left in place, `cp -R` below copies the new app *into*
+      # the old one and codesign fails with "unsealed contents present in the
+      # bundle root". Start from no bundles.
+      - name: Remove bundles left by a restored cache
+        run: |
+          rm -rf target/universal \
+                 target/aarch64-apple-darwin/release/bundle \
+                 target/x86_64-apple-darwin/release/bundle || true
       - name: Build arm64 (no notarization)
         run: npm run tauri build -- --target aarch64-apple-darwin
         env:
@@ -169,17 +179,36 @@ jobs:
           ARM_APP="target/aarch64-apple-darwin/release/bundle/macos/Kashshaf.app"
           INTEL_APP="target/x86_64-apple-darwin/release/bundle/macos/Kashshaf.app"
           UNIVERSAL_APP="target/universal/Kashshaf.app"
+          # Never copy into an existing bundle (see the clean step above).
+          rm -rf "$UNIVERSAL_APP"
           mkdir -p target/universal
           cp -R "$ARM_APP" "$UNIVERSAL_APP"
           lipo -create \
             "$ARM_APP/Contents/MacOS/kashshaf" \
             "$INTEL_APP/Contents/MacOS/kashshaf" \
             -output "$UNIVERSAL_APP/Contents/MacOS/kashshaf"
+          lipo -info "$UNIVERSAL_APP/Contents/MacOS/kashshaf"
+      - name: Show bundle layout before signing
+        run: |
+          echo "--- target/universal/"; ls -la target/universal/ || true
+          echo "--- target/universal/Kashshaf.app/ (must contain only Contents/)"; ls -la target/universal/Kashshaf.app/ || true
+          echo "--- target/universal/Kashshaf.app/Contents/"; ls -la target/universal/Kashshaf.app/Contents/ || true
+          echo "--- *.app under target (maxdepth 6)"; find target -maxdepth 6 -name '*.app' || true
+          echo "--- target/universal-apple-darwin/release/bundle/macos/ (Tauri's own universal output, unused here)"
+          ls -la target/universal-apple-darwin/release/bundle/macos/ || true
+          echo "--- signature the bundler left on the copied arm64 app"; codesign -dv target/universal/Kashshaf.app 2>&1 || true
+      # The bundler (bundle.macOS.signingIdentity in tauri.conf.json) signed
+      # both single-arch apps, but lipo replaced the main executable, so the
+      # universal bundle must be signed again. Sign the bundle itself, not
+      # --deep: Apple deprecated --deep and it rejects bundles with nested
+      # content; nested items keep the bundler's signatures.
       - name: Re-sign universal app
         run: |
-          codesign --force --deep --options runtime \
+          codesign --force --options runtime --timestamp \
             --sign "Developer ID Application: Antonio Musto (ALLW8R237Y)" \
             target/universal/Kashshaf.app
+          codesign --verify --deep --strict --verbose=2 target/universal/Kashshaf.app
+          codesign -dv --verbose=2 target/universal/Kashshaf.app 2>&1 | grep -E 'Identifier|Authority|TeamIdentifier|Timestamp|flags' || true
       - name: Notarize
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -198,6 +227,14 @@ jobs:
         with:
           name: kashshaf-macos
           path: Kashshaf_*_macos.dmg
+      # Runs before rust-cache's post step saves target/, so bundles never
+      # enter the cache in the first place.
+      - name: Drop bundles before the cache is saved
+        if: always()
+        run: |
+          rm -rf target/universal \
+                 target/aarch64-apple-darwin/release/bundle \
+                 target/x86_64-apple-darwin/release/bundle || true
 
   build-api:
     needs: meta
