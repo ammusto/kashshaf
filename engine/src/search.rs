@@ -897,6 +897,17 @@ impl SearchEngine {
         &self.config
     }
 
+    /// The compound index's triple maps, and where they were loaded from
+    /// (`None` on a three-field index).
+    pub fn triple_maps(&self) -> Option<&TripleMaps> {
+        self.triples.as_deref()
+    }
+
+    /// The attached token cache, if [`Self::set_token_cache`] was called.
+    pub fn token_cache(&self) -> Option<&TokenCache> {
+        self.cache.as_deref()
+    }
+
     pub fn kind(&self) -> IndexKind {
         self.kind
     }

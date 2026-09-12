@@ -19,10 +19,12 @@ pub mod positional;
 pub mod search;
 pub mod tokens;
 pub mod triples;
+pub mod triples_image;
 pub mod variants;
 pub mod walk;
 
-pub use triples::TripleMaps;
+pub use triples::{TripleMaps, TripleSource};
+pub use triples_image::{Image as TripleImage, ImageParts as TripleImageParts, SIDECAR_NAME as TRIPLES_SIDECAR_NAME};
 
 pub use blob::{decode_blob, BlobCodec, ENCODING_RANK_VARINT_ZSTD, ENCODING_RAW_U32};
 pub use cache::TokenCache;

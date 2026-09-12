@@ -1431,11 +1431,13 @@ pub fn corpus_exists() -> Result<bool, KashshafError> {
     let index_path = data_dir.join("tantivy_index");
     let db_path = data_dir.join("corpus.db");
 
+    // triples.bin is deliberately not required: it is an optional startup
+    // accelerator and a corpus without it works exactly the same.
     let exists = index_path.exists() && db_path.exists();
     Ok(exists)
 }
 
-/// Delete local corpus data (corpus.db, tantivy_index, manifest.local.json)
+/// Delete local corpus data (corpus.db, triples.bin, tantivy_index, manifest.local.json)
 /// Preserves settings.db (search history, saved searches, user preferences)
 /// Returns the number of items deleted
 #[tauri::command]
@@ -1459,6 +1461,16 @@ pub fn delete_local_data(state: State<'_, ManagedAppState>) -> Result<u32, Kashs
         std::fs::remove_file(&db_path)
             .map_err(|e| KashshafError::Other(format!("Failed to delete corpus.db: {}", e)))?;
         println!("Deleted: {:?}", db_path);
+        deleted_count += 1;
+    }
+
+    // Delete the triples.bin sidecar (optional file: absent on older corpora)
+    let sidecar_path = data_dir.join(kashshaf_engine::TRIPLES_SIDECAR_NAME);
+    if sidecar_path.exists() {
+        std::fs::remove_file(&sidecar_path).map_err(|e| {
+            KashshafError::Other(format!("Failed to delete {}: {}", kashshaf_engine::TRIPLES_SIDECAR_NAME, e))
+        })?;
+        println!("Deleted: {:?}", sidecar_path);
         deleted_count += 1;
     }
 
