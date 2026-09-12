@@ -56,6 +56,25 @@ and build with glibc instead; never on a newer runner image than the server.
 
 Redeploying an existing tag (hotfix, server rebuilt): run the workflow with `only_api: true`.
 
+## `/health` is never rate-limited, at either layer
+
+`switch_release.sh` polls `/health` every 2 s for up to 120 s waiting for the
+new version and then every 5 s for up to 600 s waiting for `warm_cache`, and an
+uptime monitor or an open browser tab polls it too from other addresses. A 429
+on `/health` would read as "not ready" and could end a good deploy with a
+false rollback. So it is exempt twice:
+
+- **nginx**: `location = /health` carries no `limit_req` (the limiter lives in
+  `location /`; nginx has no `limit_req off`).
+- **app**: in `api/src/main.rs` the `tower_governor` layer is applied to a
+  router holding every other route, and `/health` is registered on a separate
+  router merged in afterwards, outside the layer.
+
+Verified with 60 sequential and 60 concurrent requests from one address:
+`/health` answers 200 every time while `/genres` returns 429s after the burst
+of 30. The two limiters' 429 bodies differ (`retry in 0 s` from the app,
+`retry in 1 s` from nginx), which is how `smoke.sh` reports which one answered.
+
 ## Rollback by hand
 
 ```

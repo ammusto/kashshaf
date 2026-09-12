@@ -600,8 +600,13 @@ async fn main() -> anyhow::Result<()> {
 
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
-    let app = Router::new()
-        .route("/health", get(health))
+    // Everything except /health goes through the per-IP rate limiter below.
+    // /health is registered on its own router and merged in after the
+    // limiter is applied: the deploy (switch_release.sh) polls it every
+    // 2-5 s for up to 12 minutes, an uptime monitor polls it too, and a
+    // 429 there would read as "not ready" and trigger a false rollback.
+    // nginx exempts it for the same reason (no limit_req in location = /health).
+    let limited = Router::new()
         .route("/search/status", get(walk_status))
         .route("/search", get(simple_search))
         .route("/search/combined", post(combined_search))
@@ -618,15 +623,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/page/matches/name", post(get_name_match_positions))
         .route("/books", get(get_all_books))
         .route("/authors", get(get_all_authors))
-        .route("/genres", get(get_all_genres))
-        .layer(cors)
-        .with_state(state);
+        .route("/genres", get(get_all_genres));
 
     // Per-client-IP rate limit, enabled by KASHSHAF_RATE_LIMIT ("1" for the
     // defaults 10 req/s, burst 30; or "<per_second>[,<burst>]"). Off when
     // unset so local runs are unaffected; production sits behind a proxy
-    // that limits as well.
-    let app = match rate_limit_from_env() {
+    // that limits as well. Applied to `limited` only, never to /health.
+    let limited = match rate_limit_from_env() {
         Some((per_second, burst)) => {
             let conf = GovernorConfigBuilder::default()
                 .per_millisecond((1000 / per_second.max(1)) as u64)
@@ -648,11 +651,17 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .finish()
                 .expect("rate limit configuration");
-            tracing::info!("rate limit: {} req/s, burst {}, per client IP", per_second, burst);
-            app.layer(GovernorLayer { config: Arc::new(conf) })
+            tracing::info!("rate limit: {} req/s, burst {}, per client IP (/health exempt)", per_second, burst);
+            limited.layer(GovernorLayer { config: Arc::new(conf) })
         }
-        None => app,
+        None => limited,
     };
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .merge(limited)
+        .layer(cors)
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("Listening on http://{}", bind);
