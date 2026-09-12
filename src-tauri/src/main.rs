@@ -13,14 +13,13 @@ use tauri::Emitter;
 pub type ManagedAppState = Arc<RwLock<Option<Arc<AppState>>>>;
 
 fn main() {
-    // Determine data directory using centralized portable path logic
-    let data_dir = get_data_dir();
-    println!("Using data directory: {:?}", data_dir);
-
-    // Try to initialize application state
-    // If data is missing, AppState will be None and app shows download UI
+    // Resolve the data directory once (logged by the resolver). Release builds
+    // prefer an existing writable <exe>/data, else the per-user data dir.
+    // Try to initialize application state; if the directory is unusable or the
+    // data is missing, AppState is None and the app shows the download UI,
+    // whose preflight surfaces the directory error.
     let app_state: ManagedAppState = Arc::new(RwLock::new(
-        match AppState::new(data_dir.clone()) {
+        match get_data_dir().and_then(AppState::new) {
             Ok(state) => {
                 println!("AppState initialized successfully");
                 Some(Arc::new(state))
@@ -86,6 +85,8 @@ fn main() {
             commands::start_corpus_download,
             commands::cancel_corpus_download,
             commands::get_data_directory,
+            commands::get_data_directory_info,
+            commands::open_data_directory,
             commands::archive_old_corpus,
             commands::reload_app_state,
             commands::get_capabilities,

@@ -1297,6 +1297,33 @@ pub fn get_data_directory() -> Result<String, KashshafError> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+/// Where the corpus lives (or will live), whether it is writable, the free
+/// and total space of its volume, and — when `required_bytes` is given —
+/// whether a download of that size fits with the 1 GB margin. The download
+/// and settings modals render this; the resolution logic stays in Rust.
+#[tauri::command]
+pub fn get_data_directory_info(required_bytes: Option<u64>) -> Result<kashshaf_lib::downloader::DataDirInfo, KashshafError> {
+    kashshaf_lib::downloader::data_dir_info(required_bytes).map_err(|e| KashshafError::Other(e.to_string()))
+}
+
+/// Open the data directory in the system file manager.
+#[tauri::command]
+pub fn open_data_directory() -> Result<(), KashshafError> {
+    let dir = get_corpus_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| KashshafError::Other(format!("Cannot create {}: {}", dir.display(), e)))?;
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("explorer").arg(&dir).status();
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg(&dir).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = std::process::Command::new("xdg-open").arg(&dir).status();
+    match status {
+        // explorer.exe returns 1 even when it opens the folder; only a spawn failure is an error.
+        Ok(_) => Ok(()),
+        Err(e) => Err(KashshafError::Other(format!("Could not open {}: {}", dir.display(), e))),
+    }
+}
+
 /// Archive old corpus before update
 #[tauri::command]
 pub fn archive_old_corpus(version: String) -> Result<String, KashshafError> {

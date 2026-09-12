@@ -184,6 +184,20 @@ export interface CorpusStatus {
   error: string | null;
 }
 
+/** Where the corpus lives: `get_data_directory_info` (Tauri). */
+export interface DataDirInfo {
+  path: string;
+  /** portable = <exe>/data; user = %APPDATA%\Kashshaf etc.; dev = debug build search */
+  source: 'portable' | 'user' | 'dev';
+  writable: boolean;
+  free_bytes: number;
+  total_bytes: number;
+  required_bytes: number | null;
+  margin_bytes: number;
+  /** free_bytes >= required_bytes + margin_bytes, when required_bytes was given */
+  enough_space: boolean | null;
+}
+
 export type DownloadState =
   | 'starting'
   | 'downloading'

@@ -179,79 +179,203 @@ pub struct AppUpdateStatus {
     pub download_url: Option<String>,
 }
 
-/// Get the data directory
+/// Where the resolved data directory came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DataDirSource {
+    /// `<exe_dir>/data`: a portable install, or an install that already has a
+    /// corpus next to the executable.
+    Portable,
+    /// `dirs::data_dir()/Kashshaf`: `%APPDATA%\Kashshaf`,
+    /// `~/Library/Application Support/Kashshaf`, `~/.local/share/Kashshaf`.
+    User,
+    /// Debug build: the CWD-relative / project-root search.
+    Dev,
+}
+
+/// Free space the download must leave on the volume, on top of its own size.
+pub const FREE_SPACE_MARGIN: u64 = 1024 * 1024 * 1024;
+
+/// Everything the download and settings modals show about the data directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataDirInfo {
+    pub path: String,
+    pub source: DataDirSource,
+    pub writable: bool,
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+    /// What the caller asked about (a pending download), if anything.
+    pub required_bytes: Option<u64>,
+    pub margin_bytes: u64,
+    /// `free_bytes >= required_bytes + margin_bytes`; `None` when nothing was asked.
+    pub enough_space: Option<bool>,
+}
+
+/// Can this process create a file here? An actual write (create, write,
+/// delete a uniquely named temp file) rather than a permission check:
+/// Windows ACLs and the VirtualStore can report success where a write would
+/// silently redirect or fail.
+pub fn write_probe(dir: &Path) -> bool {
+    let probe = dir.join(format!(".kashshaf-write-probe-{}-{}", std::process::id(), std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+    let ok = std::fs::write(&probe, b"probe").is_ok() && std::fs::read(&probe).map(|b| b == b"probe").unwrap_or(false);
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
+/// Release-build resolution, with its inputs injected so it can be tested:
 ///
-/// - macOS: ~/Library/Application Support/Kashshaf/
-/// - Windows/Linux: data folder next to executable (portable)
-/// - Development: project root or relative dev paths
-pub fn get_data_dir() -> PathBuf {
-    // Dev mode: check for data in common development locations
-    #[cfg(debug_assertions)]
-    {
-        let dev_paths = [
-            PathBuf::from("data"),
-            PathBuf::from("../../data"),       // app/src-tauri -> project root
-            PathBuf::from("../../../data"),    // app/src-tauri/target/debug -> project root
-        ];
-        for path in &dev_paths {
-            if path.join("corpus.db").exists() || path.join("tantivy_index").exists() {
-                return path.canonicalize().unwrap_or_else(|_| path.clone());
+/// 1. `exe_data` (`<exe_dir>/data`) when it already exists and `probe` says it
+///    is writable — portable installs and existing installs keep their
+///    directory (and their `settings.db`).
+/// 2. `user_data` (`dirs::data_dir()/Kashshaf`), created if absent, when
+///    `probe` accepts it.
+/// 3. Otherwise an error naming both candidates and why each was rejected.
+pub fn resolve_with(
+    exe_data: Option<PathBuf>,
+    user_data: Option<PathBuf>,
+    probe: &dyn Fn(&Path) -> bool,
+) -> Result<(PathBuf, DataDirSource)> {
+    let mut why: Vec<String> = Vec::new();
+    match exe_data {
+        Some(p) if p.is_dir() => {
+            if probe(&p) {
+                return Ok((p, DataDirSource::Portable));
+            }
+            why.push(format!("{} exists but is not writable", p.display()));
+        }
+        Some(p) => why.push(format!("{} does not exist (not a portable install)", p.display())),
+        None => why.push("the executable's directory could not be determined".to_string()),
+    }
+    match user_data {
+        Some(u) => {
+            if let Err(e) = std::fs::create_dir_all(&u) {
+                why.push(format!("{} could not be created: {}", u.display(), e));
+            } else if probe(&u) {
+                return Ok((u, DataDirSource::User));
+            } else {
+                why.push(format!("{} is not writable", u.display()));
             }
         }
+        None => why.push("no per-user data directory is known for this platform".to_string()),
+    }
+    Err(anyhow!(
+        "No writable data directory for the corpus: {}. Move Kashshaf to a folder you can write to, \
+         or make one of these directories writable, then restart.",
+        why.join("; ")
+    ))
+}
 
-        // Also check relative to executable in dev mode
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                // Walk up from target/debug to find project root
-                let mut current = exe_dir;
-                for _ in 0..5 {
-                    let data_path = current.join("data");
-                    if data_path.join("corpus.db").exists() || data_path.join("tantivy_index").exists() {
-                        return data_path;
-                    }
-                    if let Some(parent) = current.parent() {
-                        current = parent;
-                    } else {
-                        break;
-                    }
+/// Debug builds: the development search (project `data/` junction, then up
+/// to five levels above the executable, then `<exe_dir>/data`).
+#[cfg(debug_assertions)]
+fn resolve_dev() -> PathBuf {
+    let dev_paths = [
+        PathBuf::from("data"),
+        PathBuf::from("../../data"),       // app/src-tauri -> project root
+        PathBuf::from("../../../data"),    // app/src-tauri/target/debug -> project root
+    ];
+    for path in &dev_paths {
+        if path.join("corpus.db").exists() || path.join("tantivy_index").exists() {
+            return path.canonicalize().unwrap_or_else(|_| path.clone());
+        }
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let mut current = exe_dir;
+            for _ in 0..5 {
+                let data_path = current.join("data");
+                if data_path.join("corpus.db").exists() || data_path.join("tantivy_index").exists() {
+                    return data_path;
+                }
+                match current.parent() {
+                    Some(parent) => current = parent,
+                    None => break,
                 }
             }
-        }
-
-        // Dev mode fallback: next to executable for download testing
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                return exe_dir.join("data");
-            }
+            return exe_dir.join("data");
         }
     }
-
-    // Production macOS: use Application Support
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(data_dir) = dirs::data_dir() {
-            return data_dir.join("Kashshaf");
-        }
-    }
-
-    // Production Windows/Linux: data folder next to executable (portable)
-    #[cfg(not(target_os = "macos"))]
-    {
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                return exe_dir.join("data");
-            }
-        }
-    }
-
-    // Fallback to current working directory
     PathBuf::from("data")
+}
+
+fn resolve_data_dir_uncached() -> Result<(PathBuf, DataDirSource)> {
+    #[cfg(debug_assertions)]
+    {
+        return Ok((resolve_dev(), DataDirSource::Dev));
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let exe_data = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("data")));
+        let user_data = dirs::data_dir().map(|d| d.join("Kashshaf"));
+        resolve_with(exe_data, user_data, &write_probe)
+    }
+}
+
+static RESOLVED_DATA_DIR: std::sync::OnceLock<(PathBuf, DataDirSource)> = std::sync::OnceLock::new();
+
+/// The data directory for this process, resolved once and logged once, so
+/// every caller — startup, `reload_app_state`, the download, `settings.db` —
+/// agrees on the same path. Errors are not cached: a user who fixes a
+/// permission problem and retries gets a fresh attempt.
+pub fn resolve_data_dir() -> Result<(PathBuf, DataDirSource)> {
+    if let Some(r) = RESOLVED_DATA_DIR.get() {
+        return Ok(r.clone());
+    }
+    let resolved = resolve_data_dir_uncached()?;
+    let r = RESOLVED_DATA_DIR.get_or_init(|| resolved);
+    eprintln!("[data-dir] {} ({:?})", r.0.display(), r.1);
+    Ok(r.clone())
+}
+
+/// Get the data directory (corpus files and `settings.db`).
+///
+/// - Release, all platforms: `<exe_dir>/data` if it exists and is writable
+///   (portable / existing installs), else `dirs::data_dir()/Kashshaf`
+///   (`%APPDATA%\Kashshaf`, `~/Library/Application Support/Kashshaf`,
+///   `~/.local/share/Kashshaf`), created if absent; an error if neither works.
+/// - Development: project root or relative dev paths.
+pub fn get_data_dir() -> Result<PathBuf> {
+    resolve_data_dir().map(|(p, _)| p)
+}
+
+/// `free >= required + margin`, the rule the download enforces before its
+/// first byte.
+pub fn has_enough_space(free_bytes: u64, required_bytes: u64, margin_bytes: u64) -> bool {
+    free_bytes >= required_bytes.saturating_add(margin_bytes)
+}
+
+/// Path, writability and free space of the data directory, and whether a
+/// download of `required_bytes` would fit with [`FREE_SPACE_MARGIN`] to spare.
+pub fn data_dir_info(required_bytes: Option<u64>) -> Result<DataDirInfo> {
+    let (path, source) = resolve_data_dir()?;
+    let writable = path.is_dir() && write_probe(&path);
+    // The volume figures come from the deepest existing ancestor.
+    let mut probe_path = path.clone();
+    while !probe_path.exists() {
+        match probe_path.parent() {
+            Some(p) => probe_path = p.to_path_buf(),
+            None => break,
+        }
+    }
+    let free_bytes = fs4::available_space(&probe_path).unwrap_or(0);
+    let total_bytes = fs4::total_space(&probe_path).unwrap_or(0);
+    Ok(DataDirInfo {
+        path: path.to_string_lossy().to_string(),
+        source,
+        writable,
+        free_bytes,
+        total_bytes,
+        required_bytes,
+        margin_bytes: FREE_SPACE_MARGIN,
+        enough_space: required_bytes.map(|r| has_enough_space(free_bytes, r, FREE_SPACE_MARGIN)),
+    })
 }
 
 /// Get the application data directory (for backwards compatibility)
 /// Now returns the portable data directory's parent (or creates structure next to exe)
 pub fn get_app_data_directory() -> Result<PathBuf> {
-    let data_dir = get_data_dir();
+    let data_dir = get_data_dir()?;
     // Return parent of data dir (where settings.db will live alongside data/)
     if let Some(parent) = data_dir.parent() {
         Ok(parent.to_path_buf())
@@ -262,12 +386,12 @@ pub fn get_app_data_directory() -> Result<PathBuf> {
 
 /// Get the corpus data directory (where corpus.db and tantivy_index live)
 pub fn get_corpus_data_directory() -> Result<PathBuf> {
-    Ok(get_data_dir())
+    get_data_dir()
 }
 
 /// Get the settings database path (in data folder alongside corpus.db)
 pub fn get_settings_db_path() -> Result<PathBuf> {
-    Ok(get_data_dir().join("settings.db"))
+    Ok(get_data_dir()?.join("settings.db"))
 }
 
 /// Fetch remote manifest from R2
@@ -591,6 +715,20 @@ pub async fn download_corpus(
     // Calculate what needs downloading
     let (missing_files, total_size) = calculate_missing_files(data_dir, remote, local);
 
+    // Refuse up front rather than failing at 90%: the volume must hold the
+    // missing files plus a margin.
+    let free = fs4::available_space(data_dir).unwrap_or(u64::MAX);
+    if !has_enough_space(free, total_size, FREE_SPACE_MARGIN) {
+        return Err(anyhow!(
+            "Not enough free space in {}: the download needs {:.1} GB plus a {:.0} GB margin, {:.1} GB are free. \
+             Free up space or move Kashshaf to a larger drive, then try again.",
+            data_dir.display(),
+            total_size as f64 / 1e9,
+            FREE_SPACE_MARGIN as f64 / 1e9,
+            free as f64 / 1e9
+        ));
+    }
+
     // Initialize progress
     let mut progress = DownloadProgress {
         current_file: String::new(),
@@ -791,7 +929,7 @@ pub fn check_app_update(current_version: &str, manifest: &AppManifest) -> AppUpd
 
 /// Archive old corpus version before update
 pub fn archive_old_corpus(_app_data_dir: &Path, version: &str) -> Result<PathBuf> {
-    let data_dir = get_data_dir();
+    let data_dir = get_data_dir()?;
     // Archive directory lives next to data directory
     let archive_dir = data_dir.parent()
         .map(|p| p.join("data-archive"))
@@ -829,5 +967,114 @@ mod tests {
         assert!(version_meets_minimum("1.1.0", "1.0.0"));
         assert!(version_meets_minimum("2.0.0", "1.9.9"));
         assert!(!version_meets_minimum("0.9.9", "1.0.0"));
+    }
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("kashshaf-datadir-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn existing_writable_exe_dir_is_preferred_over_the_user_dir() {
+        let base = temp("portable");
+        let exe_data = base.join("data");
+        std::fs::create_dir_all(&exe_data).unwrap();
+        std::fs::write(exe_data.join("settings.db"), b"x").unwrap(); // an existing install
+        let user = base.join("user").join("Kashshaf");
+        let (p, src) = resolve_with(Some(exe_data.clone()), Some(user.clone()), &write_probe).unwrap();
+        assert_eq!(p, exe_data);
+        assert_eq!(src, DataDirSource::Portable);
+        assert!(!user.exists(), "the user dir must not be created when the portable dir wins");
+        assert!(exe_data.join("settings.db").exists(), "the existing settings.db stays where it is");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unwritable_exe_dir_falls_through_to_the_user_dir() {
+        let base = temp("unwritable");
+        let exe_data = base.join("data");
+        std::fs::create_dir_all(&exe_data).unwrap();
+        let user = base.join("AppData").join("Kashshaf");
+        // A probe that fails for the exe dir (Program Files) and succeeds elsewhere.
+        let exe = exe_data.clone();
+        let probe = move |p: &Path| p != exe.as_path() && write_probe(p);
+        let (p, src) = resolve_with(Some(exe_data.clone()), Some(user.clone()), &probe).unwrap();
+        assert_eq!(p, user);
+        assert_eq!(src, DataDirSource::User);
+        assert!(user.is_dir(), "the user dir is created");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn missing_exe_dir_is_a_fresh_install_and_uses_the_user_dir() {
+        let base = temp("fresh");
+        let exe_data = base.join("data"); // does not exist
+        let user = base.join("user").join("Kashshaf");
+        let (p, src) = resolve_with(Some(exe_data), Some(user.clone()), &write_probe).unwrap();
+        assert_eq!((p, src), (user, DataDirSource::User));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn neither_usable_is_a_descriptive_error_not_a_path() {
+        let base = temp("neither");
+        let exe_data = base.join("data");
+        std::fs::create_dir_all(&exe_data).unwrap();
+        let user = base.join("user").join("Kashshaf");
+        let never = |_: &Path| false;
+        let e = resolve_with(Some(exe_data.clone()), Some(user.clone()), &never).unwrap_err().to_string();
+        assert!(e.contains("No writable data directory"), "{}", e);
+        assert!(e.contains(&exe_data.display().to_string()) && e.contains("not writable"), "{}", e);
+        assert!(e.contains(&user.display().to_string()), "{}", e);
+        let e = resolve_with(None, None, &write_probe).unwrap_err().to_string();
+        assert!(e.contains("could not be determined") && e.contains("no per-user"), "{}", e);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_probe_leaves_nothing_behind_and_rejects_a_file() {
+        let base = temp("probe");
+        assert!(write_probe(&base));
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0, "probe file was removed");
+        let file = base.join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(!write_probe(&file), "a path that is a file is not a writable directory");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolved_path_is_stable_across_calls() {
+        // What reload_app_state relies on: the same path every time in one process.
+        let a = get_data_dir().unwrap();
+        let b = get_data_dir().unwrap();
+        let c = get_corpus_data_directory().unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(get_settings_db_path().unwrap(), a.join("settings.db"));
+        let info = data_dir_info(None).unwrap();
+        assert_eq!(PathBuf::from(&info.path), a);
+        assert!(info.enough_space.is_none());
+    }
+
+    #[test]
+    fn free_space_check_rejects_a_download_that_would_not_fit() {
+        let gb = 1024u64 * 1024 * 1024;
+        assert!(has_enough_space(12 * gb, 9 * gb, FREE_SPACE_MARGIN));
+        assert!(!has_enough_space(9 * gb + FREE_SPACE_MARGIN - 1, 9 * gb, FREE_SPACE_MARGIN), "margin counts");
+        assert!(!has_enough_space(5 * gb, 9 * gb, FREE_SPACE_MARGIN));
+        assert!(has_enough_space(u64::MAX, u64::MAX, FREE_SPACE_MARGIN), "saturating add, no overflow");
+        // Against the real volume: asking for more than it has is refused.
+        let info = data_dir_info(Some(u64::MAX / 2)).unwrap();
+        assert_eq!(info.enough_space, Some(false));
+        assert!(info.total_bytes >= info.free_bytes);
+        let small = data_dir_info(Some(0)).unwrap();
+        assert_eq!(small.enough_space, Some(small.free_bytes >= FREE_SPACE_MARGIN));
     }
 }

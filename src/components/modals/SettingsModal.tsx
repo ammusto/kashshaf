@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useOperatingMode } from '../../contexts/OperatingModeContext';
+import type { DataDirInfo } from '../../types';
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -18,6 +27,27 @@ export function SettingsModal({ onClose, isOnlineMode }: SettingsModalProps) {
   const [exactCounts, setExactCounts] = useState<boolean>(capabilities?.exact_counts ?? false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dirInfo, setDirInfo] = useState<DataDirInfo | null>(null);
+  const [dirError, setDirError] = useState<string | null>(null);
+
+  // "Where is my corpus": the same resolution the download uses.
+  useEffect(() => {
+    let cancelled = false;
+    import('../../api/tauri')
+      .then(({ getDataDirectoryInfo }) => getDataDirectoryInfo())
+      .then((info) => { if (!cancelled) setDirInfo(info); })
+      .catch((err) => { if (!cancelled) setDirError(String(err)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleOpenFolder() {
+    try {
+      const { openDataDirectory } = await import('../../api/tauri');
+      await openDataDirectory();
+    } catch (err) {
+      setDirError(String(err));
+    }
+  }
 
   useEffect(() => {
     setExactCounts(capabilities?.exact_counts ?? false);
@@ -49,6 +79,42 @@ export function SettingsModal({ onClose, isOnlineMode }: SettingsModalProps) {
         </div>
 
         <div className="px-6 py-6 space-y-4">
+          <div className="rounded-lg border border-app-border-light p-3 text-sm space-y-1">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-app-text-tertiary text-xs uppercase tracking-wide">Data location</div>
+                <div className="font-mono text-xs text-app-text-primary break-all" title={dirInfo?.path ?? ''}>
+                  {dirInfo ? dirInfo.path : dirError ? '—' : 'Resolving…'}
+                </div>
+                {dirInfo && (
+                  <div className="text-xs text-app-text-tertiary mt-0.5">
+                    {dirInfo.source === 'portable'
+                      ? 'Portable: next to the application'
+                      : dirInfo.source === 'user'
+                        ? 'Per-user data folder'
+                        : 'Development data folder'}
+                    {' · '}
+                    {formatBytes(dirInfo.free_bytes)} free of {formatBytes(dirInfo.total_bytes)}
+                    {!dirInfo.writable && <span className="text-red-700"> · not writable</span>}
+                  </div>
+                )}
+                {dirError && <div className="text-xs text-red-700 mt-0.5">{dirError}</div>}
+              </div>
+              {dirInfo && (
+                <button
+                  type="button"
+                  onClick={handleOpenFolder}
+                  className="flex-shrink-0 px-2 py-1 text-xs rounded border border-app-border-medium text-app-text-secondary hover:text-app-accent hover:border-app-accent transition-colors"
+                >
+                  Open folder
+                </button>
+              )}
+            </div>
+            <div className="text-xs text-app-text-tertiary">
+              Holds the corpus database and index, and settings.db (history, saved searches, collections).
+            </div>
+          </div>
+
           {isOnlineMode ? (
             <p className="text-sm text-app-text-secondary">
               Search settings apply to local data only. Download the corpus to use offline mode and

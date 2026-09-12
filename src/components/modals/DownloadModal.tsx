@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CorpusStatus, DownloadProgress } from '../../types';
-import { startCorpusDownload, cancelCorpusDownload } from '../../api/tauri';
+import type { CorpusStatus, DownloadProgress, DataDirInfo } from '../../types';
+import { startCorpusDownload, cancelCorpusDownload, getDataDirectoryInfo, openDataDirectory } from '../../api/tauri';
 
 // Number of speed samples to keep for rolling average
 const SPEED_SAMPLE_COUNT = 10;
@@ -49,6 +49,9 @@ export function DownloadModal({
   const [startTime, setStartTime] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [skipPromptNextTime, setSkipPromptNextTime] = useState(false);
+  // Destination and free-space preflight, fetched before the first byte.
+  const [dirInfo, setDirInfo] = useState<DataDirInfo | null>(null);
+  const [dirError, setDirError] = useState<string | null>(null);
 
   // Refs for speed calculation (avoid re-renders and dependency issues)
   const speedSamplesRef = useRef<number[]>([]);
@@ -97,6 +100,18 @@ export function DownloadModal({
       unlisten.then(f => f());
     };
   }, [onDownloadComplete]);
+
+  // Where the files go and whether they fit: asked with the manifest's size so
+  // the answer already includes the 1 GB margin.
+  useEffect(() => {
+    let cancelled = false;
+    setDirInfo(null);
+    setDirError(null);
+    getDataDirectoryInfo(status.total_download_size > 0 ? status.total_download_size : undefined)
+      .then((info) => { if (!cancelled) setDirInfo(info); })
+      .catch((err) => { if (!cancelled) setDirError(String(err)); });
+    return () => { cancelled = true; };
+  }, [status.total_download_size]);
 
   // Timer effect
   useEffect(() => {
@@ -200,6 +215,15 @@ export function DownloadModal({
   };
 
   const msgInfo = getMessage();
+  // Blocking preflight problems: no usable directory, not writable, or no room.
+  const preflightError: string | null = dirError
+    ? dirError
+    : dirInfo && !dirInfo.writable
+      ? `${dirInfo.path} is not writable. Move Kashshaf to a folder you can write to, or fix the folder's permissions, then restart.`
+      : dirInfo && dirInfo.enough_space === false
+        ? `Not enough free space: the download needs ${formatBytes(status.total_download_size)} plus a ${formatBytes(dirInfo.margin_bytes)} margin, but only ${formatBytes(dirInfo.free_bytes)} are free on the volume of ${dirInfo.path}. Free up space or move Kashshaf to a larger drive.`
+        : null;
+  const canStartDownload = !msgInfo.requiresAppUpdate && dirInfo !== null && preflightError === null;
   // Allow dismissal whenever an onDismiss is supplied (caller decides), unless
   // the message info itself forbids it (e.g., app-too-old) or a download is running.
   const canDismiss = !!onDismiss && !msgInfo.requiresAppUpdate && !downloading;
@@ -240,6 +264,46 @@ export function DownloadModal({
                 <div className="p-3 rounded-lg bg-yellow-50 text-yellow-700 text-sm">
                   {status.error}
                 </div>
+              )}
+              {/* Destination and free space - known before the first byte */}
+              {!msgInfo.requiresAppUpdate && (
+                <div className="rounded-lg border border-app-border-light bg-app-surface-variant/50 p-3 text-sm space-y-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-app-text-tertiary text-xs uppercase tracking-wide">Destination</div>
+                      <div className="font-mono text-xs text-app-text-primary break-all" title={dirInfo?.path ?? ''}>
+                        {dirInfo ? dirInfo.path : dirError ? '—' : 'Resolving…'}
+                      </div>
+                      {dirInfo && (
+                        <div className="text-xs text-app-text-tertiary mt-0.5">
+                          {dirInfo.source === 'portable'
+                            ? 'Portable: next to the application'
+                            : dirInfo.source === 'user'
+                              ? 'Per-user data folder'
+                              : 'Development data folder'}
+                        </div>
+                      )}
+                    </div>
+                    {dirInfo && (
+                      <button
+                        type="button"
+                        onClick={() => openDataDirectory().catch((e) => setDirError(String(e)))}
+                        className="flex-shrink-0 px-2 py-1 text-xs rounded border border-app-border-medium text-app-text-secondary hover:text-app-accent hover:border-app-accent transition-colors"
+                      >
+                        Open folder
+                      </button>
+                    )}
+                  </div>
+                  {dirInfo && (
+                    <div className="text-xs text-app-text-secondary">
+                      Download {formatBytes(status.total_download_size)} · {formatBytes(dirInfo.free_bytes)} free of {formatBytes(dirInfo.total_bytes)}
+                      {dirInfo.enough_space === true && <span className="text-green-700"> · fits</span>}
+                    </div>
+                  )}
+                </div>
+              )}
+              {preflightError && !msgInfo.requiresAppUpdate && (
+                <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">{preflightError}</div>
               )}
               {/* Verify files checkbox - hide when app update required */}
               {!msgInfo.requiresAppUpdate && (
@@ -367,7 +431,9 @@ export function DownloadModal({
               ) : (
                 <button
                   onClick={handleStartDownload}
-                  className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
+                  disabled={!canStartDownload}
+                  title={preflightError ?? (dirInfo ? undefined : 'Checking the destination…')}
+                  className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Download
                 </button>

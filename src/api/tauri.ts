@@ -15,6 +15,7 @@ import type {
   CorpusStatus,
   EngineCapabilities,
   WalkStatus,
+  DataDirInfo,
 } from '../types';
 import { stripPunctuation } from '../utils/sanitize';
 
@@ -429,6 +430,19 @@ export async function cancelCorpusDownload(): Promise<void> {
 /**
  * Get the application data directory path
  */
+/**
+ * Resolved corpus directory, its writability and the free space on its
+ * volume; pass the pending download size to get `enough_space`.
+ */
+export async function getDataDirectoryInfo(requiredBytes?: number): Promise<DataDirInfo> {
+  return invoke('get_data_directory_info', { requiredBytes: requiredBytes ?? null });
+}
+
+/** Open the corpus directory in the system file manager. */
+export async function openDataDirectory(): Promise<void> {
+  return invoke('open_data_directory');
+}
+
 export async function getDataDirectory(): Promise<string> {
   return invoke('get_data_directory');
 }
