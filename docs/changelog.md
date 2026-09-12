@@ -4,6 +4,10 @@ All notable changes to the Kashshaf desktop app, API server, and data pipeline. 
 
 ---
 
+## [0.5.1] — 2026-09-12
+
+Backend fixes to the server deployment and release process. No changes to the app.
+
 ## [0.5.0] — 2026-09-12
 
 **Faster search.** The search engine was rebuilt. Most searches are now
