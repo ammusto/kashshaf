@@ -343,7 +343,9 @@ jobs:
             # directory) so a future change to the source list cannot
             # strand the files again. `-print -quit`, not `| head`: pipefail.
             for f in "kashshaf-api-$TAG" switch_release.sh smoke.sh; do
-              src=$(find incoming -type f -name "$f" -print -quit)
+              # Prefer the flat path this upload produces over anything a
+              # previous failed run left nested under incoming/.
+              if [ -f "incoming/$f" ]; then src="incoming/$f"; else src=$(find incoming -type f -name "$f" -print -quit); fi
               [ -n "$src" ] || { echo "$f not found anywhere under incoming/"; exit 1; }
               case "$f" in kashshaf-api-*) dest="bin/$f" ;; *) dest="./$f" ;; esac
               mv -f "$src" "$dest"
