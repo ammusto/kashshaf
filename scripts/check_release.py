@@ -20,7 +20,9 @@ Post-deploy (the workflow after deploy-api, or by hand):
         [--corpus-manifest https://cdn.kashshaf.com/corpus_manifest.json]
 
   * GET <api>/health: .version == tag version, status ok
-  * every download URL in the live app_manifest.json answers 200 to HEAD
+  * every download URL of the releases a client can be offered (at or above
+    min_supported_version, plus latest_version) answers 200 to HEAD; older
+    entries are history and are reported in one "skipped" line
   * corpus_manifest.min_app_version <= app_manifest.latest_version
   * app_manifest.latest_version == tag version (unless --no-manifest-version)
 
@@ -184,10 +186,30 @@ def check_post_deploy(tag: str, api: str | None, app_manifest: str | None, corpu
                     fail(f"min_supported_version {app.get('min_supported_version')} > latest {latest}")
             except ValueError as e:
                 fail(str(e))
+            # Only releases a client can be sent to are verified: every entry
+            # at or above min_supported_version, plus latest_version. Older
+            # entries stay in the manifest as history (their GitHub assets
+            # may be gone — v0.3.0's are) and are reported in one line.
+            try:
+                floor = parse_version(app.get("min_supported_version") or "0.0.0")
+            except ValueError:
+                floor = (0, 0, 0)
+            skipped: list[str] = []
             for rel in app.get("releases", []):
+                rv = str(rel.get("version") or "")
+                try:
+                    live = rv == latest or parse_version(rv) >= floor
+                except ValueError:
+                    live = True  # unparseable version: check it rather than hide it
+                if not live:
+                    skipped.append(rv)
+                    continue
                 for platform, url in (rel.get("downloads") or {}).items():
                     good, why = head_ok(url)
-                    (ok if good else fail)(f"{rel.get('version')} {platform}: {why} {url}")
+                    (ok if good else fail)(f"{rv} {platform}: {why} {url}")
+            if skipped:
+                print(f"     skipped {len(skipped)} release{'s' if len(skipped) != 1 else ''} below min_supported_version "
+                      f"{app.get('min_supported_version')} (history only, not offered to any client): {', '.join(skipped)}")
 
     if corpus_manifest:
         try:
