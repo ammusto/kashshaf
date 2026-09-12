@@ -6,7 +6,7 @@ resolver = "2"
 # scripts/release.py bumps it; package.json (which tauri.conf.json reads)
 # must match, and scripts/check_release.py verifies that.
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 
 # The release profile used to live in src-tauri/Cargo.toml; profiles are
