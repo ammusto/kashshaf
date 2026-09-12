@@ -355,7 +355,14 @@ jobs:
         with:
           name: release-notes
       - name: Fetch the live app manifest (public read)
-        run: curl -fsSL "$CDN_URL/app_manifest.json" -o live_app_manifest.json && python3 -m json.tool live_app_manifest.json | head -20
+        run: |
+          curl -sSL -D headers.txt -w '\nHTTP %{http_code}\n' "$CDN_URL/app_manifest.json" -o live_app_manifest.json
+          echo "--- headers ---"
+          cat headers.txt
+          echo "--- body (first 2000 chars) ---"
+          head -c 2000 live_app_manifest.json
+          echo ""
+          python3 -m json.tool live_app_manifest.json | head -20
       - name: List the release's assets
         env:
           GH_TOKEN: ${{ github.token }}
