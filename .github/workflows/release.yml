@@ -260,7 +260,10 @@ jobs:
           set -euo pipefail
           BIN=target/x86_64-unknown-linux-musl/release/kashshaf-api
           file "$BIN"
-          if ldd "$BIN" 2>&1 | grep -q "not a dynamic executable\|statically linked"; then echo "static: ok"; else echo "binary is dynamically linked"; exit 1; fi
+          # Capture first: under pipefail, `ldd | grep -q` can fail with 141
+          # when grep exits before ldd finishes writing.
+          LDD=$(ldd "$BIN" 2>&1 || true)
+          if grep -q "not a dynamic executable\|statically linked" <<<"$LDD"; then echo "static: ok"; else echo "binary is dynamically linked:"; echo "$LDD"; exit 1; fi
           # The server reports CARGO_PKG_VERSION on /health; it must equal the tag.
           grep -q "${RELEASE_TAG#v}" Cargo.toml
           cp "$BIN" "kashshaf-api-${RELEASE_TAG}"
@@ -392,7 +395,7 @@ jobs:
         with:
           name: release-notes
       - name: Fetch the live app manifest (public read)
-        run: curl -fsSL "$CDN_URL/app_manifest.json" -o live_app_manifest.json && python3 -m json.tool live_app_manifest.json | head -20
+        run: curl -fsSL "$CDN_URL/app_manifest.json" -o live_app_manifest.json && python3 -m json.tool live_app_manifest.json
       - name: List the release's assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -416,14 +419,36 @@ jobs:
       - name: Build the new manifest from the actual assets
         run: |
           set -euo pipefail
+          # Precedence: workflow_dispatch input, then the tracked marker
+          # .release/min_supported_version written by scripts/release.py
+          # (part of the tagged commit), else the live value is kept.
           MIN="${{ inputs.min_supported_version }}"
-          if [ -z "$MIN" ] && [ -f .release/min_supported_version ]; then MIN=$(cat .release/min_supported_version); fi
+          SRC="workflow input"
+          if [ -z "$MIN" ] && [ -f .release/min_supported_version ]; then
+            MIN=$(tr -d '\r\n[:space:]' < .release/min_supported_version)
+            SRC=".release/min_supported_version"
+          fi
+          if [ -n "$MIN" ]; then
+            case "$MIN" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "min_supported_version '$MIN' from $SRC is not X.Y.Z"; exit 1;; esac
+            echo "min_supported_version = $MIN (from $SRC)"
+          else
+            echo "min_supported_version: no input and no .release/min_supported_version marker; keeping the live manifest's value"
+          fi
           python3 scripts/build_app_manifest.py \
             --base live_app_manifest.json --tag "$RELEASE_TAG" --assets assets.json \
             --notes-file RELEASE_NOTES.md ${MIN:+--min-supported-version "$MIN"} \
             $( [ "$DRY_RUN" = "true" ] && echo --no-head ) \
             --out app_manifest.json
-          python3 -m json.tool app_manifest.json | head -40
+          # Small file: print it whole. (`| head` under pipefail fails the step
+          # with 32 when head closes the pipe on json.tool.)
+          python3 -m json.tool app_manifest.json
+          python3 - "$MIN" <<'PY'
+          import json, sys
+          want, got = sys.argv[1], json.load(open("app_manifest.json"))["min_supported_version"]
+          if want and got != want:
+              raise SystemExit(f"app_manifest.json min_supported_version is {got}, expected {want}")
+          print(f"min_supported_version in the built manifest: {got}")
+          PY
       - name: Upload to R2 and verify the round trip
         if: env.DRY_RUN != 'true'
         env:

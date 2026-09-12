@@ -198,8 +198,17 @@ def write_marker(min_supported: str | None) -> None:
             if not DRY:
                 marker.unlink()
         return
-    write_text(marker, min_supported + "\n")
-    print(f"  -> the workflow's manifest job sets min_supported_version = {min_supported}")
+    # LF, never CRLF: the workflow reads this on Linux and it is tracked in
+    # git (part of the tagged commit), so a Windows checkout must not
+    # produce a "0.5.0\r" value.
+    if DRY:
+        say(f"would write {marker.relative_to(ROOT)} = {min_supported}")
+    else:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        with open(marker, "w", encoding="utf-8", newline="\n") as f:
+            f.write(min_supported + "\n")
+        print(f"OK Updated {marker.relative_to(ROOT)}")
+    print(f"  -> the workflow's manifest job sets min_supported_version = {min_supported}; commit the marker with the release")
 
 
 # ---------------------------------------------------------------- git

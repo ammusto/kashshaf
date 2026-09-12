@@ -2,3 +2,5 @@
 *.sh text eol=lf
 *.service text eol=lf
 api/deploy/*.conf text eol=lf
+# Release marker read by the workflow on Linux
+.release/* text eol=lf
