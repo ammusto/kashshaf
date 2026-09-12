@@ -501,7 +501,10 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
-          rclone config create r2 s3 provider Cloudflare access_key_id "$R2_ACCESS_KEY_ID" secret_access_key "$R2_SECRET_ACCESS_KEY" endpoint "$R2_ENDPOINT" acl private >/dev/null
+          # no_check_bucket: the R2 token is scoped to object read/write on one
+          # bucket (it must not be able to create buckets), and without this
+          # rclone issues CreateBucket before the first upload -> AccessDenied.
+          rclone config create r2 s3 provider Cloudflare access_key_id "$R2_ACCESS_KEY_ID" secret_access_key "$R2_SECRET_ACCESS_KEY" endpoint "$R2_ENDPOINT" acl private no_check_bucket true >/dev/null
           rclone copyto live_app_manifest.json "r2:$R2_BUCKET/archive/app_manifest.$(date -u +%Y%m%dT%H%M%SZ).json"
           rclone copyto app_manifest.json "r2:$R2_BUCKET/app_manifest.json"
           sleep 5

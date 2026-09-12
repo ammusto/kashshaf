@@ -48,7 +48,9 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
-          rclone config create r2 s3 provider Cloudflare access_key_id "$R2_ACCESS_KEY_ID" secret_access_key "$R2_SECRET_ACCESS_KEY" endpoint "$R2_ENDPOINT" acl private >/dev/null
+          # no_check_bucket: the token may write objects but not create buckets;
+          # without it rclone's CreateBucket probe fails with AccessDenied.
+          rclone config create r2 s3 provider Cloudflare access_key_id "$R2_ACCESS_KEY_ID" secret_access_key "$R2_SECRET_ACCESS_KEY" endpoint "$R2_ENDPOINT" acl private no_check_bucket true >/dev/null
           if [ -f live.json ]; then rclone copyto live.json "r2:$R2_BUCKET/archive/announcements.$(date -u +%Y%m%dT%H%M%SZ).json"; fi
           rclone copyto scripts/announcements/announcements.json "r2:$R2_BUCKET/announcements.json"
           sleep 5
