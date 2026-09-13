@@ -34,6 +34,95 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+/** The three corpus states the dialog renders, plus "the app itself is too old". */
+export type DialogKind = 'no_corpus' | 'update_available' | 'update_required' | 'app_too_old';
+
+export interface DialogCopy {
+  kind: DialogKind;
+  title: string;
+  message: string;
+  /** Release notes from the remote manifest (state 2 only, when present). */
+  notes: string | null;
+  /** Label of the primary (download) button. */
+  primaryLabel: string;
+  /** Show "Use online mode": states 1 and 3 (when the caller offers it). */
+  showOnline: boolean;
+  /** Show "Later": state 2 only. Never for a required update or no corpus. */
+  showLater: boolean;
+  requiresAppUpdate: boolean;
+}
+
+/**
+ * Pick the copy and buttons from `CorpusStatus` alone, so each state is
+ * explicit and testable:
+ *  1. no corpus         (!ready, no local version, files to fetch)
+ *  2. update available  (ready && update_available && !update_required)
+ *  3. update required   (update_required: schema changed, or the app is too
+ *     new for the local corpus / too old for the remote one)
+ * State 2 must never say "must": the local corpus keeps working.
+ */
+export function describeState(
+  status: CorpusStatus,
+  opts: { isAppTooOld: boolean; onlineOffered: boolean },
+): DialogCopy {
+  const size = formatBytes(status.total_download_size);
+  if (opts.isAppTooOld) {
+    return {
+      kind: 'app_too_old',
+      title: 'App update required',
+      message: status.error || 'Your app version is too old for the published corpus. Please update the app to continue.',
+      notes: null,
+      primaryLabel: 'Download update',
+      showOnline: false,
+      showLater: false,
+      requiresAppUpdate: true,
+    };
+  }
+  if (status.update_required) {
+    const local = status.local_version ? `corpus ${status.local_version}` : 'the installed corpus';
+    const remote = status.remote_version ? `Version ${status.remote_version}` : 'The current version';
+    return {
+      kind: 'update_required',
+      title: 'Corpus update required',
+      message:
+        `The corpus format has changed, so this version of the app cannot read ${local}. ` +
+        `${remote} (${size}) uses the new format. Update the corpus to keep working offline, or use online mode until you do.`,
+      notes: status.remote_notes,
+      primaryLabel: 'Update now',
+      showOnline: opts.onlineOffered,
+      showLater: false,
+      requiresAppUpdate: false,
+    };
+  }
+  if (status.update_available && status.ready) {
+    return {
+      kind: 'update_available',
+      title: 'Corpus update available',
+      message:
+        `You have corpus ${status.local_version ?? '(unknown version)'}. ` +
+        `Version ${status.remote_version ?? '(unknown)'} is available (${size}). ` +
+        'Your current corpus keeps working until you update.',
+      notes: status.remote_notes,
+      primaryLabel: 'Update now',
+      showOnline: false,
+      showLater: true,
+      requiresAppUpdate: false,
+    };
+  }
+  return {
+    kind: 'no_corpus',
+    title: 'Download the corpus',
+    message:
+      `Offline use needs the corpus on this computer (${size}). ` +
+      'Download it now, or use online mode and download later from the toolbar.',
+    notes: null,
+    primaryLabel: `Download ${size}`,
+    showOnline: opts.onlineOffered,
+    showLater: false,
+    requiresAppUpdate: false,
+  };
+}
+
 export function DownloadModal({
   status,
   onDownloadComplete,
@@ -165,56 +254,7 @@ export function DownloadModal({
   // Check if this is an app version too old error (requires app update, not corpus download)
   const isAppTooOld = status.update_required && status.error?.includes('too old');
 
-  // Determine message based on status
-  const getMessage = () => {
-    // App version too old - need to update the app itself
-    if (isAppTooOld) {
-      return {
-        title: 'App Update Required',
-        message: status.error || 'Your app version is too old. Please update to continue.',
-        canDismiss: false,
-        showOnline: false,
-        requiresAppUpdate: true,
-      };
-    }
-    // Fresh install - no corpus data
-    if (!status.ready && status.missing_files.length > 0 && !status.update_required) {
-      return {
-        title: 'Corpus Download',
-        message: `For offline use, you must download the corpus (${formatBytes(status.total_download_size)}). Do you want to proceed?`,
-        canDismiss: false,
-        showOnline: showOnlineOption && !!onOnlineUse,
-        requiresAppUpdate: false,
-      };
-    }
-    if (status.update_required) {
-      return {
-        title: 'Corpus Update Required',
-        message: 'The corpus format has changed. Please download the updated corpus data to continue.',
-        canDismiss: false,
-        showOnline: false,
-        requiresAppUpdate: false,
-      };
-    }
-    if (status.update_available) {
-      return {
-        title: 'Corpus Update Available',
-        message: `A new version of the corpus is available (${status.remote_version}). Would you like to update?`,
-        canDismiss: true,
-        showOnline: false,
-        requiresAppUpdate: false,
-      };
-    }
-    return {
-      title: 'Download Corpus',
-      message: 'Download corpus data to continue.',
-      canDismiss: false,
-      showOnline: showOnlineOption && !!onOnlineUse,
-      requiresAppUpdate: false,
-    };
-  };
-
-  const msgInfo = getMessage();
+  const msgInfo = describeState(status, { isAppTooOld: !!isAppTooOld, onlineOffered: showOnlineOption && !!onOnlineUse });
   // Blocking preflight problems: no usable directory, not writable, or no room.
   const preflightError: string | null = dirError
     ? dirError
@@ -224,8 +264,10 @@ export function DownloadModal({
         ? `Not enough free space: the download needs ${formatBytes(status.total_download_size)} plus a ${formatBytes(dirInfo.margin_bytes)} margin, but only ${formatBytes(dirInfo.free_bytes)} are free on the volume of ${dirInfo.path}. Free up space or move Kashshaf to a larger drive.`
         : null;
   const canStartDownload = !msgInfo.requiresAppUpdate && dirInfo !== null && preflightError === null;
-  // Allow dismissal whenever an onDismiss is supplied (caller decides), unless
-  // the message info itself forbids it (e.g., app-too-old) or a download is running.
+  // Dismissal needs both: a state that allows it (state 2 "Later", or a
+  // caller that opened the dialog from online mode and may close it) and an
+  // onDismiss from the caller. A required update or a missing corpus in
+  // offline mode is opened without onDismiss and cannot be closed.
   const canDismiss = !!onDismiss && !msgInfo.requiresAppUpdate && !downloading;
   const filePercent = progress && progress.file_total_bytes > 0
     ? (progress.file_bytes_downloaded / progress.file_total_bytes) * 100
@@ -257,8 +299,14 @@ export function DownloadModal({
         <div className="px-6 py-6">
           {/* Message before download starts */}
           {!downloading && !progress && (
-            <div className="space-y-4">
+            <div className="space-y-4" data-testid={`corpus-dialog-${msgInfo.kind}`}>
               <p className="text-app-text-secondary">{msgInfo.message}</p>
+              {msgInfo.notes && (
+                <div className="rounded-lg border border-app-border-light p-3 text-sm">
+                  <div className="text-app-text-tertiary text-xs uppercase tracking-wide mb-1">What changed</div>
+                  <p className="text-app-text-secondary whitespace-pre-line">{msgInfo.notes}</p>
+                </div>
+              )}
               {/* Show error only if not app-too-old (that message is already in msgInfo.message) */}
               {status.error && !isAppTooOld && (
                 <div className="p-3 rounded-lg bg-yellow-50 text-yellow-700 text-sm">
@@ -408,7 +456,7 @@ export function DownloadModal({
                   onClick={handleOnlineUse}
                   className="px-4 py-2 rounded-lg text-app-text-secondary hover:bg-app-surface-variant transition-colors"
                 >
-                  Online Use
+                  Use online mode
                 </button>
               )}
               {canDismiss && (
@@ -416,7 +464,7 @@ export function DownloadModal({
                   onClick={onDismiss}
                   className="px-4 py-2 rounded-lg text-app-text-secondary hover:bg-app-surface-variant transition-colors"
                 >
-                  {msgInfo.canDismiss ? 'Later' : 'Cancel'}
+                  {msgInfo.showLater ? 'Later' : 'Close'}
                 </button>
               )}
               {msgInfo.requiresAppUpdate ? (
@@ -426,7 +474,7 @@ export function DownloadModal({
                   rel="noopener noreferrer"
                   className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors"
                 >
-                  Download Update
+                  {msgInfo.primaryLabel}
                 </a>
               ) : (
                 <button
@@ -435,7 +483,7 @@ export function DownloadModal({
                   title={preflightError ?? (dirInfo ? undefined : 'Checking the destination…')}
                   className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Download
+                  {msgInfo.primaryLabel}
                 </button>
               )}
             </>

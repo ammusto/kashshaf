@@ -181,6 +181,8 @@ export interface CorpusStatus {
   update_required: boolean;
   missing_files: string[];
   total_download_size: number;
+  /** The remote manifest's `notes` (what changed in remote_version), if any. */
+  remote_notes: string | null;
   error: string | null;
 }
 

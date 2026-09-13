@@ -195,6 +195,7 @@ function App() {
             update_required: false,
             missing_files: [],
             total_download_size: 0,
+            remote_notes: null,
             error: `Failed to check status: ${err}`,
           });
         }
@@ -371,6 +372,7 @@ function App() {
         update_required: false,
         missing_files: [],
         total_download_size: 0,
+        remote_notes: null,
         error: `Failed to check status: ${err}`,
       });
     }

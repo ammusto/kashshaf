@@ -33,6 +33,10 @@ pub struct RemoteManifest {
     /// manifests up to 3.x, whose files sit flat under the CDN root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// What changed in this corpus version, shown by the update dialog.
+    /// Optional; older manifests do not carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
     pub files: Vec<RemoteFile>,
 }
 
@@ -77,7 +81,9 @@ pub struct LocalFile {
 /// Corpus status returned to frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorpusStatus {
-    /// Whether the corpus is ready to use
+    /// The local corpus can be opened by this app version. True while an
+    /// optional update is available (the current corpus stays usable);
+    /// false when files are missing or `update_required`.
     pub ready: bool,
     /// Local corpus version (if available)
     pub local_version: Option<String>,
@@ -91,6 +97,8 @@ pub struct CorpusStatus {
     pub missing_files: Vec<String>,
     /// Total bytes to download
     pub total_download_size: u64,
+    /// The remote manifest's `notes` (what changed), when it has one.
+    pub remote_notes: Option<String>,
     /// Error message if check failed
     pub error: Option<String>,
 }
@@ -492,6 +500,7 @@ pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusSt
                         update_required: false,
                         missing_files: vec![],
                         total_download_size: 0,
+                        remote_notes: None,
                         error: Some(format!("Could not check for updates: {}", e)),
                     };
                 }
@@ -506,6 +515,7 @@ pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusSt
                     update_required: false,
                     missing_files: vec![],
                     total_download_size: 0,
+                    remote_notes: None,
                     error: Some(format!("Could not check for updates: {}", e)),
                 };
             }
@@ -517,6 +527,7 @@ pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusSt
                 update_required: false,
                 missing_files: vec!["Unable to determine (offline)".to_string()],
                 total_download_size: 0,
+                remote_notes: None,
                 error: Some(format!("Could not fetch manifest: {}", e)),
             };
         }
@@ -534,6 +545,7 @@ pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusSt
             update_required: true,
             missing_files: vec![],
             total_download_size: 0,
+            remote_notes: Some(remote.notes.clone()).flatten(),
             error: Some(format!(
                 "App version {} is too old. Please update to at least {}",
                 app_version, remote.min_app_version
@@ -553,15 +565,13 @@ pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusSt
         (false, false)
     };
 
-    // Determine if ready:
-    // - If we have a local manifest and no missing files, ready
-    // - If no local manifest but essential files exist (manual install), ready
-    let ready = if local.is_some() {
-        missing_files.is_empty() && !update_required
-    } else {
-        // No local manifest - check if essential files exist (manual installation)
-        has_essential_files(data_dir)
-    };
+    let ready = corpus_ready(
+        local.as_ref().map(|l| is_local_complete(data_dir, l)),
+        missing_files.is_empty(),
+        update_required,
+        update_available,
+        || has_essential_files(data_dir),
+    );
 
     CorpusStatus {
         ready,
@@ -571,7 +581,32 @@ pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusSt
         update_required,
         missing_files: if ready && local.is_none() { vec![] } else { missing_files },
         total_download_size: if ready && local.is_none() { 0 } else { total_size },
+        remote_notes: remote.notes,
         error: None,
+    }
+}
+
+/// Can the app open the corpus it has? `local_complete` is `Some(complete)`
+/// when a local manifest exists. `missing_empty` says the remote manifest's
+/// file list is fully present (false whenever a newer version is published,
+/// because `calculate_missing_files` diffs against the remote list).
+///
+/// - required update (schema changed, or app too old): never ready;
+/// - nothing to download: ready;
+/// - optional update with a complete local corpus: ready — the current
+///   version stays usable, the update is offered, not imposed;
+/// - no local manifest (manual install): ready when the essential files exist.
+fn corpus_ready(
+    local_complete: Option<bool>,
+    missing_empty: bool,
+    update_required: bool,
+    update_available: bool,
+    has_essential: impl FnOnce() -> bool,
+) -> bool {
+    match local_complete {
+        _ if update_required => false,
+        Some(complete) => missing_empty || (update_available && complete),
+        None => has_essential(),
     }
 }
 
@@ -967,6 +1002,37 @@ mod tests {
         assert!(version_meets_minimum("1.1.0", "1.0.0"));
         assert!(version_meets_minimum("2.0.0", "1.9.9"));
         assert!(!version_meets_minimum("0.9.9", "1.0.0"));
+    }
+
+    /// The three dialog states plus the manual-install case.
+    #[test]
+    fn ready_states() {
+        // no corpus: local manifest absent, essential files absent
+        assert!(!corpus_ready(None, false, false, false, || false));
+        // manual install without a manifest
+        assert!(corpus_ready(None, false, false, false, || true));
+        // up to date
+        assert!(corpus_ready(Some(true), true, false, false, || false));
+        // optional update: the remote diff lists every file, but the local
+        // 4.0.0 is complete and readable -> ready, banner not modal
+        assert!(corpus_ready(Some(true), false, false, true, || false));
+        // optional update but the local corpus is itself incomplete
+        assert!(!corpus_ready(Some(false), false, false, true, || false));
+        // required update (schema change): never ready, whatever else holds
+        assert!(!corpus_ready(Some(true), true, true, false, || true));
+        assert!(!corpus_ready(None, true, true, false, || true));
+        // interrupted first download: manifest present, files missing, same version
+        assert!(!corpus_ready(Some(false), false, false, false, || false));
+    }
+
+    #[test]
+    fn remote_manifest_notes_are_optional() {
+        let without = r#"{"corpus_version":"4.0.0","schema_version":4,"min_app_version":"0.5.0","built_at":"x","files":[]}"#;
+        let m: RemoteManifest = serde_json::from_str(without).unwrap();
+        assert_eq!(m.notes, None);
+        let with = r#"{"corpus_version":"4.1.0","schema_version":4,"min_app_version":"0.5.0","built_at":"x","notes":"23 texts added","files":[]}"#;
+        let m: RemoteManifest = serde_json::from_str(with).unwrap();
+        assert_eq!(m.notes.as_deref(), Some("23 texts added"));
     }
 }
 
