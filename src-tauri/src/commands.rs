@@ -899,13 +899,13 @@ pub struct SavedSearchEntry {
     pub created_at: String,
 }
 
-// Re-export AppUpdateStatus from downloader
-pub use kashshaf_lib::downloader::AppUpdateStatus;
+// Re-export AppUpdateStatus from kashshaf-common
+pub use kashshaf_common::AppUpdateStatus;
 
 /// Helper to get settings DB connection with table initialization
 /// Works independently of AppState (before corpus is downloaded)
 fn get_settings_connection() -> Result<rusqlite::Connection, KashshafError> {
-    use kashshaf_lib::downloader::get_settings_db_path;
+    use kashshaf_common::get_settings_db_path;
 
     let settings_path = get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
 
@@ -1168,7 +1168,7 @@ pub fn set_app_setting(key: String, value: String) -> Result<(), KashshafError> 
 
 #[tauri::command]
 pub async fn check_app_update() -> Result<AppUpdateStatus, KashshafError> {
-    use kashshaf_lib::downloader::{check_app_update as check_update, fetch_app_manifest};
+    use kashshaf_common::{check_app_update as check_update, fetch_app_manifest};
 
     let current_version = env!("CARGO_PKG_VERSION");
 
@@ -1191,7 +1191,7 @@ pub async fn check_app_update() -> Result<AppUpdateStatus, KashshafError> {
 
 // ============ Corpus Download Commands ============
 
-use kashshaf_lib::downloader::{
+use kashshaf_common::{
     get_app_data_directory, get_corpus_data_directory, CorpusStatus, DownloadProgress,
 };
 use std::sync::Mutex;
@@ -1302,8 +1302,8 @@ pub fn get_data_directory() -> Result<String, KashshafError> {
 /// whether a download of that size fits with the 1 GB margin. The download
 /// and settings modals render this; the resolution logic stays in Rust.
 #[tauri::command]
-pub fn get_data_directory_info(required_bytes: Option<u64>) -> Result<kashshaf_lib::downloader::DataDirInfo, KashshafError> {
-    kashshaf_lib::downloader::data_dir_info(required_bytes).map_err(|e| KashshafError::Other(e.to_string()))
+pub fn get_data_directory_info(required_bytes: Option<u64>) -> Result<kashshaf_common::DataDirInfo, KashshafError> {
+    kashshaf_common::data_dir_info(required_bytes).map_err(|e| KashshafError::Other(e.to_string()))
 }
 
 /// Open the data directory in the system file manager.
@@ -1381,72 +1381,36 @@ pub fn set_exact_counts(state: State<'_, ManagedAppState>, enabled: bool) -> Res
 
 // ============ User Settings Commands ============
 
+/// Mode, download prompt and announcement state: readable before AppState
+/// exists, so these go straight to `settings.db` rather than through it.
+const USER_SETTINGS_TABLE: &str = "user_settings";
+
+/// `settings.db` with `user_settings` present. On the first run the data
+/// directory itself may be missing; `open_settings_db` creates it.
+fn open_user_settings() -> Result<rusqlite::Connection, KashshafError> {
+    let path = kashshaf_common::get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
+    let conn = kashshaf_common::open_settings_db(&path).map_err(|e| KashshafError::Database(e.to_string()))?;
+    kashshaf_common::ensure_kv_table(&conn, USER_SETTINGS_TABLE)
+        .map_err(|e| KashshafError::Database(e.to_string()))?;
+    Ok(conn)
+}
+
 /// Get a user setting by key
 /// Can be called before AppState is initialized (uses settings.db directly)
 #[tauri::command]
 pub fn get_user_setting(key: String) -> Result<Option<String>, KashshafError> {
-    use kashshaf_lib::downloader::get_settings_db_path;
-
-    let settings_path = get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
-
-    // Ensure parent directory exists (may not exist on first startup)
-    if let Some(parent) = settings_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| KashshafError::Other(e.to_string()))?;
-    }
-
-    // Initialize settings DB if not exists (same as in state.rs)
-    let conn = rusqlite::Connection::open(&settings_path)
-        .map_err(|e| KashshafError::Database(e.to_string()))?;
-
-    // Ensure user_settings table exists
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS user_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-        [],
-    )
-    .map_err(|e| KashshafError::Database(e.to_string()))?;
-
-    let result: Option<String> = conn
-        .query_row(
-            "SELECT value FROM user_settings WHERE key = ?1",
-            [&key],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| KashshafError::Database(e.to_string()))?;
-
-    Ok(result)
+    let conn = open_user_settings()?;
+    kashshaf_common::get_kv(&conn, USER_SETTINGS_TABLE, &key)
+        .map_err(|e| KashshafError::Database(e.to_string()))
 }
 
 /// Set a user setting
 /// Can be called before AppState is initialized (uses settings.db directly)
 #[tauri::command]
 pub fn set_user_setting(key: String, value: String) -> Result<(), KashshafError> {
-    use kashshaf_lib::downloader::get_settings_db_path;
-
-    let settings_path = get_settings_db_path().map_err(|e| KashshafError::Other(e.to_string()))?;
-
-    // Ensure parent directory exists (may not exist on first startup)
-    if let Some(parent) = settings_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| KashshafError::Other(e.to_string()))?;
-    }
-
-    let conn = rusqlite::Connection::open(&settings_path)
-        .map_err(|e| KashshafError::Database(e.to_string()))?;
-
-    // Ensure user_settings table exists
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS user_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-        [],
-    )
-    .map_err(|e| KashshafError::Database(e.to_string()))?;
-
-    conn.execute(
-        "INSERT OR REPLACE INTO user_settings (key, value) VALUES (?1, ?2)",
-        rusqlite::params![key, value],
-    )
-    .map_err(|e| KashshafError::Database(e.to_string()))?;
-
-    Ok(())
+    let conn = open_user_settings()?;
+    kashshaf_common::set_kv(&conn, USER_SETTINGS_TABLE, &key, &value)
+        .map_err(|e| KashshafError::Database(e.to_string()))
 }
 
 /// Check if corpus files exist (tantivy_index + corpus.db)

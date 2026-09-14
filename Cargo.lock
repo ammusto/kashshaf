@@ -2182,6 +2182,7 @@ dependencies = [
  "fs4",
  "futures-util",
  "hex",
+ "kashshaf-common",
  "kashshaf-engine",
  "regex-lite",
  "reqwest 0.11.27",
@@ -2214,6 +2215,24 @@ dependencies = [
  "tower_governor",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "kashshaf-common"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs 5.0.1",
+ "fs4",
+ "futures-util",
+ "hex",
+ "reqwest 0.11.27",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]

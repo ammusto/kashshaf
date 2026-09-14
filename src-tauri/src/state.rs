@@ -1,6 +1,6 @@
 //! Application state management
 
-use crate::downloader::get_settings_db_path;
+use kashshaf_common::get_settings_db_path;
 use anyhow::{anyhow, Result};
 use kashshaf_engine::{
     check_corpus_schema_supported, ensure_corpus_indexes, verify_corpus_versions_match, EngineConfig,
@@ -32,7 +32,7 @@ impl AppState {
         let db_path = data_dir.join("corpus.db");
         let metadata_db_path = data_dir.join("metadata.db");
 
-        // settings.db lives next to the corpus (see downloader::get_settings_db_path);
+        // settings.db lives next to the corpus (kashshaf_common::get_settings_db_path);
         // delete_local_data spares it.
         let settings_db_path = get_settings_db_path().unwrap_or_else(|_| data_dir.join("settings.db"));
 

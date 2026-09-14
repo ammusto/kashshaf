@@ -26,6 +26,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Search engine shared with the API server (Tantivy 0.25 + zstd docstore, blob codec, token cache)
 kashshaf-engine = { path = "../engine" }
+# Data directory, corpus manifests + download, settings-DB helpers; shared with
+# Kashshaf Lab (dev-docs/KASHSHAF_LAB_SPEC.md §2.2).
+kashshaf-common = { path = "../common" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 anyhow = "1.0"
 thiserror = "1.0"
