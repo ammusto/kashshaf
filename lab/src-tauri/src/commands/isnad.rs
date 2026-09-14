@@ -1191,8 +1191,7 @@ mod tests {
             source: Arc::new(Fake(vec![page.clone()])),
             loaded: Arc::new(std::sync::Mutex::new(None)),
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            store: Some(Arc::clone(&store)),
-        };
+            store: Some(Arc::clone(&store)), quran: Arc::new(std::sync::OnceLock::new()) };
         let conn = store.connect().unwrap();
         (h, conn, page)
     }

@@ -50,3 +50,8 @@ hex = "0.4"
 [[bin]]
 name = "lab-bench"
 path = "src/bin/lab-bench.rs"
+
+# The evaluation hooks of spec §4.3 / §4.4: reuse-eval, reuse-find, quran-scan.
+[[bin]]
+name = "lab-cli"
+path = "src/bin/lab-cli.rs"

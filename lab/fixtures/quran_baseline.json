@@ -1,0 +1,861 @@
+{
+ "_comment": "Quran_Detector (SElBeltagy/Quran_Detector, matchAll defaults: findErr, findMissing, allowedErrPers 0.25, minMatch 3) on 20 sample pages. Dev-only baseline for tests/quran_baseline.rs; regenerate with lab/scripts/quran_baseline.py.",
+ "detector": "Quran_Detector",
+ "pages": [
+  {
+   "book_id": 5563,
+   "part_index": 0,
+   "page_id": 5,
+   "tokens": 204,
+   "matches": [
+    {
+     "sura_name": "آل عمران",
+     "aya_start": 102,
+     "aya_end": 102,
+     "verses": [
+      "يا ايها الذين امنوا اتقوا الله حق تقاته ولا تموتن الا وانتم مسلمون"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "النساء",
+     "aya_start": 1,
+     "aya_end": 1,
+     "verses": [
+      "يا ايها الناس اتقوا ربكم الذي خلقكم من نفس واحده وخلق منها زوجها وبث منهما رجالا كثيرا ونساء واتقوا الله الذي تساءلون به والارحام ان الله كان عليكم رقيبا"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الأحزاب",
+     "aya_start": 70,
+     "aya_end": 71,
+     "verses": [
+      "يا ايها الذين امنوا اتقوا الله وقولوا قولا سديدا",
+      "يصلح لكم اعمالكم ويغفر لكم ذنوبكم ومن يطع الله ورسوله فقد فاز فوزا عظيما"
+     ],
+     "errors": [
+      [],
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 5563,
+   "part_index": 3,
+   "page_id": 2317,
+   "tokens": 151,
+   "matches": [
+    {
+     "sura_name": "الإنشقاق",
+     "aya_start": 19,
+     "aya_end": 19,
+     "verses": [
+      "لتركبن طبقا عن طبق"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 5563,
+   "part_index": 6,
+   "page_id": 4057,
+   "tokens": 176,
+   "matches": []
+  },
+  {
+   "book_id": 5563,
+   "part_index": 7,
+   "page_id": 4787,
+   "tokens": 173,
+   "matches": [
+    {
+     "sura_name": "الفجر",
+     "aya_start": 27,
+     "aya_end": 27,
+     "verses": [
+      "يا ايتها النفس المطمئنه"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الفجر",
+     "aya_start": 6,
+     "aya_end": 7,
+     "verses": [
+      "الم تر كيف فعل ربك بعاد",
+      "ارم ذات العماد"
+     ],
+     "errors": [
+      [],
+      []
+     ]
+    },
+    {
+     "sura_name": "غافر",
+     "aya_start": 44,
+     "aya_end": 44,
+     "verses": [
+      "الي الله واطمان الله"
+     ],
+     "errors": [
+      [
+       [
+        "واطمان",
+        "ان",
+        38
+       ]
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 4382,
+   "part_index": 0,
+   "page_id": 1,
+   "tokens": 289,
+   "matches": [
+    {
+     "sura_name": "النمل",
+     "aya_start": 19,
+     "aya_end": 19,
+     "verses": [
+      "وقال رب اوزعني ان اشكر نعمتك التي انعمت علي وعلي والدي وان اعمل صالحا ترضاه وادخلني برحمتك في عبادك الصالحين"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الأنعام",
+     "aya_start": 1,
+     "aya_end": 1,
+     "verses": [
+      "الحمد لله الذي خلق"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الأنعام",
+     "aya_start": 153,
+     "aya_end": 153,
+     "verses": [
+      "مستقيما فاتبعوه ولا تتبعوا السبل"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الأنعام",
+     "aya_start": 12,
+     "aya_end": 12,
+     "verses": [
+      "كتب علي نفسه الرحمه"
+     ],
+     "errors": [
+      [
+       [
+        "وكتب",
+        "كتب",
+        167
+       ]
+      ]
+     ]
+    },
+    {
+     "sura_name": "النساء",
+     "aya_start": 165,
+     "aya_end": 165,
+     "verses": [
+      "مبشرين ومنذرين لئلا يكون للناس علي الله حجه بعد الرسل"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الإسراء",
+     "aya_start": 20,
+     "aya_end": 20,
+     "verses": [
+      "وما كان عطاء ربك محظورا"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الأنبياء",
+     "aya_start": 23,
+     "aya_end": 23,
+     "verses": [
+      "يسال عما يفعل وهم يسالون"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "آل عمران",
+     "aya_start": 74,
+     "aya_end": 74,
+     "verses": [
+      "يختص برحمته من يشاء"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "البقرة",
+     "aya_start": 105,
+     "aya_end": 105,
+     "verses": [
+      "يختص برحمته من يشاء"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الحديد",
+     "aya_start": 29,
+     "aya_end": 29,
+     "verses": [
+      "وان الفضل بيد الله يؤتيه من يشاء والله ذو الفضل العظيم"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 4382,
+   "part_index": 0,
+   "page_id": 270,
+   "tokens": 399,
+   "matches": [
+    {
+     "sura_name": "النساء",
+     "aya_start": 11,
+     "aya_end": 11,
+     "verses": [
+      "فان كان له اخوه فلامه السدس"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "النساء",
+     "aya_start": 12,
+     "aya_end": 12,
+     "verses": [
+      "وان كان رجل يورث كلاله او امراه وله اخ او اخت فلكل واحد منهما السدس فان كانوا اكثر من ذلك فهم شركاء في الثلث"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "النساء",
+     "aya_start": 12,
+     "aya_end": 12,
+     "verses": [
+      "فهم شركاء في الثلث"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "النساء",
+     "aya_start": 12,
+     "aya_end": 12,
+     "verses": [
+      "وله اخ او اخت"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "النساء",
+     "aya_start": 176,
+     "aya_end": 176,
+     "verses": [
+      "وان كانوا اخوه رجالا ونساء فللذكر مثل حظ الانثيين"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 4382,
+   "part_index": 2,
+   "page_id": 679,
+   "tokens": 391,
+   "matches": [
+    {
+     "sura_name": "الحجرات",
+     "aya_start": 14,
+     "aya_end": 14,
+     "verses": [
+      "قالت الاعراب امنا قل لم تؤمنوا ولكن قولوا اسلمنا"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "المنافقون",
+     "aya_start": 2,
+     "aya_end": 2,
+     "verses": [
+      "اتخذوا ايمانهم جنه"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "المجادلة",
+     "aya_start": 16,
+     "aya_end": 16,
+     "verses": [
+      "اتخذوا ايمانهم جنه"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "التوبة",
+     "aya_start": 95,
+     "aya_end": 95,
+     "verses": [
+      "لكم اذا انقلبتم اليهم"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "النساء",
+     "aya_start": 145,
+     "aya_end": 145,
+     "verses": [
+      "في الدرك الاسفل من النار"
+     ],
+     "errors": [
+      [
+       [
+        "النار؛",
+        "النار",
+        107
+       ]
+      ]
+     ]
+    },
+    {
+     "sura_name": "النساء",
+     "aya_start": 52,
+     "aya_end": 52,
+     "verses": [
+      "اولئك الذين نهاني الله"
+     ],
+     "errors": [
+      [
+       [
+        "نهاني",
+        "لعنهم",
+        227
+       ]
+      ]
+     ]
+    },
+    {
+     "sura_name": "محمد",
+     "aya_start": 23,
+     "aya_end": 23,
+     "verses": [
+      "اولئك الذين نهاني الله"
+     ],
+     "errors": [
+      [
+       [
+        "نهاني",
+        "لعنهم",
+        227
+       ]
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 6659,
+   "part_index": 0,
+   "page_id": 1,
+   "tokens": 279,
+   "matches": [
+    {
+     "sura_name": "الإسراء",
+     "aya_start": 81,
+     "aya_end": 81,
+     "verses": [
+      "وقل جاء الحق وزهق الباطل ان الباطل كان زهوقا"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الأنعام",
+     "aya_start": 159,
+     "aya_end": 159,
+     "verses": [
+      "ان الذين فرقوا دينهم وكانوا شيعا لست منهم في شيء"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الشورى",
+     "aya_start": 13,
+     "aya_end": 13,
+     "verses": [
+      "اقيموا الدين ولا تتفرقوا"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 6659,
+   "part_index": 0,
+   "page_id": 337,
+   "tokens": 284,
+   "matches": [
+    {
+     "sura_name": "الأنعام",
+     "aya_start": 153,
+     "aya_end": 153,
+     "verses": [
+      "وان هذا صراطي مستقيما فاتبعوه ولا تتبعوا السبل"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 4697,
+   "part_index": 0,
+   "page_id": 1,
+   "tokens": 87,
+   "matches": [
+    {
+     "sura_name": "التحريم",
+     "aya_start": 6,
+     "aya_end": 6,
+     "verses": [
+      "يا ايها الذين امنوا قوا انفسكم واهليكم نارا وقودها الناس والحجاره عليها ملائكه غلاظ شداد لا يعصون الله ما امرهم ويفعلون ما يؤمرون"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "البقرة",
+     "aya_start": 24,
+     "aya_end": 24,
+     "verses": [
+      "فاتقوا النار التي وقودها الناس والحجاره اعدت للكافرين"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "آل عمران",
+     "aya_start": 131,
+     "aya_end": 131,
+     "verses": [
+      "واتقوا النار التي اعدت للكافرين"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الليل",
+     "aya_start": 14,
+     "aya_end": 14,
+     "verses": [
+      "فانذرتكم نارا تلظي"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الزمر",
+     "aya_start": 16,
+     "aya_end": 16,
+     "verses": [
+      "لهم من فوقهم ظلل من النار ومن تحتهم ظلل ذلك يخوف الله به عباده يا عباد فاتقون"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "المدثر",
+     "aya_start": 31,
+     "aya_end": 32,
+     "verses": [
+      "وما هي الا ذكري للبشر",
+      "كلا والقمر"
+     ],
+     "errors": [
+      [],
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 4697,
+   "part_index": 0,
+   "page_id": 135,
+   "tokens": 173,
+   "matches": [
+    {
+     "sura_name": "الغاشية",
+     "aya_start": 6,
+     "aya_end": 7,
+     "verses": [
+      "طعام الا من ضريع",
+      "لا يسمن ولا يغني من جوع"
+     ],
+     "errors": [
+      [
+       [
+        "بطعام",
+        "طعام",
+        14
+       ],
+       [
+        "من",
+        "الا من",
+        15
+       ]
+      ],
+      []
+     ]
+    },
+    {
+     "sura_name": "الحاقة",
+     "aya_start": 35,
+     "aya_end": 37,
+     "verses": [
+      "فليس له اليوم هاهنا حميم",
+      "ولا طعام الا من غسلين",
+      "لا ياكله الا الخاطئون"
+     ],
+     "errors": [
+      [],
+      [],
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 6038,
+   "part_index": 0,
+   "page_id": 5,
+   "tokens": 147,
+   "matches": [
+    {
+     "sura_name": "الفاتحة",
+     "aya_start": 1,
+     "aya_end": 2,
+     "verses": [
+      "بسم الله الرحمن الرحيم",
+      "الحمد لله رب العالمين"
+     ],
+     "errors": [
+      [],
+      []
+     ]
+    },
+    {
+     "sura_name": "الفرقان",
+     "aya_start": 77,
+     "aya_end": 77,
+     "verses": [
+      "قل ما يعبا بكم ربي"
+     ],
+     "errors": [
+      [
+       [
+        "يعبؤا",
+        "يعبا",
+        22
+       ]
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 6038,
+   "part_index": 2,
+   "page_id": 1362,
+   "tokens": 199,
+   "matches": []
+  },
+  {
+   "book_id": 6038,
+   "part_index": 4,
+   "page_id": 2554,
+   "tokens": 188,
+   "matches": [
+    {
+     "sura_name": "النساء",
+     "aya_start": 129,
+     "aya_end": 129,
+     "verses": [
+      "ولن تستطيعوا ان تعدلوا بين النساء ولو حرصتم فلا تميلوا كل الميل"
+     ],
+     "errors": [
+      [
+       [
+        "«ولن",
+        "ولن",
+        103
+       ],
+       [
+        "الميل»",
+        "الميل",
+        114
+       ]
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 2553,
+   "part_index": 1,
+   "page_id": 108,
+   "tokens": 151,
+   "matches": [
+    {
+     "sura_name": "البقرة",
+     "aya_start": 238,
+     "aya_end": 238,
+     "verses": [
+      "حافظوا علي الصلوات والصلاه الوسطي"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 2553,
+   "part_index": 3,
+   "page_id": 891,
+   "tokens": 81,
+   "matches": [
+    {
+     "sura_name": "الأنعام",
+     "aya_start": 63,
+     "aya_end": 63,
+     "verses": [
+      "من ينجيكم من ظلمات البر والبحر"
+     ],
+     "errors": [
+      [
+       [
+        "ظلمت",
+        "ظلمات",
+        49
+       ]
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 2615,
+   "part_index": 0,
+   "page_id": 2,
+   "tokens": 387,
+   "matches": [
+    {
+     "sura_name": "ق",
+     "aya_start": 6,
+     "aya_end": 6,
+     "verses": [
+      "افلم ينظروا الي السماء فوقهم كيف بنيناها وزيناها وما لها من فروج"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الطلاق",
+     "aya_start": 12,
+     "aya_end": 12,
+     "verses": [
+      "الله الذي خلق سبع سماوات"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 2615,
+   "part_index": 0,
+   "page_id": 248,
+   "tokens": 395,
+   "matches": [
+    {
+     "sura_name": "النحل",
+     "aya_start": 96,
+     "aya_end": 96,
+     "verses": [
+      "ما عندكم ينفد وما عند الله باق"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الحجرات",
+     "aya_start": 7,
+     "aya_end": 7,
+     "verses": [
+      "ان فيكم رسول الله"
+     ],
+     "errors": [
+      [
+       [
+        "رسول",
+        "فيكم رسول",
+        116
+       ]
+      ]
+     ]
+    },
+    {
+     "sura_name": "النازعات",
+     "aya_start": 40,
+     "aya_end": 41,
+     "verses": [
+      "واما من خاف مقام ربه ونهي النفس عن الهوي",
+      "فان الجنه هي الماوي"
+     ],
+     "errors": [
+      [],
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 527,
+   "part_index": 0,
+   "page_id": 28,
+   "tokens": 169,
+   "matches": [
+    {
+     "sura_name": "الحشر",
+     "aya_start": 19,
+     "aya_end": 19,
+     "verses": [
+      "ولا تكونوا كالذين نسوا الله"
+     ],
+     "errors": [
+      []
+     ]
+    },
+    {
+     "sura_name": "الأنبياء",
+     "aya_start": 90,
+     "aya_end": 90,
+     "verses": [
+      "كانوا يسارعون في الخيرات ويدعوننا رغبا ورهبا وكانوا لنا خاشعين"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  },
+  {
+   "book_id": 527,
+   "part_index": 0,
+   "page_id": 169,
+   "tokens": 162,
+   "matches": [
+    {
+     "sura_name": "آل عمران",
+     "aya_start": 6,
+     "aya_end": 6,
+     "verses": [
+      "يصوركم في الارحام كيف يشاء لا اله"
+     ],
+     "errors": [
+      [
+       [
+        "فيصوركم",
+        "يصوركم",
+        115
+       ]
+      ]
+     ]
+    },
+    {
+     "sura_name": "الشورى",
+     "aya_start": 12,
+     "aya_end": 12,
+     "verses": [
+      "الرزق لمن يشاء ويقدر انه بكل شيء عليم"
+     ],
+     "errors": [
+      []
+     ]
+    }
+   ]
+  }
+ ]
+}
