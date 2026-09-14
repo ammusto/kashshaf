@@ -96,37 +96,62 @@ pub fn resolve_with(
     ))
 }
 
-/// Debug builds: the development search (project `data/` junction, then up
-/// to five levels above the executable, then `<exe_dir>/data`).
+/// Debug builds: the development search — the project `data/` junction,
+/// then up to five levels above the executable, then (Lab spec 1.4, fix 5)
+/// the installed corpus in the per-user data directory
+/// (`dirs::data_dir()/Kashshaf`), then `<exe_dir>/data` as the place a
+/// download would go. Every path tried is logged with the result, so a
+/// dev build that misses an installed corpus says where it looked.
 #[cfg(debug_assertions)]
 fn resolve_dev() -> PathBuf {
+    let has_corpus = |p: &Path| p.join("corpus.db").exists() || p.join("tantivy_index").exists();
+    let mut tried: Vec<String> = Vec::new();
+    let mut check = |label: &str, p: &Path| -> bool {
+        let hit = has_corpus(p);
+        tried.push(format!("{} {} → {}", label, p.display(), if hit { "corpus found" } else { "no corpus" }));
+        hit
+    };
     let dev_paths = [
         PathBuf::from("data"),
         PathBuf::from("../../data"),       // app/src-tauri -> project root
         PathBuf::from("../../../data"),    // app/src-tauri/target/debug -> project root
     ];
     for path in &dev_paths {
-        if path.join("corpus.db").exists() || path.join("tantivy_index").exists() {
+        if check("cwd-relative", path) {
+            log_tried(&tried);
             return path.canonicalize().unwrap_or_else(|_| path.clone());
         }
     }
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let mut current = exe_dir;
-            for _ in 0..5 {
-                let data_path = current.join("data");
-                if data_path.join("corpus.db").exists() || data_path.join("tantivy_index").exists() {
-                    return data_path;
-                }
-                match current.parent() {
-                    Some(parent) => current = parent,
-                    None => break,
-                }
+    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf));
+    if let Some(exe_dir) = &exe_dir {
+        let mut current = exe_dir.as_path();
+        for _ in 0..5 {
+            let data_path = current.join("data");
+            if check("exe-relative", &data_path) {
+                log_tried(&tried);
+                return data_path;
             }
-            return exe_dir.join("data");
+            match current.parent() {
+                Some(parent) => current = parent,
+                None => break,
+            }
         }
     }
-    PathBuf::from("data")
+    if let Some(user) = dirs::data_dir().map(|d| d.join("Kashshaf")) {
+        if check("per-user data dir", &user) {
+            log_tried(&tried);
+            return user;
+        }
+    }
+    log_tried(&tried);
+    exe_dir.map(|d| d.join("data")).unwrap_or_else(|| PathBuf::from("data"))
+}
+
+#[cfg(debug_assertions)]
+fn log_tried(tried: &[String]) {
+    for t in tried {
+        eprintln!("[data-dir] debug search: {}", t);
+    }
 }
 
 fn resolve_data_dir_uncached() -> Result<(PathBuf, DataDirSource)> {
