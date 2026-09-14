@@ -8,6 +8,8 @@ import { StatsPanel, type HitRef } from './components/stats/StatsPanel';
 import { IsnadWorkbench } from './components/isnad/IsnadWorkbench';
 import { ReusePanel } from './components/reuse/ReusePanel';
 import { QuranPanel } from './components/quran/QuranPanel';
+import { NetworkPanel } from './components/network/NetworkPanel';
+import { PoetryPanel } from './components/poetry/PoetryPanel';
 
 /**
  * The Lab shell (spec §7.1).
@@ -31,8 +33,8 @@ const PANELS: Panel[] = [
   { id: 'isnad', label: 'Isnād' },
   { id: 'reuse', label: 'Reuse' },
   { id: 'quran', label: 'Qurʾān' },
-  { id: 'network', label: 'Network', phase: 4 },
-  { id: 'poetry', label: 'Poetry (exp.)', phase: 4 },
+  { id: 'network', label: 'Network' },
+  { id: 'poetry', label: 'Poetry (exp.)' },
   { id: 'settings', label: 'Settings' },
 ];
 
@@ -197,6 +199,14 @@ export default function App() {
         ) : panel === 'quran' ? (
           <main className="flex-1 min-h-0">
             <QuranPanel book={current} />
+          </main>
+        ) : panel === 'network' ? (
+          <main className="flex-1 min-h-0">
+            <NetworkPanel book={current} />
+          </main>
+        ) : panel === 'poetry' ? (
+          <main className="flex-1 min-h-0">
+            <PoetryPanel book={current} />
           </main>
         ) : (
           <main className="flex-1 flex min-h-0">

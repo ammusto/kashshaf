@@ -191,3 +191,7 @@ body {
 .type-weak { background: #F3F4F6; }
 .type-formulaic { background: #F3F4F6; color: #6B7280; }
 
+/* Poetry (spec §4.6): the two hemistichs of a verse candidate. */
+.lay-verse-h1 { background: #EDE9FE; border-bottom: 2px solid #7C3AED; }
+.lay-verse-h2 { background: #F5F3FF; border-bottom: 2px dashed #7C3AED; }
+

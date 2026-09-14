@@ -111,6 +111,14 @@ fn main() {
             commands::quran::quran_page,
             commands::quran::quran_context,
             commands::quran::quran_export,
+            // Network (§4.5, §7.7)
+            commands::network::network_graph,
+            commands::network::network_ego,
+            commands::network::network_sources,
+            commands::network::network_export,
+            // Poetry (§4.6, experimental)
+            commands::poetry::poetry_scan,
+            commands::poetry::poetry_export,
             // Debug
             commands::debug::verify_alignment,
         ])
