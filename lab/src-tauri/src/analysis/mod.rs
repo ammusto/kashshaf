@@ -11,13 +11,17 @@
 //! - `freq`, `keyness`, `dispersion`, `ngrams`, `concordance`, `sections` —
 //!   the text statistics of §4.1
 //!
-//! §4.2–§4.6 arrive with their phases.
+//! - `isnad`, `names` — isnād extraction and transmitter segmentation (§4.2)
+//!
+//! §4.3–§4.6 arrive with their phases.
 
 pub mod align;
 pub mod concordance;
 pub mod dispersion;
 pub mod freq;
+pub mod isnad;
 pub mod keyness;
+pub mod names;
 pub mod ngrams;
 pub mod sections;
 pub mod text;

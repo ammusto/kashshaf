@@ -3,11 +3,13 @@
 //! SQLite in Lab's own directory, WAL, `foreign_keys=ON`, schema version in
 //! `lab_info`, migrations forward-only and numbered, applied at startup.
 //!
-//! Phase 0 creates the database and the two tables every later phase needs to
-//! record itself in (`lab_info`, `lab_setting`). The feature tables of §6.2 to
-//! §6.5 arrive as further numbered migrations with the phases that write to
-//! them, because a migration that ships before its writer cannot be tested by
-//! the thing that will use it.
+//! - Migration 1 (Phase 0): `lab_info`, `lab_setting`.
+//! - Migration 2 (Phase 2): the isnād tables (§6.2), the authority file (§6.3)
+//!   and the lexicon (§6.5). The shipped lexicon entries are inserted on first
+//!   run and re-synced on every start without touching user rows or
+//!   user-disabled shipped rows.
+//!
+//! The reuse and Qurʾān tables (§6.4) arrive with Phase 3.
 
 use anyhow::{anyhow, Context, Result};
 use rusqlite::Connection;
@@ -20,10 +22,20 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "lab_info and lab_setting",
-    sql: r#"
+/// Every span-bearing table shares these (spec §6): the anchor, plus a
+/// surface snapshot for re-anchoring across corpus versions (§6.1).
+const ANCHOR_COLUMNS: &str = r#"
+            corpus_version TEXT NOT NULL,
+            book_id INTEGER NOT NULL, part_index INTEGER NOT NULL, page_id INTEGER NOT NULL,
+            tok_start INTEGER NOT NULL, tok_end INTEGER NOT NULL,
+            snapshot TEXT NOT NULL,
+            snapshot_hash TEXT NOT NULL,"#;
+
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "lab_info and lab_setting",
+        sql: r#"
         CREATE TABLE IF NOT EXISTS lab_info (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -33,7 +45,75 @@ const MIGRATIONS: &[Migration] = &[Migration {
             value TEXT NOT NULL
         );
     "#,
-}];
+    },
+    Migration {
+        version: 2,
+        name: "isnad, transmitter, person, name_form, equivalence_log, lexicon_entry",
+        // The anchor columns are spliced in by `migration_sql`.
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS person (
+            id INTEGER PRIMARY KEY,
+            canonical_name TEXT NOT NULL,
+            death_ah INTEGER, notes TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS name_form (
+            id INTEGER PRIMARY KEY,
+            person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+            form TEXT NOT NULL,
+            form_norm TEXT NOT NULL,
+            source TEXT NOT NULL CHECK (source IN ('user','auto')),
+            UNIQUE(person_id, form_norm)
+        );
+        CREATE INDEX IF NOT EXISTS name_form_norm ON name_form(form_norm);
+        CREATE TABLE IF NOT EXISTS equivalence_log (
+            id INTEGER PRIMARY KEY, at TEXT NOT NULL,
+            action TEXT NOT NULL,
+            detail_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS isnad (
+            id INTEGER PRIMARY KEY,
+            @ANCHOR@
+            kind TEXT NOT NULL CHECK (kind IN ('isnad','citation')),
+            matn_tok_start INTEGER, matn_tok_end INTEGER,
+            links INTEGER NOT NULL,
+            confidence REAL NOT NULL, confidence_json TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('candidate','confirmed','rejected','orphaned')),
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            extractor_version TEXT NOT NULL, lexicon_hash TEXT NOT NULL,
+            reanchored_from_version TEXT,
+            overrides_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS isnad_book ON isnad(book_id, part_index, page_id);
+        CREATE INDEX IF NOT EXISTS isnad_status ON isnad(book_id, status);
+        CREATE TABLE IF NOT EXISTS transmitter (
+            id INTEGER PRIMARY KEY,
+            isnad_id INTEGER NOT NULL REFERENCES isnad(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            tok_start INTEGER NOT NULL, tok_end INTEGER NOT NULL,
+            raw TEXT NOT NULL,
+            kunya TEXT, ism TEXT, nasab TEXT, nisba TEXT, laqab TEXT,
+            verb_before TEXT,
+            person_id INTEGER REFERENCES person(id)
+        );
+        CREATE INDEX IF NOT EXISTS transmitter_person ON transmitter(person_id);
+        CREATE INDEX IF NOT EXISTS transmitter_isnad ON transmitter(isnad_id, position);
+        CREATE TABLE IF NOT EXISTS lexicon_entry (
+            id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL CHECK (kind IN ('transmission','formula','banal','stopword')),
+            grp TEXT,
+            tokens_json TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            source TEXT NOT NULL CHECK (source IN ('shipped','user'))
+        );
+        CREATE INDEX IF NOT EXISTS lexicon_kind ON lexicon_entry(kind, source);
+    "#,
+    },
+];
+
+fn migration_sql(m: &Migration) -> String {
+    m.sql.replace("@ANCHOR@", ANCHOR_COLUMNS)
+}
 
 /// The schema version a fresh database is created at.
 pub fn target_schema_version() -> i64 {
@@ -46,12 +126,14 @@ pub struct Store {
 }
 
 impl Store {
-    /// Open (creating if absent) `analysis.db` under `dir` and migrate it.
+    /// Open (creating if absent) `analysis.db` under `dir`, migrate it, and
+    /// re-sync the shipped lexicon.
     pub fn open(dir: &Path) -> Result<Self> {
         let path = dir.join("analysis.db");
         let store = Self { path };
         let conn = store.connect()?;
         migrate(&conn)?;
+        crate::lexicon::sync_shipped(&conn)?;
         Ok(store)
     }
 
@@ -107,7 +189,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     for m in MIGRATIONS.iter().filter(|m| m.version > from) {
         conn.execute_batch("BEGIN")?;
         let applied = (|| -> Result<()> {
-            conn.execute_batch(m.sql)?;
+            conn.execute_batch(&migration_sql(m))?;
             conn.execute(
                 "INSERT OR REPLACE INTO lab_info (key, value) VALUES ('schema_version', ?1)",
                 [m.version.to_string()],
@@ -129,6 +211,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Now, as every timestamp column stores it.
+pub fn now() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +225,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    fn tables(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().filter_map(|r| r.ok()).collect()
     }
 
     #[test]
@@ -151,6 +243,9 @@ mod tests {
             .query_row("SELECT value FROM lab_info WHERE key='created_at'", [], |r| r.get(0))
             .unwrap();
         assert!(created.contains('T'), "created_at is an RFC 3339 timestamp: {}", created);
+        for t in ["isnad", "transmitter", "person", "name_form", "equivalence_log", "lexicon_entry", "lab_setting"] {
+            assert!(tables(&conn).contains(&t.to_string()), "missing table {}", t);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -171,6 +266,60 @@ mod tests {
             .unwrap();
         assert_eq!(v, "300");
         assert_eq!(store.schema_version().unwrap(), target_schema_version());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Spec §9 "Migrations": a database from the Phase 0 schema (version 1)
+    /// migrates to the current one without losing what it held.
+    #[test]
+    fn a_phase_0_database_migrates_without_loss() {
+        let dir = temp("from-v1");
+        let path = dir.join("analysis.db");
+        {
+            // Exactly what Phase 0 created: migration 1 alone, with a setting.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&migration_sql(&MIGRATIONS[0])).unwrap();
+            conn.execute("INSERT INTO lab_info (key, value) VALUES ('schema_version', '1')", []).unwrap();
+            conn.execute("INSERT INTO lab_info (key, value) VALUES ('created_at', '2026-09-13T00:00:00Z')", []).unwrap();
+            conn.execute("INSERT INTO lab_setting (key, value) VALUES ('stopwords', '[\"في\"]')", []).unwrap();
+            assert!(!tables(&conn).contains(&"isnad".to_string()));
+        }
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.schema_version().unwrap(), target_schema_version());
+        let conn = store.connect().unwrap();
+        let v: String = conn.query_row("SELECT value FROM lab_setting WHERE key='stopwords'", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "[\"في\"]", "the Phase 0 setting survives");
+        let created: String = conn.query_row("SELECT value FROM lab_info WHERE key='created_at'", [], |r| r.get(0)).unwrap();
+        assert_eq!(created, "2026-09-13T00:00:00Z", "created_at is not rewritten by a later migration");
+        assert!(tables(&conn).contains(&"isnad".to_string()));
+        // The shipped lexicon arrived with the migration.
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM lexicon_entry WHERE source='shipped'", [], |r| r.get(0)).unwrap();
+        assert!(n > 40, "shipped lexicon has {} entries", n);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn foreign_keys_cascade_from_isnad_to_transmitter() {
+        let dir = temp("fk");
+        let store = Store::open(&dir).unwrap();
+        let conn = store.connect().unwrap();
+        conn.execute(
+            "INSERT INTO isnad (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
+             kind, links, confidence, confidence_json, status, created_at, updated_at, extractor_version, lexicon_hash) \
+             VALUES ('4.1.0', 1, 0, 1, 0, 5, 'x', 'h', 'isnad', 2, 0.5, '{}', 'candidate', 't', 't', 'v', 'l')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO transmitter (isnad_id, position, tok_start, tok_end, raw) VALUES (1, 0, 1, 3, 'x')",
+            [],
+        )
+        .unwrap();
+        // A transmitter cannot point at a missing person.
+        assert!(conn.execute("UPDATE transmitter SET person_id = 99 WHERE id = 1", []).is_err());
+        conn.execute("DELETE FROM isnad WHERE id = 1", []).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM transmitter", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "transmitters go with their isnād");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

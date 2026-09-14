@@ -1,0 +1,30 @@
+{
+  "_comment": "Shipped transmission lexicon (Kashshaf Lab spec §4.2). Entries are normalized surfaces (no tashkil, hamza on alif folded to bare alif as the engine's normalize_arabic does); multi-token entries are matched as token sequences; a leading و/ف proclitic on the first token is tolerated at match time. Groups can be toggled; the 'citation' group opens a single-link citation rather than an isnād. User edits live in analysis.db (lexicon_entry); this file is the default and is re-synced on start without touching user rows or user-disabled rows.",
+  "groups": {
+    "core": [
+      "حدثنا", "حدثني", "حدثتنا", "حدثتني", "حدثهم", "حدثه",
+      "اخبرنا", "اخبرني", "اخبرتنا", "اخبرتني", "اخبره", "اخبرهم",
+      "انبانا", "انباني", "انبا", "نبانا", "نباني",
+      "سمعت", "سمعنا",
+      "ثنا", "نا", "انا", "دثنا", "ني", "ثني",
+      "قال", "قالت", "قالا", "قالوا",
+      "روي", "يروي", "روت", "رووا"
+    ],
+    "history": [
+      "انشدنا", "انشدني", "انشدتني", "انشدتنا",
+      "حكي لنا", "حكي لي", "حكت لنا",
+      "ذكر لنا", "ذكر لي", "ذكرت لنا"
+    ],
+    "written": [
+      "قرات علي", "قرانا علي", "قرات بخط", "قرئ علي",
+      "كتب الي", "كتب الينا", "كتبت الي",
+      "اجاز لنا", "اجاز لي", "اجازة", "اجازني",
+      "وجدت في كتاب", "وجدت بخط"
+    ],
+    "citation": [
+      "بلغني ان", "بلغنا ان", "بلغني", "بلغنا",
+      "ذكر ان", "زعم ان", "زعموا ان", "ذكر", "زعم", "زعموا",
+      "روي ان", "يروي ان", "يقال ان", "قيل ان", "حكي ان", "يقال", "قيل", "حكي", "يحكي"
+    ]
+  }
+}

@@ -69,6 +69,11 @@ pub struct LoadSummary {
     pub cached: bool,
 }
 
+/// Load (or reuse) the current book; shared with the isnād commands.
+pub(crate) fn load_book(h: &Handles, window: Option<&Window>, book_id: u64) -> Result<Arc<LoadedBook>, LabError> {
+    load_book_blocking(h, window, book_id)
+}
+
 fn load_book_blocking(h: &Handles, window: Option<&Window>, book_id: u64) -> Result<Arc<LoadedBook>, LabError> {
     if let Some(b) = h.loaded.lock().unwrap().as_ref() {
         if b.id == book_id {

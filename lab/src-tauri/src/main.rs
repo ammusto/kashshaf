@@ -62,6 +62,22 @@ fn main() {
             commands::stats::set_stopwords,
             commands::stats::reset_stopwords,
             commands::stats::save_export,
+            // Isnād workbench (§4.2, §6.2, §6.3, §7.4)
+            commands::isnad::isnad_run,
+            commands::isnad::isnad_list,
+            commands::isnad::isnad_get,
+            commands::isnad::isnad_classes,
+            commands::isnad::isnad_apply,
+            commands::isnad::transmitters_list,
+            commands::isnad::persons_list,
+            commands::isnad::suggestions_for_page,
+            commands::isnad::retag_counts,
+            commands::isnad::lexicon_list,
+            commands::isnad::lexicon_add,
+            commands::isnad::lexicon_set_enabled,
+            commands::isnad::lexicon_delete,
+            commands::isnad::isnad_export,
+            commands::isnad::authority_export,
             // Debug
             commands::debug::verify_alignment,
         ])

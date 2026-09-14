@@ -1,9 +1,10 @@
 //! The Tauri command surface, one module per feature area (spec §2.1).
 //!
-//! Phase 0 has three: what mode Lab is in, the books it can open, and the
-//! debug command that checks the alignment contract.
+//! `corpus` (mode and download), `books` (browser and reader), `stats`
+//! (§4.1 / §7.3), `isnad` (§4.2 / §7.4), `debug` (the alignment check).
 
 pub mod books;
 pub mod corpus;
 pub mod debug;
+pub mod isnad;
 pub mod stats;
