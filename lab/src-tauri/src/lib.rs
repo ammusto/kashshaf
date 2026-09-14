@@ -15,6 +15,7 @@ pub mod commands;
 pub mod error;
 pub mod lexicon;
 pub mod mode;
+pub mod quran_data;
 pub mod source;
 pub mod state;
 pub mod store;
