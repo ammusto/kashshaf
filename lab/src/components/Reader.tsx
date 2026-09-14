@@ -51,6 +51,7 @@ export function Reader({
   index,
   onNavigate,
   onSelectRange,
+  highlight,
   loading,
   error,
 }: {
@@ -60,6 +61,11 @@ export function Reader({
   onNavigate: (nextIndex: number) => void;
   /** A confirmed token range `[start, end)`, or null when cleared. */
   onSelectRange?: (range: [number, number] | null) => void;
+  /**
+   * A token range to mark and scroll to — a concordance hit, a section
+   * heading (spec §7.3 click-through). Distinct from the user's selection.
+   */
+  highlight?: [number, number] | null;
   loading: boolean;
   error: string | null;
 }) {
@@ -118,6 +124,13 @@ export function Reader({
       if (token) setPopup({ token, x: e.clientX, y: e.clientY });
     }
   };
+
+  // Bring a highlighted hit into view once the page has rendered.
+  useEffect(() => {
+    if (!highlight || !bodyRef.current) return;
+    const el = bodyRef.current.querySelector(`[data-token="${highlight[0]}"]`);
+    el?.scrollIntoView({ block: 'center' });
+  }, [highlight, page]);
 
   const canPrev = index > 0;
   const canNext = index >= 0 && index < pages.length - 1;
@@ -195,7 +208,9 @@ export function Reader({
               ) : (
                 <span
                   key={i}
-                  className={`tok ${inSelection(run.token, selection) ? 'tok-selected' : ''}`}
+                  className={`tok ${inSelection(run.token, selection) ? 'tok-selected' : ''} ${
+                    inSelection(run.token, highlight ?? null) ? 'tok-hit' : ''
+                  }`}
                   data-token={run.token}
                   onMouseDown={(e) => onTokenDown(e, run.token as number)}
                   onMouseEnter={() => onTokenEnter(run.token as number)}
