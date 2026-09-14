@@ -8,8 +8,7 @@
 //!   and the lexicon (§6.5). The shipped lexicon entries are inserted on first
 //!   run and re-synced on every start without touching user rows or
 //!   user-disabled shipped rows.
-//!
-//! The reuse and Qurʾān tables (§6.4) arrive with Phase 3.
+//! - Migration 3 (Phase 3): text reuse and Qurʾān quotation tables (§6.4).
 
 use anyhow::{anyhow, Context, Result};
 use rusqlite::Connection;
@@ -107,6 +106,57 @@ const MIGRATIONS: &[Migration] = &[
             source TEXT NOT NULL CHECK (source IN ('shipped','user'))
         );
         CREATE INDEX IF NOT EXISTS lexicon_kind ON lexicon_entry(kind, source);
+    "#,
+    },
+    Migration {
+        version: 3,
+        name: "reuse_run, reuse_match, reuse_gold, quran_match",
+        // §6.4 verbatim, plus: an index on the query page (the reader layer
+        // draws from it), `created_at` and `detector_version` on
+        // `quran_match` (a whole-book run is repeatable, and the rows must
+        // say which detector wrote them), and a uniqueness rule on
+        // `quran_match` so a re-run cannot duplicate a span the user has
+        // already judged.
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS reuse_run (
+            id INTEGER PRIMARY KEY,
+            corpus_version TEXT NOT NULL, book_id INTEGER NOT NULL,
+            mode TEXT NOT NULL CHECK (mode IN ('passage','book')),
+            params_json TEXT NOT NULL,
+            started_at TEXT NOT NULL, finished_at TEXT,
+            status TEXT NOT NULL CHECK (status IN ('running','done','cancelled','failed'))
+        );
+        CREATE INDEX IF NOT EXISTS reuse_run_book ON reuse_run(book_id, mode);
+        CREATE TABLE IF NOT EXISTS reuse_match (
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER NOT NULL REFERENCES reuse_run(id) ON DELETE CASCADE,
+            @ANCHOR@
+            target_book_id INTEGER NOT NULL, target_part_index INTEGER NOT NULL,
+            target_page_id INTEGER NOT NULL, target_tok_start INTEGER NOT NULL, target_tok_end INTEGER NOT NULL,
+            score REAL NOT NULL, type TEXT NOT NULL,
+            surface_agree REAL, lemma_agree REAL, root_agree REAL, coverage REAL, banality_factor REAL,
+            zone TEXT,
+            user_verdict TEXT CHECK (user_verdict IN ('confirmed','rejected'))
+        );
+        CREATE INDEX IF NOT EXISTS reuse_match_target ON reuse_match(target_book_id);
+        CREATE INDEX IF NOT EXISTS reuse_match_run ON reuse_match(run_id);
+        CREATE INDEX IF NOT EXISTS reuse_match_page ON reuse_match(book_id, part_index, page_id);
+        CREATE TABLE IF NOT EXISTS reuse_gold (
+            id INTEGER PRIMARY KEY, created_at TEXT NOT NULL,
+            q_json TEXT NOT NULL, t_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS quran_match (
+            id INTEGER PRIMARY KEY,
+            @ANCHOR@
+            sura INTEGER NOT NULL, aya_start INTEGER NOT NULL, aya_end INTEGER NOT NULL,
+            q_tok_start INTEGER NOT NULL, q_tok_end INTEGER NOT NULL,
+            lemma_agree REAL NOT NULL, surface_agree REAL NOT NULL, cue TEXT,
+            user_verdict TEXT CHECK (user_verdict IN ('confirmed','rejected')),
+            created_at TEXT NOT NULL, detector_version TEXT NOT NULL,
+            UNIQUE (book_id, part_index, page_id, tok_start, tok_end, sura, aya_start)
+        );
+        CREATE INDEX IF NOT EXISTS quran_match_page ON quran_match(book_id, part_index, page_id);
+        CREATE INDEX IF NOT EXISTS quran_match_book ON quran_match(book_id, sura, aya_start);
     "#,
     },
 ];
@@ -295,6 +345,81 @@ mod tests {
         // The shipped lexicon arrived with the migration.
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM lexicon_entry WHERE source='shipped'", [], |r| r.get(0)).unwrap();
         assert!(n > 40, "shipped lexicon has {} entries", n);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Phase 2 database (schema 2, with an isnād and its lexicon) gains the
+    /// §6.4 tables and keeps its rows.
+    #[test]
+    fn a_phase_2_database_migrates_to_the_reuse_schema_without_loss() {
+        let dir = temp("from-v2");
+        let path = dir.join("analysis.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..2] {
+                conn.execute_batch(&migration_sql(m)).unwrap();
+            }
+            conn.execute("INSERT INTO lab_info (key, value) VALUES ('schema_version', '2')", []).unwrap();
+            conn.execute(
+                "INSERT INTO isnad (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
+                 kind, links, confidence, confidence_json, status, created_at, updated_at, extractor_version, lexicon_hash) \
+                 VALUES ('4.1.0', 1, 0, 1, 0, 5, 'x', 'h', 'isnad', 2, 0.5, '{}', 'confirmed', 't', 't', 'v', 'l')",
+                [],
+            )
+            .unwrap();
+            assert!(!tables(&conn).contains(&"reuse_match".to_string()));
+        }
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.schema_version().unwrap(), target_schema_version());
+        let conn = store.connect().unwrap();
+        let t = tables(&conn);
+        for name in ["reuse_run", "reuse_match", "reuse_gold", "quran_match"] {
+            assert!(t.contains(&name.to_string()), "{} exists", name);
+        }
+        let status: String = conn.query_row("SELECT status FROM isnad WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "confirmed", "the Phase 2 isnād survives");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reuse_matches_go_with_their_run_and_verdicts_are_checked() {
+        let dir = temp("reuse-fk");
+        let store = Store::open(&dir).unwrap();
+        let conn = store.connect().unwrap();
+        conn.execute(
+            "INSERT INTO reuse_run (corpus_version, book_id, mode, params_json, started_at, status) \
+             VALUES ('4.1.0', 1, 'passage', '{}', 't', 'running')",
+            [],
+        )
+        .unwrap();
+        assert!(
+            conn.execute(
+                "INSERT INTO reuse_run (corpus_version, book_id, mode, params_json, started_at, status) \
+                 VALUES ('4.1.0', 1, 'window', '{}', 't', 'running')",
+                [],
+            )
+            .is_err(),
+            "mode is checked"
+        );
+        conn.execute(
+            "INSERT INTO reuse_match (run_id, corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
+             target_book_id, target_part_index, target_page_id, target_tok_start, target_tok_end, score, type) \
+             VALUES (1, '4.1.0', 1, 0, 1, 0, 10, 's', 'h', 2, 0, 7, 3, 13, 0.8, 'verbatim')",
+            [],
+        )
+        .unwrap();
+        assert!(conn.execute("UPDATE reuse_match SET user_verdict = 'maybe' WHERE id = 1", []).is_err());
+        conn.execute("UPDATE reuse_match SET user_verdict = 'confirmed' WHERE id = 1", []).unwrap();
+        conn.execute("DELETE FROM reuse_run WHERE id = 1", []).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM reuse_match", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "matches go with their run");
+
+        // quran_match: the same span against the same āya is stored once.
+        let ins = "INSERT INTO quran_match (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
+             sura, aya_start, aya_end, q_tok_start, q_tok_end, lemma_agree, surface_agree, cue, created_at, detector_version) \
+             VALUES ('4.1.0', 1, 0, 1, 4, 9, 's', 'h', 2, 255, 255, 0, 5, 1.0, 0.9, NULL, 't', '0.1.0')";
+        conn.execute(ins, []).unwrap();
+        assert!(conn.execute(ins, []).is_err(), "duplicate span+āya is refused");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
