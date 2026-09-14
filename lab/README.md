@@ -29,22 +29,28 @@ or published.
 
 ```
 lab/
-├── fixtures/             isnad_gold.json — the hand-labelled isnād gold set (DRAFT)
+├── fixtures/             isnad_gold.json, reuse_gold.json — hand-labelled gold sets (DRAFT);
+│                         quran_baseline.json — Quran_Detector's output on 20 sample pages
+├── scripts/              quran_baseline.py — regenerates that baseline (dev-only, Python)
 ├── src-tauri/            kashshaf-lab, the Tauri 2 backend
 │   ├── lexicons/         shipped defaults: stop words, transmission verbs, formulae
+│   ├── quran/            the Qurʾān as Lab data: quran.jsonl.zst + quran.db (§4.4)
 │   └── src/
 │       ├── main.rs       Tauri setup and the command registry
 │       ├── mode.rs       local | api | unavailable, resolved at startup (§2.4)
 │       ├── lexicon.rs    lexicon_entry: shipped defaults, re-sync, user edits (§6.5)
+│       ├── quran_data.rs the embedded Qurʾān: sūra pages, āya token ranges
 │       ├── source/       BookSource and its two implementations (§3.1), the
 │       │                 api-mode bulk cache (§2.5), the frequency snapshot (§3.4)
 │       ├── analysis/     algorithms — pure Rust, no Tauri or HTTP types (§4)
 │       ├── commands/     one module per feature area
 │       ├── store.rs      analysis.db and its migrations (§6)
-│       └── bin/          lab-bench, which measures the §8 targets
+│       └── bin/          lab-bench (§8 targets); lab-cli (reuse-eval, reuse-find, quran-scan)
 └── src/                  React 18 + TypeScript + Tailwind v4 frontend
     ├── components/stats/ the Stats panel (§7.3) and its virtualised table
-    └── components/isnad/ the isnād workbench (§7.4)
+    ├── components/isnad/ the isnād workbench (§7.4)
+    ├── components/reuse/ the reuse panel (§7.5)
+    └── components/quran/ the Qurʾān panel (§7.6)
 ```
 
 Shared with Kashshaf, and changed with care because two apps depend on it:
@@ -225,6 +231,96 @@ scores the extractor against it and prints span F1, transmitter F1 (exact and
 IoU ≥ 0.8), matn-start accuracy and per-genre figures. Those numbers are the
 baseline, not a gate (spec §9).
 
+## Text reuse
+
+**Passage mode** (both modes): select a range in the reader on the Reuse
+panel and press *Find reuse*. Lab takes the passage's rarest lemma trigrams
+whose tokens are all non-banal as anchors, runs each as a phrase query on the
+index (the engine locally, `POST /search/combined` remotely — the mode-parity
+test checks both return the same pages), keeps the pages that hit enough
+anchors, aligns the passage against each with Smith–Waterman (affine gaps,
+lemma match +2, root-only +1, mismatch −2; disjoint alignments within 40
+tokens are merged in proximity mode), and scores every alignment on three
+layers. Everything is a parameter with the §4.3 default (`reuse::Params`);
+the threshold, type filter and banality slider re-score the stored matches
+without re-running. Confirm writes the pair to `reuse_gold`.
+
+**Book mode** (local only): *Analyse whole book* runs every 60-token window
+(stride 30) of the book through passage mode after a 20-window trial gives
+the estimate; progress is per page; cancel keeps the pages done. Results are
+the ranked source-book table, per-book match lists and a reader layer.
+
+**Banality.** A token is banal when its corpus lemma rank ≤ 300 (or it is
+covered by a `banal` lexicon phrase — none is shipped). Two things the spec
+did not say, both measured on the sample corpus (`tests/banality_probe.rs`):
+
+- The top-300 lemmas are **61.9 %** of running text and the median page is
+  60 % banal, so §4.3's `banality_factor = 1 − min(1, share / 0.5)` gives
+  ordinary prose factor 0. Lab measures the share *in excess of* that corpus
+  baseline (`Params::banality_baseline`, filled from the frequency table), so
+  a region as banal as the corpus is not penalised and one made entirely of
+  top-300 lemmas is.
+- Pure formulae are suppressed by the **anchor rule**, not the penalty: an
+  isnād chain or a basmala has no trigram of three non-banal tokens, so it
+  retrieves no candidates at all (0 of 40 gold chains, 0 of 5 page openings).
+  The penalty matters only when an alignment seeded in a matn extends into a
+  chain. `formulaic` is decided before `verbatim` in the type table, or a
+  basmala would never show as formulaic.
+
+**Zones.** Query tokens inside a Qurʾānic quotation (the §4.4 detector) or an
+isnād (confirmed, or a live candidate at confidence ≥ 0.6) are labelled and,
+by default, not used as anchors; a match whose aligned tokens are mostly in a
+zone reports it.
+
+### The reuse gold set and `lab-cli`
+
+`lab/fixtures/reuse_gold.json` holds 30 hand-checked pairs from seven sample
+books (ḥadīth matns, sayings, a Qurʾānic quotation, an author's
+self-quotations and restatements) with the reader's expected type. **It is a
+draft, and it is biased**: the candidates were found with `lab-cli
+reuse-find` and then checked, so its recall says nothing about what Lab
+misses. `lab-cli reuse-eval` reports recall and a lower-bound precision at
+the threshold and the type distribution:
+
+```sh
+cargo build --release -p kashshaf-lab --bin lab-cli
+export KASHSHAF_SAMPLE_DIR="D:/DH Projects/kashshaf-data-clean/data/sample-mini"
+./target/release/lab-cli reuse-eval                         # the gold set
+./target/release/lab-cli reuse-find --book 4697 --from 50 --to 70 --exclude-same-book
+./target/release/lab-cli quran-scan --book 527 --from 0 --to 40
+```
+
+The frequency snapshot must be readable (beside the corpus, or in Lab's
+cache directory; see above).
+
+## Qurʾānic quotations
+
+The Qurʾān ships inside Lab (`lab/src-tauri/quran/`, produced by
+`kashshaf-data-clean/ingest_quran.py`): one line per sūra in the corpus token
+schema, and `quran.db` with the sūra/āya token ranges and both the imlāʾī and
+the Uthmani text. Morphology ran on Tanzil's **imlāʾī** text, not the
+Uthmani one the spec names: after the pipeline's normalisation 17.6 % of
+Uthmani tokens differ from the spelling the corpus quotes in (`مَٰلِكِ` →
+`ملك`, `ٱلصَّلَوٰةَ` → `الصلوة`) and 363 āyāt differ in word count. The
+alignment contract holds on every sūra and āya (`tests/quran_data.rs`, not
+gated — the data is embedded).
+
+At startup Lab builds a lemma 3/4/5-gram index over it (~60 ms). *Detect
+quotations* runs every page: a page trigram with at least one non-banal
+token that occurs in the Qurʾān seeds an alignment against the āyāt around
+the hit; ≥ 4 aligned tokens with lemma agreement ≥ 0.8, or ≥ 3 with a `﴿ ﴾`,
+`«»` or `قال تعالى` cue within 3 tokens, is a quotation. Tanzil's 112
+sūra-opening basmalas are not indexed (a basmala is 1:1). Results go to
+`quran_match` — rows you have judged survive a re-run — and show as a table
+by sūra:āya and a reader layer.
+
+**Baseline.** `lab/scripts/quran_baseline.py` runs `Quran_Detector`
+(SElBeltagy, Python, offline) on 20 sample pages into
+`lab/fixtures/quran_baseline.json`; `tests/quran_baseline.rs` runs Lab on
+the same pages, prints every disagreement and asserts Lab's recall on the
+baseline's matches is at least the baseline's on Lab's (0.800 vs 0.750 on
+the committed fixture). Python is never run by the tests.
+
 ## Test
 
 Everything below must pass before a Lab release; the release workflow runs the
@@ -262,6 +358,12 @@ KASHSHAF_FREQ_DIR=/tmp/freq cargo test -p kashshaf-lab --release --test freq_sna
 
 # The isnād gold baseline and the §8 extraction speed
 cargo test -p kashshaf-lab --release --test isnad_gold -- --nocapture
+
+# What "banal" covers, and what it does to formulae (§4.3)
+cargo test -p kashshaf-lab --release --test banality_probe -- --nocapture
+
+# Lab's Qurʾān detector against the Quran_Detector baseline (§4.4)
+cargo test -p kashshaf-lab --release --test quran_baseline -- --nocapture
 
 # The engine's bulk path against its per-page path
 cargo test -p kashshaf-engine --release --test book_pages
@@ -348,7 +450,8 @@ is a port of Kashshaf's `namePatterns.ts` structure.
 
 ## Not done yet
 
-Phases 3–5 of the spec: text reuse, Qurʾān detection, the network and poetry
-views, re-anchoring across corpus versions (§6.1), "Export everything", and
-Lab's release pipeline. The left rail lists the panels and says which phase
-each one arrives in.
+Phases 4–5 of the spec: the network and poetry views, re-anchoring across
+corpus versions (§6.1), "Export everything", and Lab's release pipeline. The
+left rail lists the panels and says which phase each one arrives in. Both
+gold sets are drafts, and the reuse set needs pairs found by other means
+before its recall is a measurement.

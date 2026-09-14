@@ -3,6 +3,48 @@
 All notable changes to the Kashshaf desktop app, API server, and data pipeline, and to Kashshaf Lab. The two products are released separately: `## [X.Y.Z]` sections are Kashshaf, `## [lab X.Y.Z]` sections are Lab. Format loosely follows Keep a Changelog. Dates are build dates; nothing below has been tagged or published yet.
 
 ---
+## [lab 0.4.0] — 2026-09-14
+
+**New: Reuse.** Find where a passage of the current book is reused elsewhere
+in the corpus — or, on the local corpus, everything the whole book reuses.
+
+- **Find reuse**: select a passage in the reader and Lab retrieves candidate
+  pages through the index, aligns the passage against each, and lists the
+  matches grouped by source book with a score and a *type* — verbatim,
+  inflected, paraphrase, weak, or formulaic — derived from how far the two
+  texts agree on surface, lemma and root. Each match shows its target text
+  with the aligned words marked, a side-by-side view with aligned words
+  connected by colour, and a link back to the passage. Works in both modes.
+- **Analyse whole book** (local corpus only): every window of the book, with a
+  time estimate before you start, progress per page, and a Cancel that keeps
+  what is done. Results as a ranked table of source books, per-book match
+  lists, and a highlight layer in the reader.
+- **Sliders, not re-runs**: the score threshold, the type filter and the
+  banality penalty re-score the stored matches instantly. Formulaic matches
+  — chains of transmission, opening formulae — are hidden by default.
+- **Confirm / reject** each match; confirmed pairs become the reuse gold set
+  that `lab-cli reuse-eval` measures against. Export a run as CSV or JSON.
+
+**New: Qurʾān.** *Detect quotations* finds Qurʾānic quotations across the
+current book — exact and inflected, with or without ﴿ ﴾ brackets or a
+"قال تعالى" cue — and lists them by sūra:āya with the page, the text as
+quoted, the āya, the agreement and the cue. Confirm or reject; judged rows
+survive a re-run. The Qurʾān ships inside Lab: no corpus is needed for it.
+
+**Under the hood**
+
+- The Qurʾān is ingested through the same morphology pipeline as the corpus
+  (`kashshaf-data-clean/ingest_quran.py`, Tanzil imlāʾī text; Uthmani kept
+  for display) and embedded in the binary with its āya token ranges.
+- `analysis.db` migration 3 adds `reuse_run`, `reuse_match`, `reuse_gold`
+  and `quran_match`.
+- `lab-cli` (`reuse-eval`, `reuse-find`, `quran-scan`) and two new
+  corpus-gated tests: the banality probe and the Quran_Detector baseline.
+- Candidate retrieval (`BookSource::find_pages`) is the same index query in
+  both modes; the mode-parity test checks it.
+
+*Spec: §4.3, §4.4, §6.4, §7.5, §7.6. Phase 3 of the Lab spec.*
+
 ## [lab 0.3.0] — 2026-09-14
 
 **New: the Isnād workbench.** Lab finds the chains of transmission in the
