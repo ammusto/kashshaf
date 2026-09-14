@@ -1,7 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import type { Token } from '../../types';
-import { stripHtml, buildCharToTokenMap, getHighlightRanges } from '../../utils/arabicTokenizer';
-import { TokenPopup } from '../ui/TokenPopup';
+import { stripHtml, buildCharToTokenMap, getHighlightRanges, TokenPopup } from '@kashshaf/shared';
 import { Toast } from '../ui';
 import { useBooks } from '../../contexts/BooksContext';
 import { CitationBlock } from '../shared/CitationBlock';

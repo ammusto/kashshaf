@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react';
-import type { Token } from '../../types';
+import type { Token } from '../types/corpus';
 
 export interface TokenPopupProps {
   token: Token;

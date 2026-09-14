@@ -15,7 +15,11 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@kashshaf/shared": ["packages/kashshaf-shared/src/index.ts"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "packages/kashshaf-shared/src"]
 }

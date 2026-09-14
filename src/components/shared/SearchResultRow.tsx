@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import type { SearchResult } from '../../types';
-import { stripHtml, buildCharToTokenMap, getSnippetRange, getHighlightRanges } from '../../utils/arabicTokenizer';
+import { stripHtml, buildCharToTokenMap, getSnippetRange, getHighlightRanges } from '@kashshaf/shared';
 import { MetadataTooltip } from '../ui';
 import { useBooks } from '../../contexts/BooksContext';
 

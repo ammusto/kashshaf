@@ -1,3 +1,23 @@
+/**
+ * Kashshaf frontend types.
+ *
+ * The types both frontends need — Token, SearchResult, BookMetadata,
+ * CorpusStatus and the download progress they share — live in
+ * `@kashshaf/shared` (Lab spec §2.2) and are re-exported here so existing
+ * imports from `../types` keep working.
+ */
+import type { SearchResult } from '@kashshaf/shared';
+
+export type {
+  Token,
+  TokenClitic,
+  SearchResult,
+  BookMetadata,
+  CorpusStatus,
+  DownloadState,
+  DownloadProgress,
+} from '@kashshaf/shared';
+
 // Search types
 export type SearchMode = 'surface' | 'lemma' | 'root';
 
@@ -10,23 +30,6 @@ export interface SearchFilters {
   death_ah_max?: number;
   century_ah?: number;
   book_ids?: number[];
-}
-
-export interface SearchResult {
-  id: number;
-  part_index: number;
-  page_id: number;
-  author_id?: number;
-  genre_id?: number;
-  death_ah?: number;
-  century_ah?: number;
-  part_label: string;
-  page_number: string;
-  /** Full body text - only present from get_page, not search results */
-  body?: string;
-  score: number;
-  /** Token indices that matched the search query (positions in the token array) */
-  matched_token_indices: number[];
 }
 
 export interface SearchResults {
@@ -76,45 +79,6 @@ export interface PageWithMatches {
   page_number: string;
   body: string;
   matched_token_indices: number[];
-}
-
-// Token types
-export interface TokenClitic {
-  type: string;
-  display: string;
-}
-
-export interface Token {
-  idx: number;
-  surface: string;
-  noclitic_surface?: string; // Surface without wa/fa/bi/li/ka proclitics
-  lemma: string;
-  root?: string;
-  pos: string;
-  features: string[];
-  clitics: TokenClitic[];
-}
-
-// Book metadata types (from metadata.db)
-export interface BookMetadata {
-  id: number;
-  corpus?: string;
-  title: string;
-  author_id?: number;
-  death_ah?: number;
-  century_ah?: number;
-  genre_id?: number;
-  page_count?: number;
-  token_count?: number;
-  original_id?: string;
-  paginated?: boolean;
-  tags?: string;       // JSON array as string
-  book_meta?: string;  // JSON array as string
-  author_meta?: string; // JSON array as string (legacy)
-  in_corpus?: boolean; // Whether book is in the corpus
-  parts?: number;      // Number of parts/volumes in the book
-  metadata_json?: string;  // Structured metadata blob (replaces book_meta for display)
-  citation_json?: string;  // Structured citation data for MLA/Chicago formatting
 }
 
 // Author lookup table
@@ -172,20 +136,6 @@ export interface AppUpdateStatus {
   download_url?: string;
 }
 
-// Corpus Download Types
-export interface CorpusStatus {
-  ready: boolean;
-  local_version: string | null;
-  remote_version: string | null;
-  update_available: boolean;
-  update_required: boolean;
-  missing_files: string[];
-  total_download_size: number;
-  /** The remote manifest's `notes` (what changed in remote_version), if any. */
-  remote_notes: string | null;
-  error: string | null;
-}
-
 /** Where the corpus lives: `get_data_directory_info` (Tauri). */
 export interface DataDirInfo {
   path: string;
@@ -198,25 +148,6 @@ export interface DataDirInfo {
   margin_bytes: number;
   /** free_bytes >= required_bytes + margin_bytes, when required_bytes was given */
   enough_space: boolean | null;
-}
-
-export type DownloadState =
-  | 'starting'
-  | 'downloading'
-  | 'verifying'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
-
-export interface DownloadProgress {
-  current_file: string;
-  file_bytes_downloaded: number;
-  file_total_bytes: number;
-  overall_bytes_downloaded: number;
-  overall_total_bytes: number;
-  files_completed: number;
-  files_total: number;
-  state: DownloadState;
 }
 
 // Re-export announcement types

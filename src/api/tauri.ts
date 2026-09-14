@@ -17,7 +17,7 @@ import type {
   WalkStatus,
   DataDirInfo,
 } from '../types';
-import { stripPunctuation } from '../utils/sanitize';
+import { stripPunctuation } from '@kashshaf/shared';
 
 export async function search(
   query: string,

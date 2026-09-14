@@ -5,7 +5,7 @@ import {
   formatCitation,
   stripCitationMarkup,
   type CitationStyle,
-} from '../../utils/citation';
+} from '@kashshaf/shared';
 
 interface CitationBlockProps {
   book: BookMetadata;

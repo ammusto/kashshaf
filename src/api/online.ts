@@ -17,7 +17,7 @@ import type {
   WildcardGrammar,
   WalkStatus,
 } from '../types';
-import { stripPunctuation } from '../utils/sanitize';
+import { stripPunctuation } from '@kashshaf/shared';
 
 const API_BASE_URL = 'https://api.kashshaf.com';
 
