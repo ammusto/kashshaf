@@ -161,3 +161,33 @@ body {
 .lay-t-selected { outline: 2px solid #1A1A1A; outline-offset: 1px; }
 .lay-split-pick { cursor: col-resize; }
 
+/*
+ * Reuse (spec §7.5) and Qurʾān (§7.6) layers: a stored match's query span,
+ * confirmed / rejected variants, the zone labels of the query page, the
+ * eight colours that connect aligned tokens in the side-by-side view, and
+ * the target text's aligned tokens (bold when the surface is the same).
+ */
+.lay-reuse { background: #FFF1D6; border-bottom: 2px solid #E8A33D; }
+.lay-reuse-confirmed { background: #DCF5E3; border-bottom: 2px solid #1F9D55; }
+.lay-reuse-rejected { background: #F3F4F6; border-bottom: 2px dotted #9CA3AF; }
+.lay-zone-quran { box-shadow: 0 2px 0 0 #0E7C7B; }
+.lay-zone-isnad { box-shadow: 0 2px 0 0 #7C3AED; }
+.lay-quran { background: #DDF4F1; border-bottom: 2px solid #0E7C7B; }
+.lay-quran-confirmed { background: #DCF5E3; border-bottom: 2px solid #1F9D55; }
+.lay-quran-rejected { background: #F3F4F6; border-bottom: 2px dotted #9CA3AF; }
+.tok-aligned { background: #FFF1D6; }
+.tok-aligned-same { background: #FFE2A8; font-weight: 600; }
+.lay-pair-0 { background: #D4EDDA; }
+.lay-pair-1 { background: #FDE2E2; }
+.lay-pair-2 { background: #E0E7FF; }
+.lay-pair-3 { background: #FCE7F3; }
+.lay-pair-4 { background: #CCFBF1; }
+.lay-pair-5 { background: #FEF3C7; }
+.lay-pair-6 { background: #E5E7EB; }
+.lay-pair-7 { background: #DBEAFE; }
+.type-verbatim { background: #DCF5E3; }
+.type-inflected { background: #E0E7FF; }
+.type-paraphrase { background: #FEF3C7; }
+.type-weak { background: #F3F4F6; }
+.type-formulaic { background: #F3F4F6; color: #6B7280; }
+

@@ -6,6 +6,8 @@ import { BookBrowser } from './components/BookBrowser';
 import { Reader } from './components/Reader';
 import { StatsPanel, type HitRef } from './components/stats/StatsPanel';
 import { IsnadWorkbench } from './components/isnad/IsnadWorkbench';
+import { ReusePanel } from './components/reuse/ReusePanel';
+import { QuranPanel } from './components/quran/QuranPanel';
 
 /**
  * The Lab shell (spec §7.1).
@@ -27,8 +29,8 @@ const PANELS: Panel[] = [
   { id: 'books', label: 'Books' },
   { id: 'stats', label: 'Stats' },
   { id: 'isnad', label: 'Isnād' },
-  { id: 'reuse', label: 'Reuse', phase: 3 },
-  { id: 'quran', label: 'Qurʾān', phase: 3 },
+  { id: 'reuse', label: 'Reuse' },
+  { id: 'quran', label: 'Qurʾān' },
   { id: 'network', label: 'Network', phase: 4 },
   { id: 'poetry', label: 'Poetry (exp.)', phase: 4 },
   { id: 'settings', label: 'Settings' },
@@ -187,6 +189,14 @@ export default function App() {
         ) : panel === 'isnad' ? (
           <main className="flex-1 min-h-0">
             <IsnadWorkbench book={current} />
+          </main>
+        ) : panel === 'reuse' ? (
+          <main className="flex-1 min-h-0">
+            <ReusePanel book={current} local={status?.mode === 'local'} />
+          </main>
+        ) : panel === 'quran' ? (
+          <main className="flex-1 min-h-0">
+            <QuranPanel book={current} />
           </main>
         ) : (
           <main className="flex-1 flex min-h-0">
