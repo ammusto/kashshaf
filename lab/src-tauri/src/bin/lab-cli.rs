@@ -311,9 +311,39 @@ fn quran_scan(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Build the frequency snapshot the way the app does (spec 1.4, fix 4) and
+/// report the time: `lab-cli freq-build [--corpus DIR] [--out DIR]`.
+fn freq_build(args: &[String]) -> Result<()> {
+    let dir = corpus_dir(args)?;
+    let source = LocalSource::open_with_index(&dir, &index_dir(&dir)).with_context(|| format!("opening {}", dir.display()))?;
+    let ids: Vec<u64> = source.books()?.into_iter().map(|b| b.id).collect();
+    let started = std::time::Instant::now();
+    let last = std::sync::Mutex::new(std::time::Instant::now());
+    let progress = |done: u64, total: u64| {
+        let mut l = last.lock().unwrap();
+        if l.elapsed().as_secs() >= 5 || done == total {
+            eprintln!("  {}/{} books, {} s", done, total, started.elapsed().as_secs());
+            *l = std::time::Instant::now();
+        }
+    };
+    let built = kashshaf_lab_lib::source::freq::build_from_corpus(source.token_cache(), source.corpus_db(), &ids, source.corpus_version(), &progress, &|| false)?
+        .ok_or_else(|| anyhow!("cancelled"))?;
+    let ms = started.elapsed().as_millis();
+    println!("built {} lemmas / {} roots over {} books ({} tokens) in {} ms", built.0.len(), built.1.len(), ids.len(), built.0.total, ms);
+    if let Some(out) = arg(args, "--out") {
+        let out = PathBuf::from(out);
+        std::fs::create_dir_all(&out)?;
+        built.0.write(&out.join("lemma_freq.bin"))?;
+        built.1.write(&out.join("root_freq.bin"))?;
+        println!("wrote {}", out.display());
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(|s| s.as_str()) {
+        Some("freq-build") => freq_build(&args[1..]),
         Some("reuse-eval") => reuse_eval(&args[1..]),
         Some("reuse-find") => reuse_find(&args[1..]),
         Some("quran-scan") => quran_scan(&args[1..]),

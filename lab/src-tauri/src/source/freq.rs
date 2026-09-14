@@ -241,31 +241,75 @@ fn read_u64<R: Read>(r: &mut R) -> Result<u64> {
 /// polled per book and a cancelled build returns `Ok(None)` having written
 /// nothing (ground rule 6: a cancelled run keeps what it finished — here
 /// there is nothing partial worth keeping, so it keeps the absence).
+/// Build both tables from `corpus.db` (Lab spec 1.4, fix 4).
+///
+/// `corpus.db` holds no per-definition counts, so the tokens must be
+/// counted — but never as strings. `TokenCache::book_pages` yields each
+/// page's definition ids; those are tallied into a flat `Vec<u64>` indexed
+/// by definition id, and only at the end are the definitions joined to
+/// their lemma and root strings through `token_definitions`, `lemmas` and
+/// `roots`. The result is byte-identical to `build_lab_freq.py`'s (the
+/// snapshot test checks it) and runs at the bulk fetch's speed rather than
+/// at one string allocation per token — the in-app build took about an hour
+/// on the full corpus that way.
 pub fn build_from_corpus(
     cache: &kashshaf_engine::TokenCache,
+    corpus_db: &Path,
     book_ids: &[u64],
     corpus_version: &str,
     progress: &dyn Fn(u64, u64),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<(FreqTable, FreqTable)>> {
-    let mut lemmas: HashMap<String, u64> = HashMap::new();
-    let mut roots: HashMap<String, u64> = HashMap::new();
+    let mut by_def: Vec<u64> = Vec::new();
     let total = book_ids.len() as u64;
     for (i, &book) in book_ids.iter().enumerate() {
         if cancelled() {
             return Ok(None);
         }
-        let pages = cache.book_pages(book)?;
-        let ids: Vec<Vec<u32>> = pages.into_iter().map(|(_, _, ids)| ids).collect();
-        for tokens in cache.resolve_pages(&ids)? {
-            for t in tokens {
-                *lemmas.entry(t.lemma).or_insert(0) += 1;
-                if let Some(r) = t.root {
-                    *roots.entry(r).or_insert(0) += 1;
+        for (_, _, ids) in cache.book_pages(book)? {
+            for id in ids {
+                let id = id as usize;
+                if id >= by_def.len() {
+                    by_def.resize(id + 1, 0);
                 }
+                by_def[id] += 1;
             }
         }
         progress(i as u64 + 1, total);
+    }
+    if cancelled() {
+        return Ok(None);
+    }
+    // Definition → (lemma, root) once, then the string tables once.
+    let conn = rusqlite::Connection::open_with_flags(corpus_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("opening {}", corpus_db.display()))?;
+    let mut lemma_of: HashMap<i64, String> = HashMap::new();
+    let mut stmt = conn.prepare("SELECT id, lemma FROM lemmas")?;
+    for r in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+        let (id, s) = r?;
+        lemma_of.insert(id, s);
+    }
+    let mut root_of: HashMap<i64, String> = HashMap::new();
+    let mut stmt = conn.prepare("SELECT id, root FROM roots")?;
+    for r in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+        let (id, s) = r?;
+        root_of.insert(id, s);
+    }
+    let mut lemmas: HashMap<String, u64> = HashMap::new();
+    let mut roots: HashMap<String, u64> = HashMap::new();
+    let mut stmt = conn.prepare("SELECT id, lemma_id, root_id FROM token_definitions")?;
+    for r in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?)))? {
+        let (id, lemma_id, root_id) = r?;
+        let n = by_def.get(id as usize).copied().unwrap_or(0);
+        if n == 0 {
+            continue;
+        }
+        if let Some(l) = lemma_of.get(&lemma_id) {
+            *lemmas.entry(l.clone()).or_insert(0) += n;
+        }
+        if let Some(r) = root_id.and_then(|r| root_of.get(&r)) {
+            *roots.entry(r.clone()).or_insert(0) += n;
+        }
     }
     Ok(Some((
         FreqTable::from_counts(FreqLayer::Lemma, corpus_version, lemmas),

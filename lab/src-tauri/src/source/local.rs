@@ -122,6 +122,10 @@ impl LocalSource {
         &self.data_dir
     }
 
+    pub fn corpus_db(&self) -> &Path {
+        &self.corpus_db
+    }
+
     pub fn engine(&self) -> &Arc<SearchEngine> {
         &self.engine
     }

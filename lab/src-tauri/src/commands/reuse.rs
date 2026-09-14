@@ -61,8 +61,9 @@ struct Setup {
     params: Params,
 }
 
-fn setup(h: &Handles, conn: &Connection, params: Option<Params>) -> Result<Setup, LabError> {
-    let freq = h.source.freq_table(FreqLayer::Lemma).map_err(|e| LabError::Source(e.to_string()))?;
+fn setup(h: &Handles, conn: &Connection, params: Option<Params>, window: Option<&Window>) -> Result<Setup, LabError> {
+    // First use in local mode builds the snapshot (spec 1.4, fix 4).
+    let freq = crate::commands::stats::ensure_freq(h, window, FreqLayer::Lemma)?;
     let mut params = params.unwrap_or_default();
     if params.banality_baseline.is_none() {
         params.banality_baseline = Some(reuse::corpus_banal_share(&freq, params.banality_rank));
@@ -357,7 +358,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
     blocking(move || {
         let started = std::time::Instant::now();
         let conn = db(&h)?;
-        let s = setup(&h, &conn, args.params.clone())?;
+        let s = setup(&h, &conn, args.params.clone(), Some(&window))?;
         let page = h
             .source
             .page(args.book_id, args.part_index, args.page_id)
@@ -583,7 +584,7 @@ pub async fn reuse_estimate(window: Window, state: State<'_, ManagedLabState>, b
     blocking(move || {
         require_local(&h)?;
         let conn = db(&h)?;
-        let s = setup(&h, &conn, params)?;
+        let s = setup(&h, &conn, params, Some(&window))?;
         let book = crate::commands::stats::load_book(&h, Some(&window), book_id)?;
         let windows = book_windows(&book, &s.params);
         // Sample from the middle of the book: front matter is atypical.
@@ -651,7 +652,7 @@ pub async fn reuse_book(window: Window, state: State<'_, ManagedLabState>, book_
         require_local(&h)?;
         let started = std::time::Instant::now();
         let conn = db(&h)?;
-        let s = setup(&h, &conn, params)?;
+        let s = setup(&h, &conn, params, Some(&window))?;
         let book = crate::commands::stats::load_book(&h, Some(&window), book_id)?;
         let windows = book_windows(&book, &s.params);
         h.cancel.store(false, Ordering::SeqCst);

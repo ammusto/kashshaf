@@ -463,7 +463,7 @@ pub async fn stats_keyness(window: Window, state: State<'_, ManagedLabState>, ar
                 let fl = freq_layer(args.scope.layer).ok_or_else(|| {
                     LabError::Other("keyness against the corpus runs on the lemma or root layer (spec §3.4)".into())
                 })?;
-                let table = h.source.freq_table(fl)?;
+                let table = ensure_freq(&h, Some(&window), fl)?;
                 // The whole corpus includes this book; compare with the rest.
                 let whole = Counts::from_table(&table);
                 let unscoped = Counts::from_text(&sc.book.text(args.scope.layer), sc.stop.as_ref());
@@ -648,24 +648,50 @@ pub async fn stats_build_freq_tables(window: Window, state: State<'_, ManagedLab
             .source
             .as_local()
             .ok_or_else(|| LabError::Other("building the frequency snapshot needs a local corpus".into()))?;
-        h.cancel.store(false, Ordering::SeqCst);
-        let started = std::time::Instant::now();
-        let ids: Vec<u64> = local.books()?.into_iter().map(|b| b.id).collect();
-        let built = crate::source::freq::build_from_corpus(
-            local.token_cache(),
-            &ids,
-            local.corpus_version(),
-            &|done, total| emit(&window, "freq", done, total, started),
-            &|| h.cancel.load(Ordering::SeqCst),
-        )?;
-        let Some((lemma, root)) = built else {
-            return Err(LabError::Other("cancelled; nothing was written".into()));
-        };
-        let (nl, nr) = (lemma.len(), root.len());
-        local.install_freq_tables(lemma, root)?;
-        Ok(FreqStatus { lemma: Ok(nl), root: Ok(nr) })
+        build_freq_blocking(&h, local, &window)
     })
     .await
+}
+
+/// The build itself: every book's definition ids through the bulk path,
+/// then one join to strings (spec 1.4, fix 4). Progress on `stats-progress`
+/// as stage `freq`.
+fn build_freq_blocking(h: &Handles, local: &crate::source::local::LocalSource, window: &Window) -> Result<FreqStatus, LabError> {
+    h.cancel.store(false, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    let ids: Vec<u64> = local.books()?.into_iter().map(|b| b.id).collect();
+    let built = crate::source::freq::build_from_corpus(
+        local.token_cache(),
+        local.corpus_db(),
+        &ids,
+        local.corpus_version(),
+        &|done, total| emit(window, "freq", done, total, started),
+        &|| h.cancel.load(Ordering::SeqCst),
+    )?;
+    let Some((lemma, root)) = built else {
+        return Err(LabError::Other("cancelled; nothing was written".into()));
+    };
+    let (nl, nr) = (lemma.len(), root.len());
+    local.install_freq_tables(lemma, root)?;
+    eprintln!("[lab] frequency snapshot built in {} ms ({} lemmas, {} roots)", started.elapsed().as_millis(), nl, nr);
+    Ok(FreqStatus { lemma: Ok(nl), root: Ok(nr) })
+}
+
+/// The lemma/root table for `layer`, building the snapshot first when the
+/// local corpus has none (spec 1.4, fix 4: keyness and reuse trigger the
+/// build on first use, with progress, instead of a Settings button). In api
+/// mode the server's snapshot is the only option, so its error stands.
+pub(crate) fn ensure_freq(h: &Handles, window: Option<&Window>, layer: FreqLayer) -> Result<std::sync::Arc<crate::source::FreqTable>, LabError> {
+    match h.source.freq_table(layer) {
+        Ok(t) => Ok(t),
+        Err(first) => match (h.source.as_local(), window) {
+            (Some(local), Some(w)) => {
+                build_freq_blocking(h, local, w)?;
+                h.source.freq_table(layer).map_err(|e| LabError::Source(e.to_string()))
+            }
+            _ => Err(LabError::Source(first.to_string())),
+        },
+    }
 }
 
 // -------------------------------------------------------------- export ---

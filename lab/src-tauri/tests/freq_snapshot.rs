@@ -41,9 +41,11 @@ fn build() -> Option<(FreqTable, FreqTable)> {
     let cache = TokenCache::new(db.clone(), 100).expect("open the sample corpus.db");
     let ids = book_ids(&db);
     assert!(!ids.is_empty());
-    let built = build_from_corpus(&cache, &ids, &corpus_version(&db), &|_, _| {}, &|| false)
+    let started = std::time::Instant::now();
+    let built = build_from_corpus(&cache, &db, &ids, &corpus_version(&db), &|_, _| {}, &|| false)
         .expect("build")
         .expect("not cancelled");
+    println!("built the sample snapshot in {} ms", started.elapsed().as_millis());
     Some(built)
 }
 
