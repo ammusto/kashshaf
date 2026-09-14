@@ -963,7 +963,7 @@ impl SearchEngine {
     }
 
     /// Phrase for 2+ words, term for 1, query-parser fallback for none.
-    fn text_query(&self, field: Field, words: &[String], raw: &str) -> Result<Box<dyn Query>> {
+    fn text_query(&self, field: Field, words: &[String], raw: &str, slop: u32) -> Result<Box<dyn Query>> {
         match words.len() {
             0 => {
                 let qp = QueryParser::for_index(&self.index, vec![field]);
@@ -973,9 +973,11 @@ impl SearchEngine {
                 Term::from_field_text(field, &words[0]),
                 IndexRecordOption::Basic,
             ))),
-            _ => Ok(Box::new(PhraseQuery::new(
-                words.iter().map(|w| Term::from_field_text(field, w)).collect(),
-            ))),
+            _ => {
+                let mut q = PhraseQuery::new(words.iter().map(|w| Term::from_field_text(field, w)).collect());
+                q.set_slop(slop);
+                Ok(Box::new(q))
+            }
         }
     }
 
@@ -1013,6 +1015,12 @@ impl SearchEngine {
     /// slot is small, otherwise a bag-of-words `BooleanQuery` that must be
     /// verified on the forward index.
     fn compound_plan(&self, sets: &[Vec<u32>]) -> Result<Plan> {
+        self.compound_plan_slop(sets, 0)
+    }
+
+    /// `compound_plan` with a phrase slop; a plan that needs forward-index
+    /// verification cannot carry one and is refused.
+    fn compound_plan_slop(&self, sets: &[Vec<u32>], slop: u32) -> Result<Plan> {
         let tokens = self.fields.tokens.expect("compound index");
         match sets.len() {
             0 => Ok(Plan { query: Box::new(EmptyQuery), verify: None }),
@@ -1032,7 +1040,11 @@ impl SearchEngine {
                         .collect();
                     let mut q = RegexPhraseQuery::new(tokens, patterns);
                     q.set_max_expansions(PHRASE_MAX_EXPANSIONS);
+                    q.set_slop(slop);
                     return Ok(Plan { query: Box::new(q), verify: None });
+                }
+                if slop > 0 {
+                    return Err(anyhow::anyhow!("phrase too wide for a slop search"));
                 }
                 let clauses: Vec<(Occur, Box<dyn Query>)> =
                     sets.iter().map(|s| (Occur::Must, self.set_query(s))).collect();
@@ -1048,11 +1060,16 @@ impl SearchEngine {
     /// In compound mode with the root hedge, single-word root queries use
     /// `root_text` (no positions) instead of a triple set.
     fn build_term_plan(&self, term: &SearchTerm) -> Result<Plan> {
+        self.build_term_plan_slop(term, 0)
+    }
+
+    /// `build_term_plan` for a phrase with `slop` positions of leniency.
+    fn build_term_plan_slop(&self, term: &SearchTerm, slop: u32) -> Result<Plan> {
         match self.kind {
             IndexKind::ThreeField => {
                 let words = self.term_words(term);
                 Ok(Plan {
-                    query: self.text_query(self.field_for(term.mode), &words, &Self::normalize_for(term.mode, &term.query))?,
+                    query: self.text_query(self.field_for(term.mode), &words, &Self::normalize_for(term.mode, &term.query), slop)?,
                     verify: None,
                 })
             }
@@ -1071,7 +1088,7 @@ impl SearchEngine {
                         }
                     }
                 }
-                self.compound_plan(&self.term_sets(term))
+                self.compound_plan_slop(&self.term_sets(term), slop)
             }
         }
     }
@@ -1308,6 +1325,23 @@ impl SearchEngine {
     // ------------------------------------------------------------------
     // Public search API
     // ------------------------------------------------------------------
+
+    /// Every page a phrase occurs on with up to `slop` positions of leniency
+    /// between its words, unscored and unpaginated, with the exact count —
+    /// Kashshaf Lab's whole-passage fallback (its spec §4.3, amendment 1.4).
+    /// A single word is a term query; a compound-index phrase too wide for
+    /// the positional path is refused rather than approximated.
+    pub fn phrase_hits(&self, query: &str, mode: SearchMode, slop: u32, filters: &SearchFilters) -> Result<(Vec<(u64, u64, u64)>, usize)> {
+        let searcher = self.reader.searcher();
+        let term = SearchTerm { query: query.to_string(), mode };
+        let plan = self.build_term_plan_slop(&term, slop)?;
+        if plan.verify.is_some() {
+            return Err(anyhow::anyhow!("phrase too wide for a slop search"));
+        }
+        let final_query = self.with_filters(plan.query, filters);
+        let (triples, count_total) = searcher.search(&*final_query, &(AllDocsCollector, Count))?;
+        Ok((triples, count_total))
+    }
 
     /// Enumerate every matching page hit for a query, unscored and unpaginated.
     pub fn collect_all_hits(&self, query: &str, mode: SearchMode, filters: &SearchFilters) -> Result<(Vec<(u64, u64, u64)>, usize)> {

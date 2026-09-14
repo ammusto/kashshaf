@@ -117,6 +117,31 @@ fn zones_for(conn: &Connection, s: &Setup, page: &Page) -> Result<Vec<Option<Zon
     Ok(z)
 }
 
+/// A phrase-count cache for one run: overlapping windows share trigrams.
+struct DfCache<'a> {
+    source: &'a dyn BookSource,
+    counts: Mutex<HashMap<Vec<String>, usize>>,
+}
+
+impl<'a> DfCache<'a> {
+    fn new(source: &'a dyn BookSource) -> Self {
+        Self { source, counts: Mutex::new(HashMap::new()) }
+    }
+
+    fn get(&self, terms: &[String]) -> anyhow::Result<usize> {
+        if let Some(n) = self.counts.lock().unwrap().get(terms) {
+            return Ok(*n);
+        }
+        let n = reuse::phrase_df(self.source, terms)?;
+        let mut c = self.counts.lock().unwrap();
+        if c.len() > 200_000 {
+            c.clear();
+        }
+        c.insert(terms.to_vec(), n);
+        Ok(n)
+    }
+}
+
 /// A page cache in front of `BookSource::page` for one run: candidate pages
 /// recur across windows in book mode.
 struct PageCache<'a> {
@@ -319,6 +344,8 @@ pub struct PassageResult {
     pub matches: Vec<MatchRow>,
     pub elapsed_ms: u64,
     pub cancelled: bool,
+    /// `lemma-slop` / `surface` when the whole passage was the query.
+    pub fallback: Option<&'static str>,
 }
 
 /// §4.3 single-passage mode on `[tok_start, tok_end)` of one page. Works in
@@ -345,6 +372,8 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
         h.cancel.store(false, Ordering::SeqCst);
         let run_id = insert_run(&conn, h.source.corpus_version(), args.book_id, "passage", &s.params)?;
         let cache = PageCache::new(h.source.as_ref());
+        let dfs = DfCache::new(h.source.as_ref());
+        let count = |t: &[String]| dfs.get(t);
         let done = std::sync::atomic::AtomicU64::new(0);
         let load = |r: &PageRef| {
             let d = done.fetch_add(1, Ordering::Relaxed) + 1;
@@ -362,6 +391,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             a..b,
             &zones,
             if args.exclude_same_book { Some(args.book_id) } else { None },
+            &count,
             &load,
             &cancel,
         )
@@ -387,6 +417,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             matches,
             elapsed_ms: started.elapsed().as_millis() as u64,
             cancelled,
+            fallback: run.fallback,
         })
     })
     .await
@@ -560,6 +591,8 @@ pub async fn reuse_estimate(window: Window, state: State<'_, ManagedLabState>, b
         let sample: Vec<&(usize, std::ops::Range<usize>)> = if n <= 20 { windows.iter().collect() } else { windows.iter().skip(n / 2 - 10).take(20).collect() };
         let cache = PageCache::new(h.source.as_ref());
         let load = |r: &PageRef| cache.get(r);
+        let dfs = DfCache::new(h.source.as_ref());
+        let count = |t: &[String]| dfs.get(t);
         let started = std::time::Instant::now();
         let mut found = 0usize;
         let mut zone_cache: HashMap<usize, Vec<Option<Zone>>> = HashMap::new();
@@ -573,7 +606,7 @@ pub async fn reuse_estimate(window: Window, state: State<'_, ManagedLabState>, b
                     z
                 }
             };
-            let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w.clone(), &zones, Some(book_id), &load, &|| false)
+            let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w.clone(), &zones, Some(book_id), &count, &load, &|| false)
                 .map_err(|e| LabError::Source(e.to_string()))?;
             found += run.matches.len();
         }
@@ -625,6 +658,8 @@ pub async fn reuse_book(window: Window, state: State<'_, ManagedLabState>, book_
         let run_id = insert_run(&conn, h.source.corpus_version(), book_id, "book", &s.params)?;
         let cache = PageCache::new(h.source.as_ref());
         let load = |r: &PageRef| cache.get(r);
+        let dfs = DfCache::new(h.source.as_ref());
+        let count = |t: &[String]| dfs.get(t);
         let total_pages = book.pages.len() as u64;
         let mut found = 0u64;
         let mut windows_done = 0usize;
@@ -641,7 +676,7 @@ pub async fn reuse_book(window: Window, state: State<'_, ManagedLabState>, book_
             let qref = PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id };
             while wi < windows.len() && windows[wi].0 == pi {
                 let w = windows[wi].1.clone();
-                let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w, &zones, Some(book_id), &load, &|| h.cancel.load(Ordering::SeqCst))
+                let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w, &zones, Some(book_id), &count, &load, &|| h.cancel.load(Ordering::SeqCst))
                     .map_err(|e| LabError::Source(e.to_string()))?;
                 for m in run.matches {
                     page_matches.push((qref.clone(), m));

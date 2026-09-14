@@ -324,6 +324,16 @@ impl BookSource for LocalSource {
             Layer::Root => SearchMode::Root,
         };
         let query = q.terms.join(" ");
+        if q.slop > 0 && q.terms.len() > 1 {
+            let (hits, total) = self
+                .engine
+                .phrase_hits(&query, mode, q.slop, &SearchFilters::default())
+                .with_context(|| format!("slop-{} phrase {:?} on {:?}", q.slop, query, q.layer))?;
+            return Ok(Hits {
+                total,
+                pages: hits.into_iter().take(q.limit.max(1)).map(|(id, part, page)| PageRef { book_id: id, part_index: part as u32, page_id: page }).collect(),
+            });
+        }
         let r = self
             .engine
             .search(&query, mode, &SearchFilters::default(), q.limit.max(1), 0)

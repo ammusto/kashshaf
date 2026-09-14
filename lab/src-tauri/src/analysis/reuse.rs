@@ -19,6 +19,13 @@
 //!   `banality_rank` lemmas (`Params::banality_baseline`, derived from the
 //!   frequency table by [`corpus_banal_share`]): a region as banal as the
 //!   corpus is not penalised; one made entirely of top-300 lemmas is.
+//! - **Anchors are chosen by phrase document frequency** (amendment 1.4,
+//!   fix 3), not by token banality: every lemma trigram of the passage is
+//!   counted on the index — rarest-by-rank first, up to `count_budget` of
+//!   them — and the `k` lowest non-zero counts are the anchors; token rank
+//!   only breaks ties. A passage under `fallback_max_tokens` tokens, or one
+//!   with no usable anchor, goes to the index whole: lemma phrase with
+//!   `fallback_slop`, then surface phrase.
 //! - **Banality is rank only by default.** A token is banal when its lemma
 //!   rank in the corpus frequency table is ≤ `banality_rank`, or when it is
 //!   covered by a phrase in `banal_phrases`. The shipped lexicon has no banal
@@ -76,8 +83,21 @@ pub struct Params {
     /// Display threshold on `score` (0.35). Matches below it are still
     /// returned and stored so the UI can lower the bar without re-running.
     pub threshold: f64,
-    /// Tokens inside a Qurʾān or isnād zone are not used as anchors.
+    /// Tokens inside a Qurʾān or isnād zone are not used as anchors. Off by
+    /// default since anchors are chosen by document frequency (amendment
+    /// 1.4): a Qurʾānic trigram that hundreds of pages quote sorts itself
+    /// last, and a passage that is mostly Qurʾān still retrieves.
     pub exclude_zones_from_anchoring: bool,
+    /// Trigrams whose document frequency is looked up per passage (24),
+    /// rarest-by-rank first.
+    pub count_budget: usize,
+    /// Passages shorter than this (12) go to the index whole.
+    pub fallback_max_tokens: usize,
+    /// Slop of the whole-passage lemma phrase (2).
+    pub fallback_slop: u32,
+    /// One hit on an anchor this rare (document frequency ≤ 50) makes a
+    /// page a candidate by itself; commoner anchors need `anchor_hits`.
+    pub rare_df: usize,
     /// Book mode (§4.3 batch): window and stride in tokens.
     pub window: usize,
     pub stride: usize,
@@ -106,7 +126,11 @@ impl Default for Params {
             banality_scale: 0.5,
             banality_baseline: None,
             threshold: 0.35,
-            exclude_zones_from_anchoring: true,
+            exclude_zones_from_anchoring: false,
+            count_budget: 24,
+            fallback_max_tokens: 12,
+            fallback_slop: 2,
+            rare_df: 50,
             window: 60,
             stride: 30,
         }
@@ -246,23 +270,22 @@ pub struct Anchor {
     /// Offset of the trigram in the query.
     pub start: usize,
     pub terms: Vec<String>,
-    /// Sum of the three lemma ranks; larger = rarer = better.
+    /// Sum of the three lemma ranks; larger = rarer (the tiebreaker).
     pub rank_sum: u64,
+    /// Pages the trigram occurs on, from the index.
+    pub df: usize,
 }
 
-/// §4.3: every lemma trigram whose tokens are all non-banal (and, by
-/// default, outside any zone), ranked by the sum of ranks, top `k`. Repeated
-/// trigrams count once.
-pub fn anchors(q: &Seq, tokens: &[Token], params: &Params) -> Vec<Anchor> {
+/// The candidate trigrams of a passage (every lemma trigram outside a zone,
+/// each once), rarest-by-rank first — the order they are counted in.
+fn trigrams(q: &Seq, tokens: &[Token], params: &Params) -> Vec<Anchor> {
     let mut seen: HashMap<[u32; 3], usize> = HashMap::new();
     let mut out: Vec<Anchor> = Vec::new();
     if q.len() < 3 {
         return out;
     }
     for i in 0..=q.len() - 3 {
-        let ok = (i..i + 3).all(|j| {
-            !q.banal[j] && q.lemma[j].is_some() && (!params.exclude_zones_from_anchoring || q.zone[j].is_none())
-        });
+        let ok = (i..i + 3).all(|j| q.lemma[j].is_some() && (!params.exclude_zones_from_anchoring || q.zone[j].is_none()));
         if !ok {
             continue;
         }
@@ -272,12 +295,60 @@ pub fn anchors(q: &Seq, tokens: &[Token], params: &Params) -> Vec<Anchor> {
         }
         seen.insert(key, out.len());
         let rank_sum = (i..i + 3).map(|j| rank_value(q.rank[j])).sum();
-        out.push(Anchor { start: i, terms: tokens[i..i + 3].iter().map(|t| t.lemma.clone()).collect(), rank_sum });
+        out.push(Anchor { start: i, terms: tokens[i..i + 3].iter().map(|t| t.lemma.clone()).collect(), rank_sum, df: 0 });
     }
     out.sort_by(|a, b| b.rank_sum.cmp(&a.rank_sum).then_with(|| a.start.cmp(&b.start)));
-    let k = params.anchors.max(params.min_anchors).max(1);
-    out.truncate(k);
     out
+}
+
+/// Amendment 1.4: anchors by document frequency. The `count_budget` is
+/// spent evenly over `k` slices of the passage (the rarest-by-rank trigrams
+/// of each slice), so every part of it is looked at; then, over everything
+/// counted, the trigrams with the lowest count beyond the query's own page
+/// (a count of 1 is "only here"; a count above `max_candidates` cannot be
+/// retrieved whole and is skipped) are taken greedily without overlap,
+/// rarest by rank on ties — the rarest phrases of a passage cluster where
+/// its wording is peculiar, which is exactly where a parallel differs.
+pub fn anchors(q: &Seq, tokens: &[Token], params: &Params, count: &dyn Fn(&[String]) -> Result<usize>) -> Result<Vec<Anchor>> {
+    let all = trigrams(q, tokens, params);
+    if all.is_empty() {
+        return Ok(Vec::new());
+    }
+    let k = params.anchors.max(params.min_anchors).max(1);
+    let positions = q.len().saturating_sub(2).max(1);
+    let slice_len = positions.div_ceil(k).max(1);
+    let per_slice = (params.count_budget.max(1) / k).max(1);
+    let mut counted: Vec<Anchor> = Vec::new();
+    for slice in 0..k {
+        let lo = slice * slice_len;
+        let hi = lo + slice_len;
+        for a in all.iter().filter(|a| a.start >= lo && a.start < hi).take(per_slice) {
+            let mut a = a.clone();
+            a.df = count(&a.terms)?;
+            counted.push(a);
+        }
+    }
+    let cap = params.max_candidates.max(1);
+    let mut usable: Vec<&Anchor> = counted.iter().filter(|a| a.df >= 2 && a.df <= cap).collect();
+    usable.sort_by(|a, b| a.df.cmp(&b.df).then_with(|| b.rank_sum.cmp(&a.rank_sum)).then_with(|| a.start.cmp(&b.start)));
+    let mut picked: Vec<Anchor> = Vec::new();
+    for a in &usable {
+        if picked.len() >= k {
+            break;
+        }
+        if picked.iter().all(|p| p.start.abs_diff(a.start) >= 3) {
+            picked.push((*a).clone());
+        }
+    }
+    for a in &usable {
+        if picked.len() >= k {
+            break;
+        }
+        if !picked.iter().any(|p| p.start == a.start) {
+            picked.push((*a).clone());
+        }
+    }
+    Ok(picked)
 }
 
 /// Unknown lemmas are rarer than any ranked one; treat them as rank 10⁷ so
@@ -306,17 +377,22 @@ pub fn candidates(
     params: &Params,
 ) -> Result<Vec<Candidate>> {
     let mut hits: HashMap<(u64, u32, u64), usize> = HashMap::new();
+    let mut rare: std::collections::HashSet<(u64, u32, u64)> = std::collections::HashSet::new();
     for a in anchors {
-        let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: a.terms.clone(), limit: params.max_candidates.max(1) };
+        let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: a.terms.clone(), limit: params.max_candidates.max(1), slop: 0 };
         for p in source.find_pages(&q)?.pages {
-            *hits.entry((p.book_id, p.part_index, p.page_id)).or_insert(0) += 1;
+            let key = (p.book_id, p.part_index, p.page_id);
+            *hits.entry(key).or_insert(0) += 1;
+            if a.df > 0 && a.df <= params.rare_df {
+                rare.insert(key);
+            }
         }
     }
     let need = if non_banal < params.small_passage { 1 } else { params.anchor_hits.max(1) };
     let mut out: Vec<Candidate> = hits
         .into_iter()
         .filter(|((b, p, g), n)| {
-            *n >= need
+            (*n >= need || rare.contains(&(*b, *p, *g)))
                 && !(*b == own.book_id && *p == own.part_index && *g == own.page_id)
                 && exclude_book.map(|x| x != *b).unwrap_or(true)
         })
@@ -668,14 +744,59 @@ pub struct PassageRun {
     pub non_banal: usize,
     pub tokens: usize,
     pub matches: Vec<Match>,
+    /// Which whole-passage query retrieved the candidates, when the
+    /// passage was short or had no anchor: `lemma-slop` or `surface`.
+    pub fallback: Option<&'static str>,
+}
+
+/// The whole passage as one index query (amendment 1.4): the lemma phrase
+/// with slop, then the surface phrase. Every hit is a candidate.
+fn fallback_candidates(source: &dyn BookSource, tokens: &[Token], own: &PageRef, exclude_book: Option<u64>, params: &Params) -> Result<(Vec<Candidate>, Option<&'static str>)> {
+    let keep = |p: &PageRef| !(p.book_id == own.book_id && p.part_index == own.part_index && p.page_id == own.page_id) && exclude_book.map(|x| x != p.book_id).unwrap_or(true);
+    let lemmas: Vec<String> = tokens.iter().map(|t| t.lemma.clone()).filter(|l| !l.is_empty()).collect();
+    if lemmas.len() >= 2 {
+        // The compound index refuses a slop phrase whose slots are too wide;
+        // the exact lemma phrase is the next best thing, not an error.
+        for (slop, label) in [(params.fallback_slop, "lemma-slop"), (0, "lemma")] {
+            let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: lemmas.clone(), limit: params.max_candidates.max(1), slop };
+            let hits = match source.find_pages(&q) {
+                Ok(h) => h,
+                Err(_) if slop > 0 => continue,
+                Err(e) => return Err(e),
+            };
+            let pages: Vec<Candidate> = hits.pages.into_iter().filter(keep).map(|page| Candidate { page, hits: 1 }).collect();
+            if !pages.is_empty() {
+                return Ok((pages, Some(label)));
+            }
+            if slop == 0 {
+                break;
+            }
+        }
+    }
+    let surfaces: Vec<String> = tokens.iter().map(|t| normalize_arabic(&t.surface)).filter(|s| !s.is_empty()).collect();
+    if surfaces.len() >= 2 {
+        let q = CandidateQuery { layer: crate::source::Layer::Surface, terms: surfaces, limit: params.max_candidates.max(1), slop: 0 };
+        let pages: Vec<Candidate> = source.find_pages(&q)?.pages.into_iter().filter(keep).map(|page| Candidate { page, hits: 1 }).collect();
+        if !pages.is_empty() {
+            return Ok((pages, Some("surface")));
+        }
+    }
+    Ok((Vec::new(), None))
+}
+
+/// Document frequency of a lemma phrase, as `passage` needs it: one
+/// `find_pages` with limit 1, reading the total.
+pub fn phrase_df(source: &dyn BookSource, terms: &[String]) -> Result<usize> {
+    Ok(source.find_pages(&CandidateQuery { layer: crate::source::Layer::Lemma, terms: terms.to_vec(), limit: 1, slop: 0 })?.total)
 }
 
 /// §4.3 single-passage mode over `page.tokens[range]`.
 ///
-/// `zones` is per token of the whole page; `load` fetches a candidate page
-/// (`BookSource::page`, or a cache in front of it); `cancel` is polled per
-/// candidate. Matches come back sorted by score, all of them — the display
-/// threshold is applied by the caller.
+/// `zones` is per token of the whole page; `count` is the phrase document
+/// frequency ([`phrase_df`], or a cache in front of it); `load` fetches a
+/// candidate page (`BookSource::page`, or a cache in front of it); `cancel`
+/// is polled per candidate. Matches come back sorted by score, all of them
+/// — the display threshold is applied by the caller.
 #[allow(clippy::too_many_arguments)]
 pub fn passage(
     source: &dyn BookSource,
@@ -686,6 +807,7 @@ pub fn passage(
     range: Range<usize>,
     zones: &[Option<Zone>],
     exclude_book: Option<u64>,
+    count: &dyn Fn(&[String]) -> Result<usize>,
     load: &dyn Fn(&PageRef) -> Result<Option<Page>>,
     cancel: &dyn Fn() -> bool,
 ) -> Result<PassageRun> {
@@ -694,9 +816,24 @@ pub fn passage(
     let page_zones: Vec<Option<Zone>> = (range.clone()).map(|i| zones.get(i).copied().flatten()).collect();
     let q = Seq::build(tokens, &mut intern, freq, params, banal_phrases, &page_zones);
     let non_banal = q.non_banal();
-    let anchors = anchors(&q, tokens, params);
     let own = PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id };
-    let cands = if anchors.is_empty() { Vec::new() } else { candidates(source, &anchors, &own, exclude_book, non_banal, params)? };
+    let anchors = anchors(&q, tokens, params, count)?;
+    let mut cands = if anchors.is_empty() { Vec::new() } else { candidates(source, &anchors, &own, exclude_book, non_banal, params)? };
+    // A short passage, or one with no anchor, also goes to the index whole;
+    // its hits join the anchor candidates.
+    let mut fallback = None;
+    if tokens.len() < params.fallback_max_tokens || anchors.is_empty() {
+        let (extra, f) = fallback_candidates(source, tokens, &own, exclude_book, params)?;
+        if !extra.is_empty() {
+            fallback = f;
+            for c in extra {
+                if !cands.iter().any(|x| x.page == c.page) {
+                    cands.push(c);
+                }
+            }
+            cands.truncate(params.max_candidates.max(1));
+        }
+    }
     let mut matches = Vec::new();
     for c in &cands {
         if cancel() {
@@ -705,7 +842,13 @@ pub fn passage(
         let Some(tp) = load(&c.page)? else { continue };
         let t = Seq::build(&tp.tokens, &mut intern, freq, params, banal_phrases, &[]);
         let Some(al) = align_page(&q, &t, params) else { continue };
-        let comp = components(&q, &t, &al.pairs, non_banal, params);
+        let mut comp = components(&q, &t, &al.pairs, non_banal, params);
+        if tokens.len() < params.fallback_max_tokens || anchors.is_empty() {
+            // The user chose this short passage whole: the banality penalty,
+            // meant for chance overlaps of common words in a long window,
+            // would hide exactly what was asked for (amendment 1.4).
+            comp.banality_factor = 1.0;
+        }
         let s = score(&comp, params);
         let pairs: Vec<(usize, usize)> = al.pairs.iter().map(|(i, j)| (i + range.start, *j)).collect();
         let q_start = pairs.iter().map(|p| p.0).min().unwrap();
@@ -727,7 +870,7 @@ pub fn passage(
         });
     }
     matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.components.aligned.cmp(&a.components.aligned)));
-    Ok(PassageRun { anchors, candidates: cands.len(), non_banal, tokens: tokens.len(), matches })
+    Ok(PassageRun { anchors, candidates: cands.len(), non_banal, tokens: tokens.len(), matches, fallback })
 }
 
 // -------------------------------------------------------------- book mode ---
@@ -863,25 +1006,85 @@ mod tests {
     }
 
     #[test]
-    fn anchors_are_rare_non_banal_trigrams_outside_zones() {
+    fn anchors_are_the_lowest_df_trigrams_with_rank_as_tiebreaker() {
         let f = freq(&[("a", 100), ("b", 90), ("c", 80), ("d", 70), ("e", 60), ("z", 1)]);
         let p = Params { banality_rank: 1, anchors: 2, min_anchors: 1, ..Default::default() };
-        // a is banal (rank 1). Trigrams: (b c d) 2+3+4=9, (c d e) 12, (d e z) 4+5+6=15, (e z b) 5+6+2=13, (z b c) 11.
+        // Document frequencies from a fake index: `a b c` is rare (2 pages:
+        // here and one other), `d e z` common (40), everything else 5;
+        // `z b c` only on the query page itself (1) — useless.
+        let df = |t: &[String]| -> Result<usize> {
+            Ok(match t.join(" ").as_str() {
+                "a b c" => 2,
+                "d e z" => 40,
+                "z b c" => 1,
+                _ => 5,
+            })
+        };
         let pg = page(1, 0, 1, "", "a b c d e z b c");
         let mut it = Interner::default();
         let s = Seq::build(&pg.tokens, &mut it, &f, &p, &[], &[]);
-        let a = anchors(&s, &pg.tokens, &p);
-        assert_eq!(a.iter().map(|x| x.terms.join(" ")).collect::<Vec<_>>(), ["d e z", "e z b"]);
-        assert_eq!(a[0].rank_sum, 15);
-        // A zone on z removes both trigrams that use it.
+        let a = anchors(&s, &pg.tokens, &p, &df).unwrap();
+        // Every trigram is counted (budget 24 over 6 positions); `a b c` (df 2)
+        // is rarest, then the 5s — `e z b` is the rarest of those by rank and
+        // does not overlap `a b c`; `z b c` (1: only here) never qualifies.
+        assert_eq!(a.iter().map(|x| (x.terms.join(" "), x.df)).collect::<Vec<_>>(), [("a b c".to_string(), 2), ("e z b".to_string(), 5)]);
+        // A zone on z removes both trigrams that use it, when exclusion is on.
         let zones = vec![None, None, None, None, None, Some(Zone::Quran), None, None];
-        let s = Seq::build(&pg.tokens, &mut it, &f, &p, &[], &zones);
-        let a = anchors(&s, &pg.tokens, &p);
-        assert_eq!(a.iter().map(|x| x.terms.join(" ")).collect::<Vec<_>>(), ["c d e", "b c d"]);
-        // Unknown lemmas count as the rarest.
-        let pg = page(1, 0, 1, "", "b c d q r s");
+        let pz = Params { exclude_zones_from_anchoring: true, ..p.clone() };
+        let s = Seq::build(&pg.tokens, &mut it, &f, &pz, &[], &zones);
+        let a = anchors(&s, &pg.tokens, &pz, &df).unwrap();
+        assert_eq!(a.iter().map(|x| x.terms.join(" ")).collect::<Vec<_>>(), ["a b c", "c d e"]);
+        // Above the candidate cap a trigram cannot be retrieved whole: skipped.
+        let pc = Params { max_candidates: 30, ..p.clone() };
+        let s = Seq::build(&pg.tokens, &mut it, &f, &pc, &[], &[]);
+        let a = anchors(&s, &pg.tokens, &pc, &df).unwrap();
+        assert!(a.iter().all(|x| x.terms.join(" ") != "d e z"), "{:?}", a);
+        // The count budget bounds the lookups: per slice, rarest-by-rank first.
+        let counted = std::cell::RefCell::new(Vec::new());
+        let df2 = |t: &[String]| -> Result<usize> {
+            counted.borrow_mut().push(t.join(" "));
+            Ok(3)
+        };
         let s = Seq::build(&pg.tokens, &mut it, &f, &p, &[], &[]);
-        assert_eq!(anchors(&s, &pg.tokens, &p)[0].terms.join(" "), "q r s");
+        let p2 = Params { count_budget: 2, ..p.clone() };
+        let a = anchors(&s, &pg.tokens, &p2, &df2).unwrap();
+        assert_eq!(counted.borrow().as_slice(), ["c d e", "d e z"], "one count per slice, the rarest by rank in each");
+        assert_eq!(a.len(), 2);
+    }
+
+    /// Fix 3: `من أين تأكلون فقال لسنا نعرف الأسباب` — seven tokens, every
+    /// lemma in the top 300 — has a verbatim twin in another book and must be
+    /// found. Under the old rule (anchors = non-banal trigrams) it had no
+    /// anchor and returned nothing.
+    #[test]
+    fn a_seven_token_all_banal_passage_with_a_verbatim_twin_is_found() {
+        // Every lemma outranks the banality line.
+        let f = freq(&[("من", 9000), ("أين", 8000), ("أكل", 7000), ("قال", 6000), ("ليس", 5000), ("عرف", 4000), ("سبب", 3000), ("كتاب", 100), ("و", 9500)]);
+        let p = Params::default();
+        let words = "من|من اين|أين تاكلون|أكل فقال|قال لسنا|ليس نعرف|عرف الاسباب|سبب";
+        // Thirteen tokens with the context: over the fallback length.
+        let query = page(1, 0, 4, "", &format!("و|و كتاب|كتاب قديم|قديم {} و|و كتاب|كتاب اخر|آخر", words));
+        let twin = page(2, 0, 9, "", &format!("كتاب|كتاب {} كتاب|كتاب", words));
+        let other = page(3, 0, 1, "", "من|من كتاب|كتاب اين|أين كتاب|كتاب");
+        let fake = Fake { pages: vec![query.clone(), twin, other], calls: Mutex::new(vec![]) };
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let count = |t: &[String]| phrase_df(&fake, t);
+        let mut it = Interner::default();
+        let s = Seq::build(&query.tokens[3..10], &mut it, &f, &p, &[], &[]);
+        assert_eq!(s.non_banal(), 0, "every token is banal");
+        // The passage alone: seven tokens, under the fallback length.
+        let run = passage(&fake, &f, &p, &[], &query, 3..10, &[], None, &count, &load, &|| false).unwrap();
+        assert_eq!(run.fallback, Some("lemma-slop"), "{:?}", run);
+        assert_eq!(run.matches.len(), 1);
+        assert_eq!(run.matches[0].target.book_id, 2);
+        assert_eq!(run.matches[0].kind, MatchType::Verbatim, "no banality penalty on a whole-passage query: {:?}", run.matches[0].components);
+        assert_eq!(run.matches[0].components.aligned, 7);
+        // With context around it (13 tokens) the trigram counts find it too:
+        // `من أين تأكلون` is on two pages, the context trigrams on one.
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| false).unwrap();
+        assert!(run.fallback.is_none());
+        assert!(run.anchors.iter().all(|a| a.df > 0));
+        assert_eq!(run.matches.iter().filter(|m| m.target.book_id == 2).count(), 1, "{:?}", run.anchors);
     }
 
     #[test]
@@ -1060,7 +1263,10 @@ mod tests {
                 .pages
                 .iter()
                 .filter(|p| {
-                    let l: Vec<&str> = p.tokens.iter().map(|t| t.lemma.as_str()).collect();
+                    let l: Vec<String> = match q.layer {
+                        crate::source::Layer::Surface => p.tokens.iter().map(|t| normalize_arabic(&t.surface)).collect(),
+                        _ => p.tokens.iter().map(|t| t.lemma.clone()).collect(),
+                    };
                     l.windows(q.terms.len()).any(|w| w.iter().zip(&q.terms).all(|(a, b)| a == b))
                 })
                 .map(|p| PageRef { book_id: p.book_id, part_index: p.part_index, page_id: p.page_id })
@@ -1072,17 +1278,18 @@ mod tests {
     #[test]
     fn passage_mode_end_to_end_on_a_fake_corpus() {
         let f = freq(&[("و", 1000), ("في", 900)]);
-        let p = Params { banality_rank: 2, anchors: 3, min_anchors: 3, banality_baseline: Some(0.3), ..Default::default() };
+        let p = Params { banality_rank: 2, anchors: 6, min_anchors: 3, banality_baseline: Some(0.3), ..Default::default() };
         let query = page(1, 0, 1, "", "و في مدينة الحكمة كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا");
         let reuse = page(2, 0, 7, "", "قال و في مدينة الحكمة كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا ثم قال");
         let partial = page(3, 0, 2, "", "كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا");
         let noise = page(4, 0, 3, "", "لا شيء هنا يذكر عن مدينة");
         let fake = Fake { pages: vec![query.clone(), reuse, partial, noise], calls: Mutex::new(vec![]) };
         let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
-        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &load, &|| false).unwrap();
-        assert_eq!(run.anchors.len(), 3);
+        let count = |t: &[String]| phrase_df(&fake, t);
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| false).unwrap();
+        assert_eq!(run.anchors.len(), 6, "{:?}", run.anchors);
         assert_eq!(run.candidates, 2, "the query's own page is excluded and noise hits nothing");
-        assert_eq!(fake.calls.lock().unwrap().len(), 3, "one phrase query per anchor");
+        assert!(run.anchors.iter().all(|a| a.df >= 2), "{:?}", run.anchors);
         assert_eq!(run.matches.len(), 2);
         let best = &run.matches[0];
         assert_eq!(best.target.book_id, 2);
@@ -1097,10 +1304,10 @@ mod tests {
         assert_eq!(second.target.book_id, 3);
         assert!(second.components.coverage < 1.0 && second.score < best.score);
         // Exclude the whole book 2.
-        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], Some(2), &load, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], Some(2), &count, &load, &|| false).unwrap();
         assert_eq!(run.matches.len(), 1);
         // Cancel before the first candidate keeps the anchors and nothing else.
-        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &load, &|| true).unwrap();
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| true).unwrap();
         assert!(run.matches.is_empty());
     }
 }

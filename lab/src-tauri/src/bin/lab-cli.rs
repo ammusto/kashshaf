@@ -98,6 +98,18 @@ impl Ctx {
         if let Some(r) = arg(args, "--banality-rank") {
             params.banality_rank = r.parse().context("--banality-rank")?;
         }
+        if let Some(r) = arg(args, "--count-budget") {
+            params.count_budget = r.parse().context("--count-budget")?;
+        }
+        if let Some(r) = arg(args, "--anchors") {
+            params.anchors = r.parse().context("--anchors")?;
+        }
+        if args.iter().any(|a| a == "--anchor-zones") {
+            params.exclude_zones_from_anchoring = false;
+        }
+        if let Some(r) = arg(args, "--rare-df") {
+            params.rare_df = r.parse().context("--rare-df")?;
+        }
         params.banality_baseline = Some(reuse::corpus_banal_share(&freq, params.banality_rank));
         let lab_dir = kashshaf_common::lab_data_dir()?;
         let store = Store::open(&lab_dir)?;
@@ -142,7 +154,8 @@ impl Ctx {
     fn passage(&self, page: &Page, a: usize, b: usize, exclude_book: Option<u64>) -> Result<reuse::PassageRun> {
         let zones = self.zones(page);
         let load = |r: &PageRef| self.source.page(r.book_id, r.part_index, r.page_id);
-        reuse::passage(&self.source, &self.freq, &self.params, &[], page, a..b, &zones, exclude_book, &load, &|| false)
+        let count = |t: &[String]| reuse::phrase_df(&self.source, t);
+        reuse::passage(&self.source, &self.freq, &self.params, &[], page, a..b, &zones, exclude_book, &count, &load, &|| false)
     }
 }
 
@@ -212,9 +225,10 @@ fn reuse_eval(args: &[String]) -> Result<()> {
             None => {
                 let best = run.matches.first();
                 println!(
-                    "  #{:2} MISS  anchors {} cands {} matches {} best {} {}",
+                    "  #{:2} MISS  anchors {} ({}) cands {} matches {} best {} {}",
                     g.id,
                     run.anchors.len(),
+                    run.fallback.unwrap_or("-"),
                     run.candidates,
                     run.matches.len(),
                     best.map(|m| format!("{:.3} → {}:{}:{}", m.score, m.target.book_id, m.target.part_index, m.target.page_id)).unwrap_or_else(|| "-".into()),

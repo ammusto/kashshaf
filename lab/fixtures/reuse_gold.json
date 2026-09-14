@@ -1,97 +1,599 @@
 {
-  "_comment": "DRAFT reuse gold set (spec §4.3, Phase 3) — 30 hand-checked pairs from the sample corpus (kashshaf-data-clean/data/sample-mini, corpus sample-mini). q is the query span, t the target span; page-local token indices, end exclusive, exactly as Page.tokens indexes them. Conventions: (1) every pair was read on both sides and is genuine textual reuse — a ḥadīth matn, a saying, a Qurʾānic quotation, or an author's own text repeated or restated; shared isnād openings and bare formulae are not pairs; (2) expected_type is the reader's judgement from the texts (verbatim = same wording up to orthography; inflected = same lemmas, different forms or a few substitutions; paraphrase = same content, reworded); (3) zone notes mark spans that are Qurʾān; (4) BIAS: the candidates were discovered with lab-cli reuse-find and then checked, so the set cannot show what Lab misses — add pairs found by other means before treating recall as a measurement. lab-cli reuse-eval reads this file.",
-  "status": "DRAFT",
-  "corpus_version": "sample-mini",
-  "pairs": [
-    { "id": 1, "note": "Qurʾān 75:37–40 + 36:78–79 quoted in both (zone quran); Iʿlām → Ghazālī", "expected_type": "verbatim", "zone": "quran",
-      "q": { "book_id": 4382, "part_index": 0, "page_id": 107, "tok_start": 223, "tok_end": 266 },
-      "t": { "book_id": 2615, "part_index": 0, "page_id": 298, "tok_start": 308, "tok_end": 344 } },
-    { "id": 2, "note": "ḥadīth: ثم يؤتى بجهنم تعرض كأنها السراب; Iʿlām → Minḥat al-Bārī", "expected_type": "verbatim",
-      "q": { "book_id": 4382, "part_index": 0, "page_id": 118, "tok_start": 300, "tok_end": 349 },
-      "t": { "book_id": 5563, "part_index": 9, "page_id": 6260, "tok_start": 191, "tok_end": 240 } },
-    { "id": 3, "note": "ḥadīth: صلاة الرجل في الجماعة تضعف; Minḥat al-Bārī → Ṣiyānat al-insān (target keeps the second half only)", "expected_type": "verbatim",
-      "q": { "book_id": 5563, "part_index": 1, "page_id": 1013, "tok_start": 93, "tok_end": 139 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 71, "tok_start": 66, "tok_end": 98 } },
-    { "id": 4, "note": "ḥadīth: أعظم الناس أجرا في الصلاة أبعدهم; Minḥat al-Bārī → Ṣiyānat al-insān", "expected_type": "verbatim",
-      "q": { "book_id": 5563, "part_index": 1, "page_id": 1015, "tok_start": 132, "tok_end": 145 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 71, "tok_start": 48, "tok_end": 63 } },
-    { "id": 5, "note": "ḥadīth: Ibn ʿUmar's dream (مقمعة من حديد … شفير جهنم); al-Takhwīf → Minḥat al-Bārī, wording differs throughout", "expected_type": "inflected",
-      "q": { "book_id": 4697, "part_index": 0, "page_id": 59, "tok_start": 90, "tok_end": 150 },
-      "t": { "book_id": 5563, "part_index": 9, "page_id": 6030, "tok_start": 119, "tok_end": 192 } },
-    { "id": 6, "note": "Mālik b. Dīnār's story of the Israelite scholar; al-Zuhd → ʿUyūn al-akhbār, retold", "expected_type": "paraphrase",
-      "q": { "book_id": 527, "part_index": 0, "page_id": 22, "tok_start": 15, "tok_end": 53 },
-      "t": { "book_id": 559, "part_index": 1, "page_id": 847, "tok_start": 1, "tok_end": 37 } },
-    { "id": 7, "note": "ʿAlī's saying اتباع الهوى وطول الأمل; al-Zuhd → Riyāḍ al-sālikīn (فإن … يصد ↔ أما … فيصد)", "expected_type": "paraphrase",
-      "q": { "book_id": 527, "part_index": 0, "page_id": 111, "tok_start": 28, "tok_end": 44 },
-      "t": { "book_id": 6038, "part_index": 1, "page_id": 858, "tok_start": 83, "tok_end": 98 } },
-    { "id": 8, "note": "ʿAlī's saying الآخرة مقبلة … اليوم عمل ولا حساب; al-Zuhd → Minḥat al-Bārī", "expected_type": "verbatim",
-      "q": { "book_id": 527, "part_index": 0, "page_id": 111, "tok_start": 50, "tok_end": 74 },
-      "t": { "book_id": 5563, "part_index": 8, "page_id": 5651, "tok_start": 194, "tok_end": 218 } },
-    { "id": 9, "note": "ويل للعالم من الجاهل, repeated within al-Ṣalāt (Aḥmad) with a changed continuation", "expected_type": "inflected",
-      "q": { "book_id": 314, "part_index": 0, "page_id": 52, "tok_start": 36, "tok_end": 84 },
-      "t": { "book_id": 314, "part_index": 0, "page_id": 119, "tok_start": 123, "tok_end": 165 } },
-    { "id": 10, "note": "Ṭabarānī ḥadīth لو أن غربا من حميم جهنم, repeated within al-Takhwīf", "expected_type": "verbatim",
-      "q": { "book_id": 4697, "part_index": 0, "page_id": 142, "tok_start": 98, "tok_end": 130 },
-      "t": { "book_id": 4697, "part_index": 0, "page_id": 82, "tok_start": 123, "tok_end": 155 } },
-    { "id": 11, "note": "ḥadīth ما بين منكبي الكافر مسيرة ثلاثة أيام; al-Takhwīf → Minḥat al-Bārī", "expected_type": "verbatim",
-      "q": { "book_id": 4697, "part_index": 0, "page_id": 154, "tok_start": 17, "tok_end": 50 },
-      "t": { "book_id": 5563, "part_index": 8, "page_id": 5727, "tok_start": 48, "tok_end": 88 } },
-    { "id": 12, "note": "Ibn ʿAbbās: بين شحمة أذن أحدهم … مسيرة سبعين خريفا, two versions within al-Takhwīf", "expected_type": "inflected",
-      "q": { "book_id": 4697, "part_index": 0, "page_id": 157, "tok_start": 63, "tok_end": 86 },
-      "t": { "book_id": 4697, "part_index": 0, "page_id": 66, "tok_start": 30, "tok_end": 49 } },
-    { "id": 13, "note": "Khallāl ḥadīth يعظم الرجل في النار, repeated on facing pages of al-Takhwīf", "expected_type": "verbatim",
-      "q": { "book_id": 4697, "part_index": 0, "page_id": 159, "tok_start": 120, "tok_end": 140 },
-      "t": { "book_id": 4697, "part_index": 0, "page_id": 158, "tok_start": 89, "tok_end": 109 } },
-    { "id": 14, "note": "كلما نضجت جلودهم with ʿUmar's question, two reports within al-Takhwīf", "expected_type": "inflected",
-      "q": { "book_id": 4697, "part_index": 0, "page_id": 160, "tok_start": 100, "tok_end": 150 },
-      "t": { "book_id": 4697, "part_index": 0, "page_id": 161, "tok_start": 19, "tok_end": 48 } },
-    { "id": 15, "note": "فإذا هو بذيخ ملطخ فيؤخذ بقوائمه; al-Takhwīf → Minḥat al-Bārī (ملطخ/ملتطخ, ويلقى/فيلقى)", "expected_type": "paraphrase",
-      "q": { "book_id": 4697, "part_index": 0, "page_id": 164, "tok_start": 78, "tok_end": 87 },
-      "t": { "book_id": 5563, "part_index": 5, "page_id": 3592, "tok_start": 170, "tok_end": 179 } },
-    { "id": 16, "note": "Abū Ṭālib in the ḍaḥḍāḥ; al-Takhwīf → Minḥat al-Bārī (النبي/رسول الله, نار/النار, تبلغ/يبلغ)", "expected_type": "inflected",
-      "q": { "book_id": 4697, "part_index": 0, "page_id": 167, "tok_start": 79, "tok_end": 106 },
-      "t": { "book_id": 5563, "part_index": 6, "page_id": 3980, "tok_start": 192, "tok_end": 218 } },
-    { "id": 17, "note": "الجاه معنى يرجع إلى صفة, the author quoting his opponent within Ṣiyānat al-insān", "expected_type": "inflected",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 202, "tok_start": 250, "tok_end": 269 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 189, "tok_start": 69, "tok_end": 88 } },
-    { "id": 18, "note": "istisqāʾ: إلى المصلى … وحول رداءه وصلى ركعتين; Ṣiyāna → Minḥat al-Bārī, verb forms differ", "expected_type": "inflected",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 206, "tok_start": 109, "tok_end": 119 },
-      "t": { "book_id": 5563, "part_index": 2, "page_id": 1379, "tok_start": 166, "tok_end": 175 } },
-    { "id": 19, "note": "حياة برزخية وتساوي الحياة البرزخية, quoted back within Ṣiyānat al-insān", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 207, "tok_start": 223, "tok_end": 241 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 225, "tok_start": 135, "tok_end": 152 } },
-    { "id": 20, "note": "Dārimī's ʿĀʾisha report on the drought, repeated within Ṣiyānat al-insān", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 211, "tok_start": 0, "tok_end": 47 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 244, "tok_start": 119, "tok_end": 168 } },
-    { "id": 21, "note": "ḥadīth إن أمتي لا تجتمع على ضلالة, repeated within Ṣiyānat al-insān", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 216, "tok_start": 2, "tok_end": 41 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 306, "tok_start": 172, "tok_end": 207 } },
-    { "id": 22, "note": "ḥadīth بعثت من خير قرون بني آدم; Ṣiyāna → Minḥat al-Bārī (short; isnād words in the span)", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 232, "tok_start": 246, "tok_end": 260 },
-      "t": { "book_id": 5563, "part_index": 5, "page_id": 3767, "tok_start": 107, "tok_end": 121 } },
-    { "id": 23, "note": "wafd Banī ʿĀmir: أنت سيدنا فقال السيد الله, repeated within Ṣiyānat al-insān", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 234, "tok_start": 36, "tok_end": 51 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 543, "tok_start": 219, "tok_end": 234 } },
-    { "id": 24, "note": "ḥadīth of the Jew slapped: لا تخيروني على موسى; Ṣiyāna → Minḥat al-Bārī", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 234, "tok_start": 120, "tok_end": 177 },
-      "t": { "book_id": 5563, "part_index": 4, "page_id": 2698, "tok_start": 85, "tok_end": 142 } },
-    { "id": 25, "note": "the author restating his opponent's dichotomy (المانعين ↔ المجوزين), within Ṣiyānat al-insān", "expected_type": "paraphrase",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 238, "tok_start": 3, "tok_end": 55 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 243, "tok_start": 183, "tok_end": 241 } },
-    { "id": 26, "note": "ḥadīth كان النبي يحب التيامن; Ṣiyāna → Minḥat al-Bārī (التيامن/التيمن)", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 240, "tok_start": 99, "tok_end": 115 },
-      "t": { "book_id": 5563, "part_index": 1, "page_id": 781, "tok_start": 160, "tok_end": 176 } },
-    { "id": 27, "note": "ḥadīth أفضل الصوم صوم داود; Ṣiyāna → Minḥat al-Bārī", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 241, "tok_start": 164, "tok_end": 178 },
-      "t": { "book_id": 5563, "part_index": 7, "page_id": 4864, "tok_start": 45, "tok_end": 59 } },
-    { "id": 28, "note": "ḥadīth يا معشر الشباب من استطاع منكم الباءة; Ṣiyāna → Minḥat al-Bārī", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 242, "tok_start": 204, "tok_end": 233 },
-      "t": { "book_id": 5563, "part_index": 7, "page_id": 4874, "tok_start": 72, "tok_end": 103 } },
-    { "id": 29, "note": "ḥadīth كيف يكسب أحدنا ألف حسنة; Ṣiyāna → Iʿlām al-muwaqqiʿīn", "expected_type": "verbatim",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 242, "tok_start": 59, "tok_end": 72 },
-      "t": { "book_id": 4382, "part_index": 3, "page_id": 1143, "tok_start": 282, "tok_end": 297 } },
-    { "id": 30, "note": "the author restating his opponent on تعظيم النبي بأنواع التعظيم, within Ṣiyānat al-insān", "expected_type": "paraphrase",
-      "q": { "book_id": 6659, "part_index": 0, "page_id": 236, "tok_start": 166, "tok_end": 198 },
-      "t": { "book_id": 6659, "part_index": 0, "page_id": 81, "tok_start": 3, "tok_end": 34 } }
-  ]
+ "_comment": "DRAFT reuse gold set (spec §4.3, Phase 3) — 30 hand-checked pairs from the sample corpus (kashshaf-data-clean/data/sample-mini, corpus sample-mini). q is the query span, t the target span; page-local token indices, end exclusive, exactly as Page.tokens indexes them. Conventions: (1) every pair was read on both sides and is genuine textual reuse — a ḥadīth matn, a saying, a Qurʾānic quotation, or an author's own text repeated or restated; shared isnād openings and bare formulae are not pairs; (2) expected_type is the reader's judgement from the texts (verbatim = same wording up to orthography; inflected = same lemmas, different forms or a few substitutions; paraphrase = same content, reworded); (3) zone notes mark spans that are Qurʾān; (4) BIAS: the candidates were discovered with lab-cli reuse-find and then checked, so the set cannot show what Lab misses — add pairs found by other means before treating recall as a measurement. lab-cli reuse-eval reads this file. Pair 31 lives in the full corpus (corpus: full); on the sample its pages are reported MISSING and skipped.",
+ "status": "DRAFT",
+ "corpus_version": "sample-mini",
+ "pairs": [
+  {
+   "id": 1,
+   "note": "Qurʾān 75:37–40 + 36:78–79 quoted in both (zone quran); Iʿlām → Ghazālī",
+   "expected_type": "verbatim",
+   "zone": "quran",
+   "q": {
+    "book_id": 4382,
+    "part_index": 0,
+    "page_id": 107,
+    "tok_start": 223,
+    "tok_end": 266
+   },
+   "t": {
+    "book_id": 2615,
+    "part_index": 0,
+    "page_id": 298,
+    "tok_start": 308,
+    "tok_end": 344
+   }
+  },
+  {
+   "id": 2,
+   "note": "ḥadīth: ثم يؤتى بجهنم تعرض كأنها السراب; Iʿlām → Minḥat al-Bārī",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 4382,
+    "part_index": 0,
+    "page_id": 118,
+    "tok_start": 300,
+    "tok_end": 349
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 9,
+    "page_id": 6260,
+    "tok_start": 191,
+    "tok_end": 240
+   }
+  },
+  {
+   "id": 3,
+   "note": "ḥadīth: صلاة الرجل في الجماعة تضعف; Minḥat al-Bārī → Ṣiyānat al-insān (target keeps the second half only)",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 5563,
+    "part_index": 1,
+    "page_id": 1013,
+    "tok_start": 93,
+    "tok_end": 139
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 71,
+    "tok_start": 66,
+    "tok_end": 98
+   }
+  },
+  {
+   "id": 4,
+   "note": "ḥadīth: أعظم الناس أجرا في الصلاة أبعدهم; Minḥat al-Bārī → Ṣiyānat al-insān",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 5563,
+    "part_index": 1,
+    "page_id": 1015,
+    "tok_start": 132,
+    "tok_end": 145
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 71,
+    "tok_start": 48,
+    "tok_end": 63
+   }
+  },
+  {
+   "id": 5,
+   "note": "ḥadīth: Ibn ʿUmar's dream (مقمعة من حديد … شفير جهنم); al-Takhwīf → Minḥat al-Bārī, wording differs throughout",
+   "expected_type": "inflected",
+   "q": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 59,
+    "tok_start": 90,
+    "tok_end": 150
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 9,
+    "page_id": 6030,
+    "tok_start": 119,
+    "tok_end": 192
+   }
+  },
+  {
+   "id": 6,
+   "note": "Mālik b. Dīnār's story of the Israelite scholar; al-Zuhd → ʿUyūn al-akhbār, retold",
+   "expected_type": "paraphrase",
+   "q": {
+    "book_id": 527,
+    "part_index": 0,
+    "page_id": 22,
+    "tok_start": 15,
+    "tok_end": 53
+   },
+   "t": {
+    "book_id": 559,
+    "part_index": 1,
+    "page_id": 847,
+    "tok_start": 1,
+    "tok_end": 37
+   }
+  },
+  {
+   "id": 7,
+   "note": "ʿAlī's saying اتباع الهوى وطول الأمل; al-Zuhd → Riyāḍ al-sālikīn (فإن … يصد ↔ أما … فيصد)",
+   "expected_type": "paraphrase",
+   "q": {
+    "book_id": 527,
+    "part_index": 0,
+    "page_id": 111,
+    "tok_start": 28,
+    "tok_end": 44
+   },
+   "t": {
+    "book_id": 6038,
+    "part_index": 1,
+    "page_id": 858,
+    "tok_start": 83,
+    "tok_end": 98
+   }
+  },
+  {
+   "id": 8,
+   "note": "ʿAlī's saying الآخرة مقبلة … اليوم عمل ولا حساب; al-Zuhd → Minḥat al-Bārī",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 527,
+    "part_index": 0,
+    "page_id": 111,
+    "tok_start": 50,
+    "tok_end": 74
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 8,
+    "page_id": 5651,
+    "tok_start": 194,
+    "tok_end": 218
+   }
+  },
+  {
+   "id": 9,
+   "note": "ويل للعالم من الجاهل, repeated within al-Ṣalāt (Aḥmad) with a changed continuation",
+   "expected_type": "inflected",
+   "q": {
+    "book_id": 314,
+    "part_index": 0,
+    "page_id": 52,
+    "tok_start": 36,
+    "tok_end": 84
+   },
+   "t": {
+    "book_id": 314,
+    "part_index": 0,
+    "page_id": 119,
+    "tok_start": 123,
+    "tok_end": 165
+   }
+  },
+  {
+   "id": 10,
+   "note": "Ṭabarānī ḥadīth لو أن غربا من حميم جهنم, repeated within al-Takhwīf",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 142,
+    "tok_start": 98,
+    "tok_end": 130
+   },
+   "t": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 82,
+    "tok_start": 123,
+    "tok_end": 155
+   }
+  },
+  {
+   "id": 11,
+   "note": "ḥadīth ما بين منكبي الكافر مسيرة ثلاثة أيام; al-Takhwīf → Minḥat al-Bārī",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 154,
+    "tok_start": 17,
+    "tok_end": 50
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 8,
+    "page_id": 5727,
+    "tok_start": 48,
+    "tok_end": 88
+   }
+  },
+  {
+   "id": 12,
+   "note": "Ibn ʿAbbās: بين شحمة أذن أحدهم … مسيرة سبعين خريفا, two versions within al-Takhwīf",
+   "expected_type": "inflected",
+   "q": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 157,
+    "tok_start": 63,
+    "tok_end": 86
+   },
+   "t": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 66,
+    "tok_start": 30,
+    "tok_end": 49
+   }
+  },
+  {
+   "id": 13,
+   "note": "Khallāl ḥadīth يعظم الرجل في النار, repeated on facing pages of al-Takhwīf",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 159,
+    "tok_start": 120,
+    "tok_end": 140
+   },
+   "t": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 158,
+    "tok_start": 89,
+    "tok_end": 109
+   }
+  },
+  {
+   "id": 14,
+   "note": "كلما نضجت جلودهم with ʿUmar's question, two reports within al-Takhwīf",
+   "expected_type": "inflected",
+   "q": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 160,
+    "tok_start": 100,
+    "tok_end": 150
+   },
+   "t": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 161,
+    "tok_start": 19,
+    "tok_end": 48
+   }
+  },
+  {
+   "id": 15,
+   "note": "فإذا هو بذيخ ملطخ فيؤخذ بقوائمه; al-Takhwīf → Minḥat al-Bārī (ملطخ/ملتطخ, ويلقى/فيلقى)",
+   "expected_type": "paraphrase",
+   "q": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 164,
+    "tok_start": 78,
+    "tok_end": 87
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 5,
+    "page_id": 3592,
+    "tok_start": 170,
+    "tok_end": 179
+   }
+  },
+  {
+   "id": 16,
+   "note": "Abū Ṭālib in the ḍaḥḍāḥ; al-Takhwīf → Minḥat al-Bārī (النبي/رسول الله, نار/النار, تبلغ/يبلغ)",
+   "expected_type": "inflected",
+   "q": {
+    "book_id": 4697,
+    "part_index": 0,
+    "page_id": 167,
+    "tok_start": 79,
+    "tok_end": 106
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 6,
+    "page_id": 3980,
+    "tok_start": 192,
+    "tok_end": 218
+   }
+  },
+  {
+   "id": 17,
+   "note": "الجاه معنى يرجع إلى صفة, the author quoting his opponent within Ṣiyānat al-insān",
+   "expected_type": "inflected",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 202,
+    "tok_start": 250,
+    "tok_end": 269
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 189,
+    "tok_start": 69,
+    "tok_end": 88
+   }
+  },
+  {
+   "id": 18,
+   "note": "istisqāʾ: إلى المصلى … وحول رداءه وصلى ركعتين; Ṣiyāna → Minḥat al-Bārī, verb forms differ",
+   "expected_type": "inflected",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 206,
+    "tok_start": 109,
+    "tok_end": 119
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 2,
+    "page_id": 1379,
+    "tok_start": 166,
+    "tok_end": 175
+   }
+  },
+  {
+   "id": 19,
+   "note": "حياة برزخية وتساوي الحياة البرزخية, quoted back within Ṣiyānat al-insān",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 207,
+    "tok_start": 223,
+    "tok_end": 241
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 225,
+    "tok_start": 135,
+    "tok_end": 152
+   }
+  },
+  {
+   "id": 20,
+   "note": "Dārimī's ʿĀʾisha report on the drought, repeated within Ṣiyānat al-insān",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 211,
+    "tok_start": 0,
+    "tok_end": 47
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 244,
+    "tok_start": 119,
+    "tok_end": 168
+   }
+  },
+  {
+   "id": 21,
+   "note": "ḥadīth إن أمتي لا تجتمع على ضلالة, repeated within Ṣiyānat al-insān",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 216,
+    "tok_start": 2,
+    "tok_end": 41
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 306,
+    "tok_start": 172,
+    "tok_end": 207
+   }
+  },
+  {
+   "id": 22,
+   "note": "ḥadīth بعثت من خير قرون بني آدم; Ṣiyāna → Minḥat al-Bārī (short; isnād words in the span)",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 232,
+    "tok_start": 246,
+    "tok_end": 260
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 5,
+    "page_id": 3767,
+    "tok_start": 107,
+    "tok_end": 121
+   }
+  },
+  {
+   "id": 23,
+   "note": "wafd Banī ʿĀmir: أنت سيدنا فقال السيد الله, repeated within Ṣiyānat al-insān",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 234,
+    "tok_start": 36,
+    "tok_end": 51
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 543,
+    "tok_start": 219,
+    "tok_end": 234
+   }
+  },
+  {
+   "id": 24,
+   "note": "ḥadīth of the Jew slapped: لا تخيروني على موسى; Ṣiyāna → Minḥat al-Bārī",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 234,
+    "tok_start": 120,
+    "tok_end": 177
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 4,
+    "page_id": 2698,
+    "tok_start": 85,
+    "tok_end": 142
+   }
+  },
+  {
+   "id": 25,
+   "note": "the author restating his opponent's dichotomy (المانعين ↔ المجوزين), within Ṣiyānat al-insān",
+   "expected_type": "paraphrase",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 238,
+    "tok_start": 3,
+    "tok_end": 55
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 243,
+    "tok_start": 183,
+    "tok_end": 241
+   }
+  },
+  {
+   "id": 26,
+   "note": "ḥadīth كان النبي يحب التيامن; Ṣiyāna → Minḥat al-Bārī (التيامن/التيمن)",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 240,
+    "tok_start": 99,
+    "tok_end": 115
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 1,
+    "page_id": 781,
+    "tok_start": 160,
+    "tok_end": 176
+   }
+  },
+  {
+   "id": 27,
+   "note": "ḥadīth أفضل الصوم صوم داود; Ṣiyāna → Minḥat al-Bārī",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 241,
+    "tok_start": 164,
+    "tok_end": 178
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 7,
+    "page_id": 4864,
+    "tok_start": 45,
+    "tok_end": 59
+   }
+  },
+  {
+   "id": 28,
+   "note": "ḥadīth يا معشر الشباب من استطاع منكم الباءة; Ṣiyāna → Minḥat al-Bārī",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 242,
+    "tok_start": 204,
+    "tok_end": 233
+   },
+   "t": {
+    "book_id": 5563,
+    "part_index": 7,
+    "page_id": 4874,
+    "tok_start": 72,
+    "tok_end": 103
+   }
+  },
+  {
+   "id": 29,
+   "note": "ḥadīth كيف يكسب أحدنا ألف حسنة; Ṣiyāna → Iʿlām al-muwaqqiʿīn",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 242,
+    "tok_start": 59,
+    "tok_end": 72
+   },
+   "t": {
+    "book_id": 4382,
+    "part_index": 3,
+    "page_id": 1143,
+    "tok_start": 282,
+    "tok_end": 297
+   }
+  },
+  {
+   "id": 30,
+   "note": "the author restating his opponent on تعظيم النبي بأنواع التعظيم, within Ṣiyānat al-insān",
+   "expected_type": "paraphrase",
+   "q": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 236,
+    "tok_start": 166,
+    "tok_end": 198
+   },
+   "t": {
+    "book_id": 6659,
+    "part_index": 0,
+    "page_id": 81,
+    "tok_start": 3,
+    "tok_end": 34
+   }
+  },
+  {
+   "id": 31,
+   "source": "scholarship",
+   "corpus": "full",
+   "note": "Fix 3 (amendment 1.4): من أين تأكلون فقال لسنا نعرف الأسباب — seven tokens, every lemma in the top 300, verbatim in seven books of the full corpus (al-Sulamī, Ṭabaqāt al-ṣūfiyya; Abū Nuʿaym, Ḥilya; Khaṭīb, Taʾrīkh Baghdād ×2; Ibn Ḥamdūn; Ibn al-Najjār; al-Muḥāḍarāt). The two locations here are in the full corpus, not the sample: reuse-eval needs --corpus pointing at it. Under the banality-anchor rule the passage had no anchor and returned nothing.",
+   "expected_type": "verbatim",
+   "q": {
+    "book_id": 1820,
+    "part_index": 0,
+    "page_id": 120,
+    "tok_start": 167,
+    "tok_end": 174
+   },
+   "t": {
+    "book_id": 5404,
+    "part_index": 0,
+    "page_id": 261,
+    "tok_start": 200,
+    "tok_end": 207
+   }
+  }
+ ]
 }
