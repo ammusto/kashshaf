@@ -1,8 +1,36 @@
 # Changelog
 
-All notable changes to the Kashshaf desktop app, API server, and data pipeline. Format loosely follows Keep a Changelog. Dates are build dates; nothing below has been tagged or published yet.
+All notable changes to the Kashshaf desktop app, API server, and data pipeline, and to Kashshaf Lab. The two products are released separately: `## [X.Y.Z]` sections are Kashshaf, `## [lab X.Y.Z]` sections are Lab. Format loosely follows Keep a Changelog. Dates are build dates; nothing below has been tagged or published yet.
 
 ---
+## [lab 0.1.0] — 2026-09-13
+
+**New: Kashshaf Lab**, a companion application for studying one text in depth
+against the corpus — concordance, keyness, isnād extraction, text reuse and
+Qurʾān detection. It installs and updates separately from Kashshaf and reads
+the same corpus, without ever writing to it.
+
+This first build is the foundation, not yet the analysis. It can:
+
+- find your corpus and open it read-only, or work online against
+  `api.kashshaf.com` when you have no local copy — and tell you which it is
+  doing, and why, in the badge at the top right;
+- browse and search every book in the corpus and choose one to work on;
+- read that book page by page with full tashkil, click any word for its
+  morphology, and select a range of words — the selection later features will
+  act on.
+
+Lab keeps its own data in `KashshafLab` beside Kashshaf's, so deleting
+Kashshaf's local corpus never touches your analyses.
+
+The analysis panels — Stats, Isnād, Reuse, Qurʾān, Network, Poetry — are
+listed and marked with the release each will arrive in.
+
+*Spec sections implemented: §2.1 layout and versioning, §2.2 shared crates,
+§2.3, §2.4 modes, §2.5 directories, §3.1 `BookSource`, §3.2 page model, §3.3
+alignment contract and `verify_alignment`, §6 `analysis.db` bootstrap and
+migrations, §7.1 shell, §7.2 reader.*
+
 ## [0.5.2] — 2026-09-13
 
 **Fixed:** the corpus update prompt now distinguishes an optional update from a first install. If you have a working corpus and a newer one is available, you'll see what changed and can choose to update later.
