@@ -3,6 +3,63 @@
 All notable changes to the Kashshaf desktop app, API server, and data pipeline, and to Kashshaf Lab. The two products are released separately: `## [X.Y.Z]` sections are Kashshaf, `## [lab X.Y.Z]` sections are Lab. Format loosely follows Keep a Changelog. Dates are build dates; nothing below has been tagged or published yet.
 
 ---
+## [lab 0.5.0] — 2026-09-14
+
+Two days of real use turned up six things that distorted results; they come
+first. Then the last two views.
+
+**Fixed**
+
+- **Isnāds and matns cross page breaks.** The extractor read each page on
+  its own, so a chain that began at the foot of a page lost its remaining
+  links and a matn that ran on was cut. It now reads the book as one
+  stream: an open chain continues on the next page and a matn runs to its
+  real end (the next chain, a ḥadīth number, a heading, or five pages). The
+  workbench shows such a span with the page break marked and lets you step
+  through its pages.
+- **An opening link was missed** when a word like *به* stood between the
+  verb and the name (`أخبرنا به يحيى بن محمد العكرمي بالكوفة`), and a place
+  tag (*بالكوفة*, *بمصر*) was swallowed into the name. Both are handled; the
+  place is kept on the transmitter.
+- **Reuse found nothing for a passage made of common words** (`من أين
+  تأكلون فقال لسنا نعرف الأسباب`) although it occurs verbatim in seven
+  books. Anchors are now chosen by how rare a phrase is in the corpus, not by
+  how rare its words are, and a short passage is also looked up whole. On the
+  full corpus the gold set went from 26 to 30 of 31 found.
+- **Building the frequency snapshot took about an hour**; it takes 40 s on
+  the full corpus, gives the same bytes, and happens by itself the first
+  time keyness or reuse needs it.
+- **Dev builds missed an installed corpus** in the per-user data folder.
+- **A Qurʾānic phrase that occurs in several āyāt** (`فبأي آلاء ربكما
+  تكذبان`) was reported as one āya; it is now marked ambiguous with every
+  āya listed.
+
+**Workbench and panels**
+
+- Clicking a transmitter row opens the reader at that occurrence with the
+  name highlighted (a grouped row offers its occurrences); clicking a name
+  in the text selects its row. Clicking the pane background, or Escape,
+  clears the highlight.
+- The isnād and Qurʾān parameters moved behind a gear beside the panel's
+  main button, with Apply and Reset; they are remembered.
+- The Qurʾān table scrolls to every row, drops the volume prefix for
+  single-volume books, and trades four columns for an ⓘ that opens the
+  details — agreement, cue, every reading, and the āya with one āya of
+  context in imlāʾī or Uthmani.
+
+**New: Network.** The transmission network of the current book, built
+from the isnāds you have confirmed and the transmitters you have linked:
+persons as nodes, "B transmitted from A" as edges weighted by count. A
+force layout with a node cap and a minimum edge weight; click a person for
+their neighbourhood and their transmitter rows; the author's direct sources
+by count; export as CSV or GraphML.
+
+**New: Poetry (experimental).** Find verse candidates by hemistich markers
+or wide whitespace and, where the text is vowelled, their meter by ʿarūḍ
+scansion — unknown otherwise, never guessed. Table, reader layer, CSV.
+
+*Spec 1.4: §4.2, §4.3, §4.4, §4.5, §4.6, §6.2, §6.4. Phase 4 of the Lab spec.*
+
 ## [lab 0.4.0] — 2026-09-14
 
 **New: Reuse.** Find where a passage of the current book is reused elsewhere

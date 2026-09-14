@@ -146,6 +146,14 @@ Settings ▸ **Open Lab folder** opens it.
 
 ### The frequency snapshot
 
+Built in local mode on first use of keyness or reuse (spec 1.4, fix 4), with
+progress, or from Settings: `corpus.db` holds no per-definition counts, so
+the tokens are counted — as definition ids from the bulk path into a flat
+array, joined to lemma and root strings once at the end. The full corpus
+(7,199 books, 991.6 M tokens) takes 40 s and is byte-identical to the
+shipped `lemma_freq.bin`; the sample 0.23 s. `lab-cli freq-build [--corpus
+DIR] [--out DIR]` times it.
+
 Keyness against the whole corpus needs `lemma_freq.bin` and `root_freq.bin`
 (spec §3.4). They are built once per corpus by
 `kashshaf-data-clean/build_lab_freq.py` and, when a corpus ships them, listed
@@ -155,6 +163,35 @@ Settings ▸ **Build frequency snapshot** scans the corpus once — 1.6 s on the
 25-book sample, several minutes on the full 4.1.0 — with progress and cancel.
 
 ## The isnād workbench
+
+**Spans cross page breaks** (spec 1.4, Phase 4). The extractor runs over a
+book as one stream — each page with the five that follow it — so a chain
+open at a page end continues on the next page and a matn runs to its real
+terminator (the next chain, a ḥadīth-number marker, a heading) or the
+5-page cap. Token offsets in `isnad` and `transmitter` are *stream offsets*
+from the start page's token 0 and may run past its end; `end_part_index /
+end_page_id` (and the matn's) name the page the last token falls on
+(migration 4; NULL = the start page, for rows written before). The
+snapshot covers the start page; re-anchoring anchors on the start. The
+workbench shows a multi-page span with a page-break bar and steps through
+its pages; clicks map through the page offset.
+
+Three token rules came with the stream: a *bridge word* (`به بذلك بهذا لنا
+لي له`) between a verb and a name keeps the door open; a `ب`-fused proper
+noun after a name (`بالكوفة`) is a *place tag*, CONNECT-class, stored on
+the transmitter as `place`; and a chain neither begins with noise before
+its first name nor runs past a comparative closer (`بمعناه نحوه مثله`) —
+without the last, the stream merged consecutive isnād-only ḥadīths that a
+page break used to separate. Two merges remain and are documented in the
+gold set: a BERT `noun_prop` on a common noun (`ائدموه`), and `عن` inside a
+matn (`سأل مسروقا عن الصلاة`) reopening the door.
+
+**Navigation** (fixes 7–8): a transmitter row opens the reader at its
+occurrence with the name highlighted (a grouped row offers its
+occurrences); a token click selects and scrolls to its row; a click on the
+pane background, or Escape, clears the selection. The extraction
+parameters sit behind the gear beside *Extract isnāds* and persist in
+`lab_setting` (`isnad.params`).
 
 **Extract isnāds** runs the §4.2 extractor over the whole current book,
 streaming: each page's candidates are written as the page completes, so a
@@ -223,13 +260,20 @@ produced it.
 
 ### The gold set
 
-`lab/fixtures/isnad_gold.json` holds 40 hand-labelled chains from the sample
-corpus — ḥadīth 16, history 11, adab 11, Shīʿī 2 (the sample has one Shīʿī
-text) — as isnād span, matn boundary and transmitter spans. **It is a draft**
-awaiting review; its conventions are in the file. `tests/isnad_gold.rs`
-scores the extractor against it and prints span F1, transmitter F1 (exact and
-IoU ≥ 0.8), matn-start accuracy and per-genre figures. Those numbers are the
-baseline, not a gate (spec §9).
+`lab/fixtures/isnad_gold.json` holds 42 hand-labelled chains from the sample
+corpus — ḥadīth 17, history 11, adab 12, Shīʿī 2 — as isnād span, matn
+boundary and transmitter spans, plus two *inline* chains given as tokens
+(the `أخبرنا به يحيى بن محمد العكرمي بالكوفة` chain of fix 2, which is not in
+the sample, and a copy of it with page breaks inside a transmitter and the
+matn). Chain 41 crosses a page break (ʿUyūn al-akhbār 96→97); chain 43
+documents the `عن`-in-matn merge. **It is a draft** awaiting review; its
+conventions are in the file. `tests/isnad_gold.rs` scores the extractor
+against it — windowed the way a whole-book run is — and prints span F1,
+transmitter F1 (exact and IoU ≥ 0.8), matn-start accuracy and per-genre
+figures; the inline chains run without a corpus. Those numbers are the
+baseline, not a gate (spec §9). Phase 4 left the original 40 chains'
+numbers unchanged (span F1 0.769, transmitter F1 0.828); with the three
+added chains the baseline is span F1 0.756, transmitter F1 0.824.
 
 ## Text reuse
 
@@ -249,6 +293,25 @@ without re-running. Confirm writes the pair to `reuse_gold`.
 (stride 30) of the book through passage mode after a 20-window trial gives
 the estimate; progress is per page; cancel keeps the pages done. Results are
 the ranked source-book table, per-book match lists and a reader layer.
+
+**Anchors** (spec 1.4, fix 3). Token banality was the wrong unit for anchor
+selection: `من أين تأكلون فقال لسنا نعرف الأسباب` is made of top-300 lemmas
+and had no anchor. Now every lemma trigram is a candidate; the count budget
+(24 lookups) is spent evenly over six slices of the passage, each trigram's
+document frequency comes from the index (`find_pages` with limit 1), and the
+trigrams with the lowest count *beyond the query's own page* (1 = "only
+here") and within the candidate cap are taken greedily without overlap,
+rank breaking ties — the rarest phrases of a passage cluster where its
+wording is peculiar, which is exactly where a parallel differs, so an
+anchor per region matters. One hit on an anchor with df ≤ 50 makes a page a
+candidate by itself. A passage under 12 tokens or with no anchor also goes
+to the index whole (lemma phrase with slop 2 — `SearchEngine::phrase_hits`;
+the compound index refuses a too-wide slop phrase and the exact phrase is
+tried — then surface phrase) and carries no banality penalty. Zone
+exclusion from anchoring is off by default: a Qurʾānic trigram hundreds of
+pages quote sorts itself last. `reuse-eval` on the full corpus went from
+26/31 to 30/31 (the seven-token passage is gold pair 31, in the full corpus
+only); on the sample 30/30.
 
 **Banality.** A token is banal when its corpus lemma rank ≤ 300 (or it is
 covered by a `banal` lexicon phrase — none is shipped). Two things the spec
@@ -291,7 +354,9 @@ export KASHSHAF_SAMPLE_DIR="D:/DH Projects/kashshaf-data-clean/data/sample-mini"
 ```
 
 The frequency snapshot must be readable (beside the corpus, or in Lab's
-cache directory; see above).
+cache directory; see above). Gold pair 31 lives in the full corpus:
+`./target/release/lab-cli reuse-eval --corpus "$APPDATA/Kashshaf"` measures
+it; on the sample its pages are reported MISSING and skipped.
 
 ## Qurʾānic quotations
 
@@ -310,9 +375,16 @@ quotations* runs every page: a page trigram with at least one non-banal
 token that occurs in the Qurʾān seeds an alignment against the āyāt around
 the hit; ≥ 4 aligned tokens with lemma agreement ≥ 0.8, or ≥ 3 with a `﴿ ﴾`,
 `«»` or `قال تعالى` cue within 3 tokens, is a quotation. Tanzil's 112
-sūra-opening basmalas are not indexed (a basmala is 1:1). Results go to
-`quran_match` — rows you have judged survive a re-run — and show as a table
-by sūra:āya and a reader layer.
+sūra-opening basmalas are not indexed (a basmala is 1:1). A span that aligns
+equally to several āyāt (`فبأي آلاء ربكما تكذبان`) is one hit, marked
+*ambiguous*, whose primary reading is the first in muṣḥaf order with every
+other āya listed (`also` / `ayas_json`; spec 1.4, fix 6). Results go to
+`quran_match` — rows you have judged survive a re-run — and show as a
+virtualised table by Qurʾān reference, page (no volume prefix for a
+single-part book), text and āya, with an ⓘ per row opening a detail view
+(tokens, agreement, cue, the readings, the āya with one āya of context in
+imlāʾī or Uthmani) and a reader layer. Detection parameters sit behind the
+gear and persist in `lab_setting` (`quran.params`).
 
 **Baseline.** `lab/scripts/quran_baseline.py` runs `Quran_Detector`
 (SElBeltagy, Python, offline) on 20 sample pages into
@@ -320,6 +392,32 @@ by sūra:āya and a reader layer.
 the same pages, prints every disagreement and asserts Lab's recall on the
 baseline's matches is at least the baseline's on Lab's (0.800 vs 0.750 on
 the committed fixture). Python is never run by the tests.
+
+## The transmission network
+
+From **confirmed** isnāds with **linked** transmitters only (spec §4.5).
+Nodes are canonical persons; an edge `A → B` means B transmitted from A —
+adjacent links of one chain, A at the higher position (nearer the source) —
+weighted by how many chains carry it; an unlinked transmitter between two
+linked ones breaks adjacency. The panel lays the whole-book graph out by
+force on an SVG canvas with a node cap (default 300, by weighted degree)
+and a minimum edge weight; a node click shows its ego graph and its
+transmitter rows; "the author's direct sources" lists the position-0
+persons by count. Export a CSV edge list or GraphML (`network_export`).
+
+## Poetry (experimental)
+
+Candidate verses (spec §4.6) are lines with a hemistich marker — `۞`, ` ... `,
+or the `%~%` residue — or two near-equal segments split by wide whitespace,
+with page token coordinates (`۞` is itself a token to the corpus tokenizer).
+Meter comes from ʿarūḍ scansion of the **vowelled** surface only: the
+hemistich is written prosodically (mutaḥarrik / sākin — shadda, tanwīn, long
+vowels, hamzat al-waṣl, pausal ending) and matched against the sixteen
+meters' feet with their common ziḥāfāt and the majzūʾ forms
+(`analysis/poetry.rs`); a hemistich that is under 60 % vowelled, or scans
+as nothing, is `unknown` — never a guess — and several matches are reported
+as ambiguous. Nothing is stored; the panel holds the scan, layers the
+current page, and exports CSV.
 
 ## Test
 
@@ -450,8 +548,8 @@ is a port of Kashshaf's `namePatterns.ts` structure.
 
 ## Not done yet
 
-Phases 4–5 of the spec: the network and poetry views, re-anchoring across
-corpus versions (§6.1), "Export everything", and Lab's release pipeline. The
-left rail lists the panels and says which phase each one arrives in. Both
-gold sets are drafts, and the reuse set needs pairs found by other means
-before its recall is a measurement.
+Phase 5 of the spec: re-anchoring across corpus versions (§6.1), "Export
+everything", and Lab's release pipeline. Both gold sets are drafts, and the
+reuse set needs pairs found by other means before its recall is a
+measurement. Meter detection covers the base feet and common ziḥāfāt only;
+a vowelled hemistich with a rarer ʿilla comes out `unknown`.
