@@ -11,16 +11,17 @@ download code (`common/`) and the frontend utilities
 namespace (`lab-vX.Y.Z`), its own release workflow and its own update manifest.
 Releasing one does not release the other.
 
-**The specification is `dev-docs/KASHSHAF_LAB_SPEC.md`** (version 1.2). It is
+**The specification is `dev-docs/KASHSHAF_LAB_SPEC.md`** (version 1.3). It is
 the contract: what Lab must do, in what order, with which formulae and
 thresholds. That directory is gitignored, so the spec is not in the
 repository — this README refers to it by path. Read §1 for the phase order and
 §2 for the architecture before changing anything here.
 
-Current status: **Phase 1** — text statistics (§4.1), the Stats panel (§7.3),
-the bulk token route (§5.1) and the frequency snapshot (§3.4), on top of
-Phase 0's scaffolding, modes, browser and reader. Version `0.2.0`. Nothing has
-been tagged, built as an installer, or published.
+Current status: **Phase 2** — isnād extraction (§4.2), the annotation
+workbench and authority file (§6.2, §6.3, §7.4), the lexicon (§6.5) and the
+isnād/authority exports (§6.6), on top of Phase 1's statistics and Phase 0's
+scaffolding. Version `0.3.0`. Nothing has been tagged, built as an installer,
+or published.
 
 ---
 
@@ -28,11 +29,13 @@ been tagged, built as an installer, or published.
 
 ```
 lab/
+├── fixtures/             isnad_gold.json — the hand-labelled isnād gold set (DRAFT)
 ├── src-tauri/            kashshaf-lab, the Tauri 2 backend
-│   ├── lexicons/         shipped defaults (stop words); user edits live in analysis.db
+│   ├── lexicons/         shipped defaults: stop words, transmission verbs, formulae
 │   └── src/
 │       ├── main.rs       Tauri setup and the command registry
 │       ├── mode.rs       local | api | unavailable, resolved at startup (§2.4)
+│       ├── lexicon.rs    lexicon_entry: shipped defaults, re-sync, user edits (§6.5)
 │       ├── source/       BookSource and its two implementations (§3.1), the
 │       │                 api-mode bulk cache (§2.5), the frequency snapshot (§3.4)
 │       ├── analysis/     algorithms — pure Rust, no Tauri or HTTP types (§4)
@@ -40,7 +43,8 @@ lab/
 │       ├── store.rs      analysis.db and its migrations (§6)
 │       └── bin/          lab-bench, which measures the §8 targets
 └── src/                  React 18 + TypeScript + Tailwind v4 frontend
-    └── components/stats/ the Stats panel (§7.3) and its virtualised table
+    ├── components/stats/ the Stats panel (§7.3) and its virtualised table
+    └── components/isnad/ the isnād workbench (§7.4)
 ```
 
 Shared with Kashshaf, and changed with care because two apps depend on it:
@@ -99,11 +103,11 @@ the top right:
 - **local** — `kashshaf-common` found a readable corpus in Kashshaf's data
   directory. Lab opens it read-only. Every feature is available.
 - **api** — no local corpus; Lab talks to `https://api.kashshaf.com`. The
-  browser, the reader and every Stats tab work through the bulk token fetch
-  (§5.1), cached on disk. Keyness against the corpus needs the frequency
-  snapshot the corpus ships (§3.4); keyness against a chosen set of books is
-  capped at 8 books online because of the server's bulk limits. Both say so
-  in place.
+  browser, the reader, every Stats tab and the isnād workbench work through
+  the bulk token fetch (§5.1), cached on disk. Keyness against the corpus
+  needs the frequency snapshot the corpus ships (§3.4); keyness against a
+  chosen set of books is capped at 8 books online because of the server's
+  bulk limits. Both say so in place.
 - **unavailable** — neither worked. Lab still opens and shows both reasons.
 
 Downloading the corpus in Kashshaf makes it available to Lab as well: they read
@@ -123,7 +127,8 @@ Lab never writes to the corpus (spec ground rule 2). Its own directory is
 `~/Library/Application Support/KashshafLab` on macOS,
 `~/.local/share/KashshafLab` on Linux — holding:
 
-- `analysis.db` — settings (the stop list) now; annotations from Phase 2
+- `analysis.db` — settings, the lexicon, every isnād and transmitter, the
+  authority file, and the audit log (`equivalence_log`)
 - `cache/` — api-mode bulk bodies (size-capped, LRU by last use) and the
   frequency snapshot
 - `exports/` — every export, timestamped
@@ -142,6 +147,83 @@ in its manifest. Lab looks for them in the corpus directory (local) or
 downloads them from the manifest (api). If a local corpus has none,
 Settings ▸ **Build frequency snapshot** scans the corpus once — 1.6 s on the
 25-book sample, several minutes on the full 4.1.0 — with progress and cancel.
+
+## The isnād workbench
+
+**Extract isnāds** runs the §4.2 extractor over the whole current book,
+streaming: each page's candidates are written as the page completes, so a
+cancelled run keeps every finished page. Re-running replaces *candidates*
+only — confirmed, rejected and orphaned rows are your decisions and are kept.
+The parameters (`min links`, `lookahead`, the lexicon groups) are on the
+toolbar; every default in §4.2 is editable there.
+
+The left pane is the reader with the current candidate emphasised: the chain
+outlined, each transmitter in its own colour (six, cycling), every
+transmission verb in one verb colour, the matn dotted. Above it, the
+structured chain `[verb] transmitter ← [verb] transmitter ← … ← matn…`, with
+the confidence and its four components (links, noun_prop share, terminal
+pattern, cleanliness) spelled out — the "why".
+
+The right pane is every transmitter span in the book (or in confirmed isnāds
+only): raw form, parsed parts (kunya / ism / nasab / nisba / laqab), count of
+occurrences of that form, the linked person, and any **suggestion** — an
+unlinked span whose normalized form matches a person's `name_form`. A
+suggestion is shown dashed and is never applied until you link it, singly or
+with *Accept suggestions on page* (which shows the list first, and is one undo
+step).
+
+Every action — confirm, reject, boundary, split, merge, retag, link, same
+person, rename, death year, notes, split person, accept suggestions, mark a
+range as isnād — is one typed operation applied in a transaction and written
+to `equivalence_log`, and each returns the operation that undoes it. The
+session undo/redo stack is a stack of those inverses, so `Ctrl+Z` / `Ctrl+Y`
+walk back and forward through the exact database changes.
+
+### Keyboard map
+
+Decided for Phase 2 (spec §12); the letters are on the buttons too.
+
+| Key | Action |
+|---|---|
+| `c` / `x` | Confirm / reject the current candidate |
+| `j` / `k` | Next / previous candidate |
+| `b` | *Matn starts at…* — then click the word |
+| `e` | *Matn ends at…* — then click the word |
+| `[` / `]` | Nudge the isnād/matn boundary one word left / right |
+| click a word | Select its transmitter (for split, merge, link) and the word (for retag) |
+| `s` | *Split* the selected transmitter — then click the word to split at |
+| `m` | Merge the selected transmitter with its right neighbour; with two rows selected on the right, *Same person* |
+| `r`, then `v` `n` `f` `o` | Retag the selected word as verb / name / formula / other (an override for this span, not a lexicon change); after the same retag three times, an *Add to lexicon* offer appears |
+| `l` | Link the selected transmitter to the selected row's person (an unlinked row creates a person from it) |
+| `a` | Accept suggestions on this page (reviewable, one undo step) |
+| `p` | Person menu for the selected linked row: rename, death year, notes, split |
+| `g` | Group the table by form |
+| `/` | Focus the name search |
+| `Esc` | Leave a mode; close the person menu or the review |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo (session) |
+
+The matn boundary has no drag handles yet: `b`/`e` with a click, or `[`/`]`,
+set it instead. Recorded as a Phase 2 deviation from §7.4.
+
+### Lexicons
+
+`lab/src-tauri/lexicons/transmission.json` (the four groups of §4.2) and
+`formulas.json` are the shipped defaults, inserted into `lexicon_entry` on
+first run and re-synced on every start: a missing shipped entry is inserted,
+user entries and user-disabled shipped entries are never touched. Entries are
+normalized surfaces; multi-token entries match as sequences; a leading `و`/`ف`
+is tolerated. Every stored isnād records the hash of the lexicon that
+produced it.
+
+### The gold set
+
+`lab/fixtures/isnad_gold.json` holds 40 hand-labelled chains from the sample
+corpus — ḥadīth 16, history 11, adab 11, Shīʿī 2 (the sample has one Shīʿī
+text) — as isnād span, matn boundary and transmitter spans. **It is a draft**
+awaiting review; its conventions are in the file. `tests/isnad_gold.rs`
+scores the extractor against it and prints span F1, transmitter F1 (exact and
+IoU ≥ 0.8), matn-start accuracy and per-genre figures. Those numbers are the
+baseline, not a gate (spec §9).
 
 ## Test
 
@@ -178,6 +260,9 @@ cargo test -p kashshaf-lab --release --test mode_parity
 python ../kashshaf-data-clean/build_lab_freq.py --corpus-db "$KASHSHAF_SAMPLE_DIR/corpus.db" --out-dir /tmp/freq
 KASHSHAF_FREQ_DIR=/tmp/freq cargo test -p kashshaf-lab --release --test freq_snapshot
 
+# The isnād gold baseline and the §8 extraction speed
+cargo test -p kashshaf-lab --release --test isnad_gold -- --nocapture
+
 # The engine's bulk path against its per-page path
 cargo test -p kashshaf-engine --release --test book_pages
 ```
@@ -191,6 +276,8 @@ cargo run -p kashshaf-lab --release --bin lab-bench -- "D:/DH Projects/kashshaf-
 With no argument it measures whatever corpus Lab would open normally. On the
 sample's largest book (6,336 pages): opening it (`page_refs`) 14 ms; loading
 it whole 0.26 ms/page, i.e. 129 ms per 500 pages against the < 1 s target.
+Isnād extraction over the whole 4.1M-token sample: 2.1 s, i.e. 0.5 s per
+million tokens against the < 10 s target.
 
 ## The alignment contract
 
@@ -215,17 +302,17 @@ If you change either tokenizer, change both, and run all four. The reader also
 checks the page in front of the user and disables its overlay rather than
 highlighting the wrong words if that page does not align.
 
-## The statistics
+## The algorithms
 
-Every number in the Stats panel comes from a pure function in
-`lab/src-tauri/src/analysis/` over a `BookText` — the book as one interned
-token stream on a layer. The formulae and their references are in each
-module's header; the unit tests check them against hand-computed values
-(Rayson & Garside's G² example, Gries's DP example, a worked collocation
-table). The concordance matches with the engine's own rules — `normalize_arabic`
-and the glob grammar on surface, exact lemma, `normalize_root_query` on root —
-plus Kashshaf's `و ف ب ل ك` proclitic expansion, so a hit in Lab is a hit in
-Kashshaf.
+Every number in the Stats panel and every candidate in the workbench comes
+from a pure function in `lab/src-tauri/src/analysis/`. The formulae and their
+references are in each module's header; the unit tests check them against
+hand-computed values. The isnād extractor (`isnad.rs`) is §4.2's state
+machine over the five token classes; its header records the three places it
+departs from the letter of the spec and why (the corpus tags names `noun`, not
+`noun_prop`; a name must be introduced by a verb, `عن` or a kin/nasab
+connector; the Prophet ends a chain). Transmitter segmentation (`names.rs`)
+is a port of Kashshaf's `namePatterns.ts` structure.
 
 ## Conventions
 
@@ -240,8 +327,12 @@ Kashshaf.
   be tested on fixtures and gives the same answer in both modes — which
   `tests/mode_parity.rs` checks against a live API.
 - **Batch work reports and can be cancelled.** Loading a book, building a
-  reference set, building the snapshot: progress through `stats-progress`,
-  cancel through `stats_cancel` (ground rule 6).
+  reference set, building the snapshot, extracting isnāds: progress through
+  an event, cancel through `stats_cancel` (ground rule 6).
+- **Every annotation change is an `Op`.** Applied in a transaction, logged to
+  `equivalence_log`, and it returns its inverse — undo is `apply(inverse)`.
+- **Suggestions are never written.** A matching `name_form` is shown; only a
+  link writes.
 - **Migrations are forward-only.** Add a numbered entry to `MIGRATIONS` in
   `store.rs`; never edit one that has shipped.
 - **Versions.** `lab/package.json` and `lab/src-tauri/Cargo.toml` carry Lab's
@@ -254,6 +345,7 @@ Kashshaf.
 
 ## Not done yet
 
-Phases 2–5 of the spec: the isnād workbench and authority file, text reuse,
-Qurʾān detection, the network and poetry views, and Lab's release pipeline.
-The left rail lists them and says which phase each one arrives in.
+Phases 3–5 of the spec: text reuse, Qurʾān detection, the network and poetry
+views, re-anchoring across corpus versions (§6.1), "Export everything", and
+Lab's release pipeline. The left rail lists the panels and says which phase
+each one arrives in.

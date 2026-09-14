@@ -3,6 +3,42 @@
 All notable changes to the Kashshaf desktop app, API server, and data pipeline, and to Kashshaf Lab. The two products are released separately: `## [X.Y.Z]` sections are Kashshaf, `## [lab X.Y.Z]` sections are Lab. Format loosely follows Keep a Changelog. Dates are build dates; nothing below has been tagged or published yet.
 
 ---
+## [lab 0.3.0] — 2026-09-14
+
+**New: the Isnād workbench.** Lab finds the chains of transmission in the
+current book and gives you a place to check them.
+
+- **Extract isnāds** reads the whole book and marks every candidate chain,
+  with a confidence score and the reasons behind it. Extraction streams page
+  by page, can be cancelled, and never discards a decision you have made.
+- **Review** each candidate in the text: the chain outlined, every
+  transmitter in its own colour, the transmission verbs and the matn in
+  theirs, with the chain laid out as `[verb] transmitter ← [verb]
+  transmitter ← … ← matn` above the page. Confirm or reject; move the
+  isnād/matn boundary; split or merge a transmitter; retag a word the
+  machine misread — and after the same correction three times, add it to
+  the lexicon.
+- **Transmitters** in a table on the right: the raw form, its parts (kunya,
+  ism, nasab, nisba, laqab), how often it occurs, and the person it is
+  linked to. A form that matches a person you have already named is
+  *suggested* — shown dashed, never applied until you say so.
+- **The authority file**: link transmitters to persons, declare two the
+  same person, rename, add a death year and notes, split a person back
+  apart. Every action is undoable in the session (Ctrl+Z / Ctrl+Y) and
+  kept permanently in an audit log.
+- **Export** isnāds (one row per transmitter, or nested) and the authority
+  file as CSV or JSON.
+- The transmission-verb and formula lexicons ship with defaults you can
+  edit; your edits survive updates.
+
+Keyboard: `c` confirm, `x` reject, `j`/`k` next/previous, `l` link, and the
+rest in the Lab README.
+
+*Spec sections implemented: §4.2 extraction, §6.2 isnād tables, §6.3
+authority file, §6.5 lexicons, §6.6 isnād and authority exports, §7.4
+workbench. Spec amended to 1.3 (§3.1, §3.4). Baseline against the draft gold
+set: isnād span F1 0.77, transmitter F1 0.83.*
+
 ## [lab 0.2.0] — 2026-09-14
 
 **New: the Stats panel.** Six tabs over the current book, on the surface,

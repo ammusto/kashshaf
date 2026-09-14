@@ -4,7 +4,7 @@ name = "kashshaf-lab"
 # §2.1): it is released on its own cadence under `lab-vX.Y.Z` tags, while
 # Kashshaf, the API and the engine keep the workspace version. Bumping one
 # must not bump the other.
-version = "0.2.0"
+version = "0.3.0"
 description = "Kashshaf Lab - in-depth analysis of a single premodern Arabic text"
 authors = ["Kashshaf"]
 edition.workspace = true
