@@ -10,12 +10,27 @@
 //! an `ال`-word right after a `NAME`), `NAME` (`noun_prop`; or any nominal
 //! right after a `VERB` or `CONNECT` — position beats POS), `OTHER`.
 //!
-//! Two departures from the letter of §4.2, both forced by the corpus:
+//! What the corpus actually tags (measured on the gold transmitter spans,
+//! identically through the pipeline's JSONL, `LocalSource` and Kashshaf's
+//! `get_page_tokens` — `tests/pos_audit.rs`): 74% of transmitter tokens are
+//! `noun_prop`, 22% `noun` (the rest `adj`, a few verbs and particles); but
+//! 15% of matn tokens and 22% of the other tokens on those pages are
+//! `noun_prop` too (`بني إسرائيل`, `الله`, place names). Corpus-wide,
+//! `noun_prop` is 11.5% of all tokens. So the tag is strong evidence inside
+//! a chain and no licence to open one.
 //!
-//! - The corpus tags almost every personal name `noun`, not `noun_prop`, and
-//!   nisbas are as often `noun` as `adj` (`السجستاني/noun`, `الدستوائي/noun`
-//!   on the first page of Abū Dāwūd's *Zuhd*). So the "`ال`-adjective after a
-//!   NAME continues the name" rule accepts an `ال`-noun too.
+//! Three departures from the letter of §4.2, each forced by that:
+//!
+//! - A nisba is as often tagged `noun` as `adj` (`السجستاني/noun`,
+//!   `الدستوائي/noun` on the first page of Abū Dāwūd's *Zuhd*), so the
+//!   "`ال`-adjective after a NAME continues the name" rule accepts an
+//!   `ال`-noun too.
+//! - A name span may only *open* when introduced — by a verb, by `عن`, or by
+//!   a nasab/kin connector that is itself introduced. §4.2's bare
+//!   "`noun_prop` is a NAME" let every proper noun in the matn pull the chain
+//!   back open. (A bridge variant — `noun_prop` after `أنّ`/`لي`/`له` opens a
+//!   span — was measured against the gold set and was neutral: span F1
+//!   unchanged, one span gained, three spurious added. Not adopted.)
 //! - §4.2 leaves unspecified where an `OTHER` token judged to be noise inside
 //!   a chain goes. A *nominal* noise token adjacent to the open name span is
 //!   attached to it (`أحمد نظام الدين`, `محمد أمين`); anything else closes the
@@ -96,7 +111,8 @@ pub struct TransmitterSpan {
 pub struct Confidence {
     /// min(links, 5) / 5
     pub links: f64,
-    /// NAME tokens tagged `noun_prop` / all NAME tokens.
+    /// NAME tokens tagged `noun_prop` / all NAME tokens. Informative: on the
+    /// gold set a real chain's transmitters are ~74% `noun_prop`.
     pub noun_prop: f64,
     /// A recognised chain-terminal pattern was found.
     pub terminal: f64,

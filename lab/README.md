@@ -309,9 +309,12 @@ from a pure function in `lab/src-tauri/src/analysis/`. The formulae and their
 references are in each module's header; the unit tests check them against
 hand-computed values. The isnād extractor (`isnad.rs`) is §4.2's state
 machine over the five token classes; its header records the three places it
-departs from the letter of the spec and why (the corpus tags names `noun`, not
-`noun_prop`; a name must be introduced by a verb, `عن` or a kin/nasab
-connector; the Prophet ends a chain). Transmitter segmentation (`names.rs`)
+departs from the letter of the spec and why (nisbas are tagged `noun` as often
+as `adj`; a name must be introduced by a verb, `عن` or a kin/nasab connector,
+because `noun_prop` — 74% of transmitter tokens, but also 15% of matn tokens —
+is evidence, not a licence; the Prophet ends a chain). `tests/pos_audit.rs`
+checks that the POS Lab sees is the POS the pipeline wrote and the POS
+Kashshaf's own `get_page_tokens` returns. Transmitter segmentation (`names.rs`)
 is a port of Kashshaf's `namePatterns.ts` structure.
 
 ## Conventions
