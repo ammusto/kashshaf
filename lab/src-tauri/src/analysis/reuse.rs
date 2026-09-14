@@ -142,6 +142,19 @@ impl Interner {
         let n = self.map.len() as u32;
         *self.map.entry(s.to_string()).or_insert(n)
     }
+
+    /// The id of a string already interned, if any.
+    pub fn get(&self, s: &str) -> Option<u32> {
+        self.map.get(s).copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 }
 
 /// A token sequence on the three layers, with what §4.3's preprocessing adds.
