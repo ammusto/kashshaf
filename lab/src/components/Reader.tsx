@@ -52,6 +52,8 @@ export function Reader({
   onNavigate,
   onSelectRange,
   highlight,
+  layerClass,
+  onTokenClick,
   loading,
   error,
 }: {
@@ -66,6 +68,16 @@ export function Reader({
    * heading (spec §7.3 click-through). Distinct from the user's selection.
    */
   highlight?: [number, number] | null;
+  /**
+   * Extra CSS class per token index — the workbench's highlight layers
+   * (transmitters, verbs, matn, chain outline), spec §7.2/§7.4.
+   */
+  layerClass?: (idx: number) => string | null;
+  /**
+   * When set, a click on a token calls this instead of opening the popup
+   * (the workbench's set-boundary / split / retag modes).
+   */
+  onTokenClick?: (idx: number) => void;
   loading: boolean;
   error: string | null;
 }) {
@@ -118,8 +130,13 @@ export function Reader({
   const onTokenUp = (e: React.MouseEvent, idx: number) => {
     const a = anchor.current;
     anchor.current = null;
-    // A click without a drag opens the token popup; a drag leaves a range.
+    // A click without a drag opens the token popup — or, in a workbench
+    // mode, hands the token to the mode; a drag leaves a range.
     if (a === idx) {
+      if (onTokenClick) {
+        onTokenClick(idx);
+        return;
+      }
       const token = tokenByIdx.get(idx);
       if (token) setPopup({ token, x: e.clientX, y: e.clientY });
     }
@@ -210,7 +227,7 @@ export function Reader({
                   key={i}
                   className={`tok ${inSelection(run.token, selection) ? 'tok-selected' : ''} ${
                     inSelection(run.token, highlight ?? null) ? 'tok-hit' : ''
-                  }`}
+                  } ${layerClass?.(run.token) ?? ''}`}
                   data-token={run.token}
                   onMouseDown={(e) => onTokenDown(e, run.token as number)}
                   onMouseEnter={() => onTokenEnter(run.token as number)}

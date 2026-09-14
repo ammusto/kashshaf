@@ -5,6 +5,7 @@ import { ModeBadge, UnavailableNotice } from './components/ModeBadge';
 import { BookBrowser } from './components/BookBrowser';
 import { Reader } from './components/Reader';
 import { StatsPanel, type HitRef } from './components/stats/StatsPanel';
+import { IsnadWorkbench } from './components/isnad/IsnadWorkbench';
 
 /**
  * The Lab shell (spec §7.1).
@@ -25,7 +26,7 @@ interface Panel {
 const PANELS: Panel[] = [
   { id: 'books', label: 'Books' },
   { id: 'stats', label: 'Stats' },
-  { id: 'isnad', label: 'Isnād', phase: 2 },
+  { id: 'isnad', label: 'Isnād' },
   { id: 'reuse', label: 'Reuse', phase: 3 },
   { id: 'quran', label: 'Qurʾān', phase: 3 },
   { id: 'network', label: 'Network', phase: 4 },
@@ -182,6 +183,10 @@ export default function App() {
         ) : panel === 'stats' ? (
           <main className="flex-1 min-h-0">
             <StatsPanel book={current} onShowHit={showHit} />
+          </main>
+        ) : panel === 'isnad' ? (
+          <main className="flex-1 min-h-0">
+            <IsnadWorkbench book={current} />
           </main>
         ) : (
           <main className="flex-1 flex min-h-0">

@@ -135,3 +135,29 @@ body {
   background: #D4EDDA;
   border-bottom: 2px solid #28A745;
 }
+
+/*
+ * The isnād workbench's layers (spec §7.4): the whole chain outlined, each
+ * transmitter in its own colour (six, cycling), every transmission verb in
+ * one shared verb colour, the matn in a fourth.
+ */
+.lay-chain {
+  box-shadow: 0 -1px 0 0 #2C5F8D, 0 1px 0 0 #2C5F8D;
+}
+.lay-verb {
+  background: #FFE8B0;
+  border-bottom: 2px solid #D97706;
+}
+.lay-matn {
+  background: #EEF2FF;
+  border-bottom: 2px dotted #6366F1;
+}
+.lay-t0 { background: #D4EDDA; border-bottom: 2px solid #28A745; }
+.lay-t1 { background: #FDE2E2; border-bottom: 2px solid #DC3545; }
+.lay-t2 { background: #E0E7FF; border-bottom: 2px solid #4F46E5; }
+.lay-t3 { background: #FCE7F3; border-bottom: 2px solid #DB2777; }
+.lay-t4 { background: #CCFBF1; border-bottom: 2px solid #0D9488; }
+.lay-t5 { background: #FEF3C7; border-bottom: 2px solid #B45309; }
+.lay-t-selected { outline: 2px solid #1A1A1A; outline-offset: 1px; }
+.lay-split-pick { cursor: col-resize; }
+
