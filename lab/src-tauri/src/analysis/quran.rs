@@ -27,7 +27,7 @@ use kashshaf_engine::normalize_arabic;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const DETECTOR_VERSION: &str = "0.1.0";
+pub const DETECTOR_VERSION: &str = "0.2.0";
 
 /// `بسم الله الرحمن الرحيم`: four tokens at the head of every sūra but 1 and 9.
 const BASMALA_TOKENS: usize = 4;
@@ -71,6 +71,20 @@ pub struct Hit {
     pub surface_agree: f64,
     pub aligned: usize,
     pub cue: Option<String>,
+    /// Every other āya the span aligns to equally well (same length and
+    /// agreement) — amendment 1.4: an ambiguous hit lists them all rather
+    /// than choosing one. Empty when unambiguous.
+    pub also: Vec<AyaRef>,
+}
+
+/// One āya range of an ambiguous hit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AyaRef {
+    pub sura: u32,
+    pub aya_start: u32,
+    pub aya_end: u32,
+    pub q_tok_start: usize,
+    pub q_tok_end: usize,
 }
 
 /// The n-gram index over the Qurʾān's lemmas, built once at startup.
@@ -233,13 +247,16 @@ pub fn detect_page(index: &QuranIndex, quran: &QuranText, tokens: &[Token], body
         let key = [lemma_ids[i], lemma_ids[i + 1], lemma_ids[i + 2]];
         let Some(posts) = index.trigrams.get(&key) else { continue };
         for &(si, qo) in posts {
-            // One alignment per (sura, region): skip seeds inside a hit
-            // already found for this sūra.
-            if hits.iter().any(|h| h.sura as usize == si as usize + 1 && h.tok_start <= i && i + 3 <= h.tok_end) {
+            // Skip a seed inside a hit already found for this āya region;
+            // another posting of the same trigram elsewhere in the sūra is
+            // a different reading and still aligns (amendment 1.4).
+            let qo_us = qo as usize;
+            if hits.iter().any(|h| h.sura as usize == si as usize + 1 && h.tok_start <= i && i + 3 <= h.tok_end && h.q_tok_start <= qo_us && qo_us + 3 <= h.q_tok_end) {
                 continue;
             }
-            let region = (si, qo / 64, i / 64);
-            if !tried.insert(region) {
+            // One alignment per posting (amendment 1.4: every āya an
+            // ambiguous span could be counts), not per 64-token region.
+            if !tried.insert((si, qo, i / 64)) {
                 continue;
             }
             let p_lo = i.saturating_sub(params.page_window);
@@ -276,14 +293,34 @@ pub fn detect_page(index: &QuranIndex, quran: &QuranText, tokens: &[Token], body
             let q_tok_end = pairs[aligned - 1].1 + 1;
             let aya_start = quran.aya_at(sura, q_tok_start).map(|a| a.aya).unwrap_or(0);
             let aya_end = quran.aya_at(sura, q_tok_end - 1).map(|a| a.aya).unwrap_or(aya_start);
-            hits.push(Hit { tok_start, tok_end, sura, aya_start, aya_end, q_tok_start, q_tok_end, lemma_agree, surface_agree, aligned, cue });
+            hits.push(Hit { tok_start, tok_end, sura, aya_start, aya_end, q_tok_start, q_tok_end, lemma_agree, surface_agree, aligned, cue, also: vec![] });
         }
     }
-    // Overlapping hits on the page: keep the longer (then the better agreeing).
-    hits.sort_by(|a, b| b.aligned.cmp(&a.aligned).then_with(|| b.lemma_agree.partial_cmp(&a.lemma_agree).unwrap()).then_with(|| a.tok_start.cmp(&b.tok_start)));
+    // Overlapping hits on the page: keep the longer (then the better
+    // agreeing); a hit that ties the kept one exactly — same page span,
+    // same length, same agreement — is not dropped but listed on it as an
+    // alternative reading (amendment 1.4: ambiguous, every āya listed).
+    hits.sort_by(|a, b| {
+        b.aligned
+            .cmp(&a.aligned)
+            .then_with(|| b.lemma_agree.partial_cmp(&a.lemma_agree).unwrap())
+            .then_with(|| b.surface_agree.partial_cmp(&a.surface_agree).unwrap())
+            .then_with(|| a.tok_start.cmp(&b.tok_start))
+            .then_with(|| a.sura.cmp(&b.sura))
+            .then_with(|| a.aya_start.cmp(&b.aya_start))
+    });
     let mut kept: Vec<Hit> = Vec::new();
     for h in hits {
-        if kept.iter().any(|k| h.tok_start < k.tok_end && k.tok_start < h.tok_end) {
+        if let Some(k) = kept.iter_mut().find(|k| h.tok_start < k.tok_end && k.tok_start < h.tok_end) {
+            let tie = k.tok_start == h.tok_start
+                && k.tok_end == h.tok_end
+                && k.aligned == h.aligned
+                && (k.lemma_agree - h.lemma_agree).abs() < 1e-9
+                && (k.surface_agree - h.surface_agree).abs() < 1e-9
+                && !(k.sura == h.sura && k.aya_start == h.aya_start && k.aya_end == h.aya_end);
+            if tie {
+                k.also.push(AyaRef { sura: h.sura, aya_start: h.aya_start, aya_end: h.aya_end, q_tok_start: h.q_tok_start, q_tok_end: h.q_tok_end });
+            }
             continue;
         }
         kept.push(h);
@@ -361,6 +398,26 @@ mod tests {
         assert_eq!(h.lemma_agree, 1.0);
         assert_eq!(h.surface_agree, 1.0);
         assert!(h.cue.is_none());
+    }
+
+    /// Amendment 1.4: `ولا تقربوا الزنا`? — no: a span that aligns equally to
+    /// several āyāt is one hit listing them all. `فبأي آلاء ربكما تكذبان`
+    /// (55:13 and thirty more) is the plainest case.
+    #[test]
+    fn an_equal_score_multi_aya_hit_is_ambiguous_and_lists_every_aya() {
+        let (q, idx) = quran();
+        let page = page_with(q, 55, 13, 0, 4, &["قال", "الشيخ"], &["ثم", "سكت"], false);
+        let hits = detect_page(idx, q, &page.tokens, &page.body, None, &Params::default());
+        assert_eq!(hits.len(), 1, "one hit, not thirty-one: {:?}", hits.iter().map(|h| (h.sura, h.aya_start)).collect::<Vec<_>>());
+        let h = &hits[0];
+        assert_eq!((h.sura, h.aya_start), (55, 13), "the first āya in muṣḥaf order is the primary reading");
+        assert!(h.also.len() >= 20, "ambiguous over {} more āyāt", h.also.len());
+        assert!(h.also.iter().all(|a| a.sura == 55 && a.aya_start > 13));
+        assert!(h.also.iter().all(|a| a.aya_start == a.aya_end));
+        // An unambiguous quotation lists nothing.
+        let page = page_with(q, 2, 255, 0, 12, &["قوله"], &["الآية"], false);
+        let hits = detect_page(idx, q, &page.tokens, &page.body, None, &Params::default());
+        assert!(hits[0].also.is_empty());
     }
 
     #[test]

@@ -107,6 +107,7 @@ fn main() {
             commands::quran::quran_list,
             commands::quran::quran_verdict,
             commands::quran::quran_page,
+            commands::quran::quran_context,
             commands::quran::quran_export,
             // Debug
             commands::debug::verify_alignment,

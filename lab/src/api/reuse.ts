@@ -274,6 +274,31 @@ export interface QuranMatchRow {
   cue: string | null;
   user_verdict: Verdict | null;
   detector_version: string;
+  /** Other āyāt an ambiguous hit aligns to equally (spec 1.4); empty when unique. */
+  also: AyaRef[];
+}
+
+export interface AyaRef {
+  sura: number;
+  aya_start: number;
+  aya_end: number;
+  q_tok_start: number;
+  q_tok_end: number;
+}
+
+export interface AyaText {
+  sura: number;
+  aya: number;
+  text: string;
+  text_uthmani: string;
+}
+
+export interface AyaContext {
+  sura: number;
+  sura_name: string;
+  before: AyaText | null;
+  ayas: AyaText[];
+  after: AyaText | null;
 }
 
 export interface QuranProgress {
@@ -289,6 +314,7 @@ export const quranApi = {
   list: (bookId: number) => invoke<QuranMatchRow[]>('quran_list', { bookId }),
   page: (bookId: number, partIndex: number, pageId: number) => invoke<QuranMatchRow[]>('quran_page', { bookId, partIndex, pageId }),
   verdict: (matchId: number, verdict: Verdict | null) => invoke<QuranMatchRow>('quran_verdict', { matchId, verdict }),
+  context: (sura: number, ayaStart: number, ayaEnd: number) => invoke<AyaContext>('quran_context', { sura, ayaStart, ayaEnd }),
   export: (bookId: number, format: 'csv' | 'json') => invoke<string>('quran_export', { bookId, format }),
   onProgress: (fn: (p: QuranProgress) => void) => listen<QuranProgress>('quran-progress', (e) => fn(e.payload)),
 };

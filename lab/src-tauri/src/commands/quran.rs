@@ -107,11 +107,12 @@ pub async fn quran_run(window: Window, state: State<'_, ManagedLabState>, book_i
             conn.execute_batch("BEGIN").map_err(dberr)?;
             for hit in &hits {
                 let (snap, hash) = snapshot(page, hit.tok_start, hit.tok_end);
+                let ayas_json = if hit.also.is_empty() { None } else { Some(serde_json::to_string(&hit.also).unwrap_or_default()) };
                 let n = conn
                     .execute(
                         "INSERT OR IGNORE INTO quran_match (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
-                         sura, aya_start, aya_end, q_tok_start, q_tok_end, lemma_agree, surface_agree, cue, created_at, detector_version) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                         sura, aya_start, aya_end, q_tok_start, q_tok_end, lemma_agree, surface_agree, cue, created_at, detector_version, ayas_json) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
                         params![
                             corpus_version,
                             page.book_id as i64,
@@ -131,6 +132,7 @@ pub async fn quran_run(window: Window, state: State<'_, ManagedLabState>, book_i
                             hit.cue,
                             now(),
                             DETECTOR_VERSION,
+                            ayas_json,
                         ],
                     )
                     .map_err(dberr)?;
@@ -171,6 +173,9 @@ pub struct MatchRow {
     pub cue: Option<String>,
     pub user_verdict: Option<String>,
     pub detector_version: String,
+    /// The other āyāt an ambiguous hit aligns to equally (amendment 1.4);
+    /// empty when the reading is unique.
+    pub also: Vec<quran::AyaRef>,
 }
 
 fn read_rows(conn: &Connection, q: &crate::state::Quran, sql: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<MatchRow>, LabError> {
@@ -195,6 +200,7 @@ fn read_rows(conn: &Connection, q: &crate::state::Quran, sql: &str, args: &[&dyn
                 r.get::<_, Option<String>>(14)?,
                 r.get::<_, Option<String>>(15)?,
                 r.get::<_, String>(16)?,
+                r.get::<_, Option<String>>(17)?,
             ))
         })
         .map_err(dberr)?
@@ -202,7 +208,7 @@ fn read_rows(conn: &Connection, q: &crate::state::Quran, sql: &str, args: &[&dyn
         .map_err(dberr)?;
     Ok(rows
         .into_iter()
-        .map(|(id, book_id, part_index, page_id, tok_start, tok_end, snapshot, sura, aya_start, aya_end, q_tok_start, q_tok_end, lemma_agree, surface_agree, cue, user_verdict, detector_version)| {
+        .map(|(id, book_id, part_index, page_id, tok_start, tok_end, snapshot, sura, aya_start, aya_end, q_tok_start, q_tok_end, lemma_agree, surface_agree, cue, user_verdict, detector_version, ayas_json)| {
             let sura_name = q.text.sura(sura).map(|s| s.name.clone()).unwrap_or_default();
             let aya_text = q
                 .text
@@ -233,13 +239,14 @@ fn read_rows(conn: &Connection, q: &crate::state::Quran, sql: &str, args: &[&dyn
                 cue,
                 user_verdict,
                 detector_version,
+                also: ayas_json.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default(),
             }
         })
         .collect())
 }
 
 const COLUMNS: &str = "id, book_id, part_index, page_id, tok_start, tok_end, snapshot, sura, aya_start, aya_end, q_tok_start, q_tok_end, \
-    lemma_agree, surface_agree, cue, user_verdict, detector_version";
+    lemma_agree, surface_agree, cue, user_verdict, detector_version, ayas_json";
 
 /// Every stored quotation of a book, by sūra:āya then page.
 #[tauri::command]
@@ -266,6 +273,49 @@ pub async fn quran_page(state: State<'_, ManagedLabState>, book_id: u64, part_in
             &format!("SELECT {} FROM quran_match WHERE book_id = ?1 AND part_index = ?2 AND page_id = ?3 ORDER BY tok_start", COLUMNS),
             &[&(book_id as i64), &(part_index as i64), &(page_id as i64)],
         )
+    })
+    .await
+}
+
+/// One āya with its display texts, for the detail view (fix 10c).
+#[derive(Debug, Clone, Serialize)]
+pub struct AyaText {
+    pub sura: u32,
+    pub aya: u32,
+    pub text: String,
+    pub text_uthmani: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AyaContext {
+    pub sura: u32,
+    pub sura_name: String,
+    pub before: Option<AyaText>,
+    pub ayas: Vec<AyaText>,
+    pub after: Option<AyaText>,
+}
+
+/// The āyāt of a hit with one āya of context on either side (fix 10c).
+#[tauri::command]
+pub async fn quran_context(state: State<'_, ManagedLabState>, sura: u32, aya_start: u32, aya_end: u32) -> Result<AyaContext, LabError> {
+    let cell = state.read().map_err(|_| LabError::Other("Lab state lock poisoned".into()))?.quran.clone();
+    blocking(move || {
+        let q = quran_cell(&cell)?;
+        let s = q.text.sura(sura).ok_or_else(|| LabError::NotFound(format!("sūra {}", sura)))?;
+        let one = |a: u32| -> Result<Option<AyaText>, LabError> {
+            if a < 1 || a > s.ayas {
+                return Ok(None);
+            }
+            let (text, text_uthmani) = q.text.aya_text(sura, a).map_err(|e| LabError::Other(e.to_string()))?;
+            Ok(Some(AyaText { sura, aya: a, text, text_uthmani }))
+        };
+        let mut ayas = Vec::new();
+        for a in aya_start.max(1)..=aya_end.min(s.ayas).max(aya_start) {
+            if let Some(t) = one(a)? {
+                ayas.push(t);
+            }
+        }
+        Ok(AyaContext { sura, sura_name: s.name.clone(), before: one(aya_start.saturating_sub(1))?, ayas, after: one(aya_end + 1)? })
     })
     .await
 }
