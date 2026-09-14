@@ -1,0 +1,108 @@
+//! The book access layer (Lab spec §3.1, §3.2).
+//!
+//! One trait, two implementations: [`local::LocalSource`] over
+//! `kashshaf-engine` and [`api::ApiSource`] over HTTP. Every algorithm in §4
+//! takes `&dyn BookSource` and nothing else, so it can be run against an
+//! in-memory fake in tests and against either mode at runtime.
+
+pub mod api;
+pub mod local;
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+pub use kashshaf_engine::tokens::Token;
+
+/// Book metadata as `metadata.db` stores it. The same shape both modes return
+/// and the same shape the TypeScript `BookMetadata` in `@kashshaf/shared`
+/// expects, so the bridge is a straight serialization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookMetadata {
+    pub id: u64,
+    pub corpus: Option<String>,
+    pub title: String,
+    pub author_id: Option<i64>,
+    pub death_ah: Option<i64>,
+    pub century_ah: Option<i64>,
+    pub genre_id: Option<i64>,
+    pub page_count: Option<i64>,
+    pub token_count: Option<i64>,
+    pub original_id: Option<String>,
+    pub paginated: Option<bool>,
+    pub tags: Option<String>,
+    pub book_meta: Option<String>,
+    pub author_meta: Option<String>,
+    pub in_corpus: Option<bool>,
+    pub parts: Option<i64>,
+    pub metadata_json: Option<String>,
+    pub citation_json: Option<String>,
+}
+
+/// One page and its tokens (spec §3.2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Page {
+    pub book_id: u64,
+    pub part_index: u32,
+    pub page_id: u64,
+    pub part_label: String,
+    pub page_number: String,
+    /// Display text with `<title>` tags, as stored.
+    pub body: String,
+    pub tokens: Vec<Token>,
+}
+
+/// Where a page sits in a book, without its text. Reading order is ascending
+/// `(part_index, page_id)`, which is how the index is built and what
+/// `kashshaf-engine`'s reading-order check verifies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PageRef {
+    pub book_id: u64,
+    pub part_index: u32,
+    pub page_id: u64,
+}
+
+/// Which annotation layer a statistic or a query runs on (spec §4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layer {
+    Surface,
+    Lemma,
+    Root,
+}
+
+/// A phrase/term query used to retrieve reuse candidates (spec §4.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateQuery {
+    pub layer: Layer,
+    /// Matched as a phrase, in order, on `layer`.
+    pub terms: Vec<String>,
+    pub limit: usize,
+}
+
+/// Everything Lab's algorithms may ask of a corpus.
+///
+/// Methods that a mode cannot answer return an error naming the reason, never
+/// a silently degraded answer (ground rule 5: degrade honestly).
+pub trait BookSource: Send + Sync {
+    fn corpus_version(&self) -> &str;
+    fn books(&self) -> Result<Vec<BookMetadata>>;
+    fn book(&self, id: u64) -> Result<Option<BookMetadata>>;
+    /// Every page of a book in reading order. `progress(done, total)` is
+    /// called as pages are produced so a whole-book run can show progress.
+    fn book_pages(&self, id: u64, progress: &dyn Fn(u64, u64)) -> Result<Vec<Page>>;
+    /// The page coordinates of a book in reading order, without its text —
+    /// what the reader needs to page forward and back.
+    fn page_refs(&self, id: u64) -> Result<Vec<PageRef>>;
+    fn page(&self, id: u64, part: u32, page: u64) -> Result<Option<Page>>;
+    /// Corpus-wide frequency of a definition / lemma / root id.
+    fn freq(&self, layer: Layer, id: u32) -> Result<u64>;
+    /// Phrase / term search used for reuse candidates (spec §4.3).
+    fn find_pages(&self, q: &CandidateQuery) -> Result<Vec<PageRef>>;
+}
+
+/// The error a source returns for something its mode genuinely cannot do, so
+/// the UI can show the feature disabled with the reason rather than an
+/// approximation (spec §2.4).
+pub fn unavailable(what: &str, why: &str) -> anyhow::Error {
+    anyhow::anyhow!("{} is not available in this mode: {}", what, why)
+}

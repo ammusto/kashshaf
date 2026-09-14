@@ -1,0 +1,47 @@
+[package]
+name = "kashshaf-lab"
+# Lab carries its own version, deliberately NOT version.workspace (Lab spec
+# §2.1): it is released on its own cadence under `lab-vX.Y.Z` tags, while
+# Kashshaf, the API and the engine keep the workspace version. Bumping one
+# must not bump the other.
+version = "0.1.0"
+description = "Kashshaf Lab - in-depth analysis of a single premodern Arabic text"
+authors = ["Kashshaf"]
+edition.workspace = true
+default-run = "kashshaf-lab"
+
+[lib]
+name = "kashshaf_lab_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "kashshaf-lab"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2.5"
+tauri-plugin-fs = "2"
+# Read-only access to the corpus: index, token cache, page bodies.
+kashshaf-engine = { path = "../../engine" }
+# Corpus directory, manifests, download, settings-DB helpers (spec §2.2).
+kashshaf-common = { path = "../../common" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+anyhow = "1.0"
+thiserror = "1.0"
+tokio = { version = "1", features = ["rt", "sync", "fs"] }
+reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"], default-features = false }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+
+# Measures the Phase 0 paths against the §8 targets. Not bundled: `tauri
+# build` builds the `kashshaf-lab` binary named by `default-run`.
+[[bin]]
+name = "lab-bench"
+path = "src/bin/lab-bench.rs"

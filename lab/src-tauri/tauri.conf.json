@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kashshaf Lab",
+  "version": "../package.json",
+  "identifier": "com.kashshaf.lab",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5174",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Kashshaf Lab",
+        "width": 1400,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      },
+      "wix": {
+        "upgradeCode": "3F1C0A6E-2B84-4D77-9E30-5A6C1B9E44D2"
+      }
+    },
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Antonio Musto (ALLW8R237Y)"
+    }
+  }
+}

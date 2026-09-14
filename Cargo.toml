@@ -1,5 +1,5 @@
 [workspace]
-members = ["engine", "common", "src-tauri", "api"]
+members = ["engine", "common", "src-tauri", "api", "lab/src-tauri"]
 resolver = "2"
 
 # One version number for the desktop app, the API server and the engine.

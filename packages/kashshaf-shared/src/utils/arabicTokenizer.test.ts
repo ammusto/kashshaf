@@ -55,6 +55,13 @@ describe('stripHtml', () => {
     expect(count('نص\n<title id=1 parent=0> باب الإيمان</title>\nقال رسول')).toBe(5);
   });
 
+  it('leaves an unclosed angle bracket as stripped punctuation, not a boundary', () => {
+    // `<[^>]*>` needs a closing '>' to match, so the '<' survives stripHtml —
+    // and '<' is itself in the stripped set, so the words merge.
+    expect(stripHtml('قال < رسول')).toBe('قال < رسول');
+    expect(count('قال<رسول')).toBe(1);
+  });
+
   it('turns <br> into a newline, which is a word boundary', () => {
     expect(stripHtml('قال<br/>رسول')).toBe('قال\nرسول');
     expect(count('قال<br/>رسول')).toBe(2);
