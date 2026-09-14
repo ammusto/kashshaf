@@ -7,6 +7,8 @@ All notable changes to the Kashshaf desktop app, API server, and data pipeline. 
 
 **Fixed:** the corpus update prompt now distinguishes an optional update from a first install. If you have a working corpus and a newer one is available, you'll see what changed and can choose to update later.
 
+**Fixed:** exporting results stopped at 250 rows. Export now pages through the search 250 rows at a time up to the 2,000-row limit and shows its progress ("Exporting 750 / 2,000…"); the same search, filters and ordering as the results list.
+
 ## [0.5.1] — 2026-09-12
 
 Backend fixes to the server deployment and release process. No changes to the app.

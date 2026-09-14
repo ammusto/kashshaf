@@ -4,6 +4,7 @@ import type { SearchContext, AppSearchMode, CombinedSearchQuery, ProximitySearch
 import type { NameFormData } from '../utils/namePatterns';
 import type { SearchAPI, NameSearchForm as NameSearchFormAPI } from '../api';
 import { PAGE_SIZE, MAX_RESULTS, EXPORT_MAX_RESULTS } from '../constants/search';
+import { collectExportRows, pageFetcherFor, type ExportProgress } from '../utils/exportResults';
 import { addToHistory } from '../utils/storage';
 import { useSearchTabsContext } from '../contexts/SearchTabsContext';
 import { generateSearchPatterns, generateDisplayPatterns } from '../utils/namePatterns';
@@ -20,7 +21,8 @@ export interface UseSearchReturn {
   handleProximitySearch: (query: ProximitySearchQuery) => Promise<void>;
   handleNameSearch: (nameFormData: NameFormData[]) => Promise<{ displayPatterns: string[][] }>;
   handleLoadMore: () => Promise<void>;
-  handleExportResults: () => Promise<SearchResult[]>;
+  /** Up to EXPORT_MAX_RESULTS rows of the active tab's search, paged; `onProgress` reports rows collected so far. */
+  handleExportResults: (onProgress?: (p: ExportProgress) => void) => Promise<SearchResult[]>;
   handleResultClick: (result: SearchResult) => Promise<void>;
 }
 
@@ -377,36 +379,14 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
     }
   }, [activeTab, getFilters, updateTab, api, scheduleStatusPolls]);
 
-  // Export handler - re-runs the search with up to EXPORT_MAX_RESULTS
-  const handleExportResults = useCallback(async (): Promise<SearchResult[]> => {
+  // Export handler: re-runs the tab's search page by page (the engine clamps
+  // `limit` to 250 on both hosts, so one request with limit=2000 would
+  // silently return 250 rows) up to EXPORT_MAX_RESULTS, reporting progress.
+  const handleExportResults = useCallback(async (onProgress?: (p: ExportProgress) => void): Promise<SearchResult[]> => {
     if (!activeTab) return [];
-
-    const { searchContext } = activeTab;
-    const filters = getFilters();
-    let exportResults: SearchResults;
-
-    if (searchContext.type === 'name' && searchContext.namePatterns) {
-      const forms: NameSearchFormAPI[] = searchContext.namePatterns.map(patterns => ({ patterns }));
-      exportResults = await api.nameSearch(forms, filters, EXPORT_MAX_RESULTS, 0);
-    } else if (searchContext.type === 'proximity' && searchContext.proximityQuery) {
-      const query = searchContext.proximityQuery;
-      exportResults = await api.proximitySearch(
-        query.term1, query.field1, query.term2, query.field2, query.distance,
-        filters, EXPORT_MAX_RESULTS, 0
-      );
-    } else if (searchContext.type === 'combined' && searchContext.combinedQuery) {
-      exportResults = await api.combinedSearch(
-        searchContext.combinedQuery, filters, EXPORT_MAX_RESULTS, 0
-      );
-    } else if (searchContext.type === 'wildcard' && searchContext.wildcardQuery) {
-      exportResults = await api.wildcardSearch(
-        searchContext.wildcardQuery, filters, EXPORT_MAX_RESULTS, 0
-      );
-    } else {
-      return [];
-    }
-
-    return exportResults.results;
+    const fetchPage = pageFetcherFor(api, activeTab.searchContext, getFilters());
+    if (!fetchPage) return [];
+    return collectExportRows(fetchPage, { max: EXPORT_MAX_RESULTS, pageSize: PAGE_SIZE, onProgress });
   }, [activeTab, getFilters, api]);
 
   // Result click handler

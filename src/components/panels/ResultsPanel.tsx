@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { SearchResults, SearchResult } from '../../types';
 import type { VariantsResponse } from '../../api';
 import { EXPORT_MAX_RESULTS, VARIANTS_MAX_HITS } from '../../constants/search';
+import type { ExportProgress } from '../../utils/exportResults';
 import { VirtualizedResultsList } from '../shared/VirtualizedResultsList';
 import { VariantsList } from './VariantsList';
 import { exportSearchResults, type ExportFormat } from '../../utils/exportData';
@@ -11,7 +12,8 @@ interface ResultsPanelProps {
   results: SearchResults | null;
   onResultClick: (result: SearchResult) => void;
   onLoadMore: () => void;
-  onExport: () => Promise<SearchResult[]>;
+  /** Collects the rows to export (paged); reports progress as it goes. */
+  onExport: (onProgress?: (p: ExportProgress) => void) => Promise<SearchResult[]>;
   loading: boolean;
   loadingMore: boolean;
   errorMessage: string;
@@ -38,6 +40,7 @@ export function ResultsPanel({
   const { booksMap, authorsMap, genresMap } = useBooks();
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
 
   // View toggle: 'results' is the standard hit list, 'variants' shows the
@@ -94,18 +97,25 @@ export function ResultsPanel({
     if (!results || results.total_hits === 0) return;
 
     setExporting(true);
+    setExportProgress(null);
     try {
-      const exportResults = await onExport();
+      const exportResults = await onExport((p) => setExportProgress(p));
       await exportSearchResults(exportResults, format, booksMap, authorsMap, genresMap);
     } catch (err) {
       console.error('Export failed:', err);
     } finally {
       setExporting(false);
+      setExportProgress(null);
     }
   }, [results, onExport, booksMap, authorsMap, genresMap]);
 
   const hasResults = results && results.results.length > 0;
   const exportCount = results ? Math.min(results.total_hits, EXPORT_MAX_RESULTS) : 0;
+  const exportLabel = exporting
+    ? exportProgress
+      ? `Exporting ${exportProgress.done.toLocaleString()} / ${exportProgress.total.toLocaleString()}…`
+      : 'Exporting…'
+    : `Export (${exportCount.toLocaleString()})`;
 
   return (
     <div className="h-full flex flex-col bg-app-surface border-t-2 border-app-border-light">
@@ -173,7 +183,7 @@ export function ResultsPanel({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
               )}
-              {exporting ? 'Exporting...' : `Export (${exportCount.toLocaleString()})`}
+              {exportLabel}
               {!exporting && (
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
