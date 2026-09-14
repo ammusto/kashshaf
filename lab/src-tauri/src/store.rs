@@ -112,7 +112,9 @@ const MIGRATIONS: &[Migration] = &[
         version: 3,
         name: "reuse_run, reuse_match, reuse_gold, quran_match",
         // §6.4 verbatim, plus: an index on the query page (the reader layer
-        // draws from it), `created_at` and `detector_version` on
+        // draws from it); `banal_share`, `aligned`, `anchor_hits` and the
+        // aligned pairs on `reuse_match`, so a match can be re-scored and
+        // redrawn without re-running; `created_at` and `detector_version` on
         // `quran_match` (a whole-book run is repeatable, and the rows must
         // say which detector wrote them), and a uniqueness rule on
         // `quran_match` so a re-run cannot duplicate a span the user has
@@ -135,6 +137,7 @@ const MIGRATIONS: &[Migration] = &[
             target_page_id INTEGER NOT NULL, target_tok_start INTEGER NOT NULL, target_tok_end INTEGER NOT NULL,
             score REAL NOT NULL, type TEXT NOT NULL,
             surface_agree REAL, lemma_agree REAL, root_agree REAL, coverage REAL, banality_factor REAL,
+            banal_share REAL, aligned INTEGER, anchor_hits INTEGER, pairs_json TEXT,
             zone TEXT,
             user_verdict TEXT CHECK (user_verdict IN ('confirmed','rejected'))
         );

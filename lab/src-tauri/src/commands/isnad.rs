@@ -93,7 +93,7 @@ pub struct PersonRow {
     pub linked: i64,
 }
 
-fn db(h: &Handles) -> Result<Connection, LabError> {
+pub(crate) fn db(h: &Handles) -> Result<Connection, LabError> {
     h.store
         .as_ref()
         .ok_or_else(|| LabError::Database("analysis.db is not available".into()))?
@@ -101,7 +101,7 @@ fn db(h: &Handles) -> Result<Connection, LabError> {
         .map_err(|e| LabError::Database(e.to_string()))
 }
 
-fn dberr(e: impl std::fmt::Display) -> LabError {
+pub(crate) fn dberr(e: impl std::fmt::Display) -> LabError {
     LabError::Database(e.to_string())
 }
 
@@ -187,7 +187,7 @@ fn read_isnad(conn: &Connection, id: i64) -> Result<IsnadRow, LabError> {
 
 // ------------------------------------------------------------ extraction ---
 
-fn snapshot(page: &Page, start: usize, end: usize) -> (String, String) {
+pub(crate) fn snapshot(page: &Page, start: usize, end: usize) -> (String, String) {
     let text: Vec<String> = page.tokens[start.min(page.tokens.len())..end.min(page.tokens.len())]
         .iter()
         .map(|t| normalize_arabic(&t.surface))

@@ -7,4 +7,6 @@ pub mod books;
 pub mod corpus;
 pub mod debug;
 pub mod isnad;
+pub mod quran;
+pub mod reuse;
 pub mod stats;

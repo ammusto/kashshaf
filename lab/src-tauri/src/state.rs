@@ -5,15 +5,40 @@
 //! Held behind an `RwLock` so that downloading a corpus can swap a running
 //! api-mode session into local mode without a restart (spec §2.4).
 
+use crate::analysis::quran::QuranIndex;
 use crate::analysis::sections::{self, Section};
 use crate::analysis::text::BookText;
 use crate::error::LabError;
 use crate::mode::{self, LabStatus};
+use crate::quran_data::QuranText;
 use crate::source::{BookSource, Layer, Page};
 use crate::store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+
+/// The shipped Qurʾān and its n-gram index (spec §4.4), built once per
+/// process on first use — or at startup, when `main` warms it.
+pub struct Quran {
+    pub text: QuranText,
+    pub index: QuranIndex,
+}
+
+/// Shared, lazily built; the error is kept so every caller sees the same
+/// reason if the embedded data could not be unpacked.
+pub type QuranCell = Arc<OnceLock<Result<Arc<Quran>, String>>>;
+
+/// Build (or fetch) the Qurʾān for this process.
+pub fn quran(cell: &QuranCell) -> Result<Arc<Quran>, LabError> {
+    cell.get_or_init(|| {
+        let dir = kashshaf_common::lab_data_dir().map_err(|e| e.to_string())?;
+        let text = QuranText::load(&dir).map_err(|e| format!("the shipped Qurʾān could not be loaded: {}", e))?;
+        let index = QuranIndex::build(&text);
+        Ok(Arc::new(Quran { text, index }))
+    })
+    .clone()
+    .map_err(LabError::Other)
+}
 
 /// The current book, loaded whole (spec §7.1: every panel operates on it).
 ///
@@ -60,6 +85,8 @@ pub struct LabState {
     /// Set by the Cancel button; polled by every batch operation (ground
     /// rule 6). Cleared when an operation starts.
     pub cancel: Arc<AtomicBool>,
+    /// The Qurʾān and its index (§4.4).
+    pub quran: QuranCell,
 }
 
 pub type ManagedLabState = Arc<RwLock<LabState>>;
@@ -87,6 +114,7 @@ impl LabState {
             store,
             loaded: Arc::new(Mutex::new(None)),
             cancel: Arc::new(AtomicBool::new(false)),
+            quran: Arc::new(OnceLock::new()),
         }
     }
 
@@ -115,6 +143,7 @@ pub struct Handles {
     pub loaded: Arc<Mutex<Option<Arc<LoadedBook>>>>,
     pub cancel: Arc<AtomicBool>,
     pub store: Option<Arc<Store>>,
+    pub quran: QuranCell,
 }
 
 pub fn handles(state: &ManagedLabState) -> Result<Handles, LabError> {
@@ -124,5 +153,6 @@ pub fn handles(state: &ManagedLabState) -> Result<Handles, LabError> {
         loaded: Arc::clone(&guard.loaded),
         cancel: Arc::clone(&guard.cancel),
         store: guard.store.clone(),
+        quran: Arc::clone(&guard.quran),
     })
 }

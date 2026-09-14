@@ -25,6 +25,19 @@ fn main() {
     }
     let managed: ManagedLabState = Arc::new(RwLock::new(state));
 
+    // The Qurʾān n-gram index is built at startup (spec §4.4), off the
+    // main thread so the window does not wait for it.
+    {
+        let cell = managed.read().map(|s| std::sync::Arc::clone(&s.quran)).expect("fresh lock");
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            match kashshaf_lab_lib::state::quran(&cell) {
+                Ok(q) => eprintln!("[lab] Qurʾān index: {} trigrams in {} ms", q.index.trigram_count(), started.elapsed().as_millis()),
+                Err(e) => eprintln!("[lab] Qurʾān unavailable: {}", e),
+            }
+        });
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -78,6 +91,23 @@ fn main() {
             commands::isnad::lexicon_delete,
             commands::isnad::isnad_export,
             commands::isnad::authority_export,
+            // Reuse (§4.3, §7.5)
+            commands::reuse::reuse_passage,
+            commands::reuse::reuse_rescore,
+            commands::reuse::reuse_verdict,
+            commands::reuse::reuse_runs,
+            commands::reuse::reuse_matches,
+            commands::reuse::reuse_estimate,
+            commands::reuse::reuse_book,
+            commands::reuse::reuse_page_layer,
+            commands::reuse::reuse_export,
+            // Qurʾān (§4.4, §7.6)
+            commands::quran::quran_status,
+            commands::quran::quran_run,
+            commands::quran::quran_list,
+            commands::quran::quran_verdict,
+            commands::quran::quran_page,
+            commands::quran::quran_export,
             // Debug
             commands::debug::verify_alignment,
         ])
