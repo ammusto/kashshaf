@@ -1174,7 +1174,7 @@ mod tests {
         fn book_pages(&self, id: u64, _: &dyn Fn(u64, u64)) -> anyhow::Result<Vec<Page>> { Ok(self.0.iter().filter(|p| p.book_id == id).cloned().collect()) }
         fn page(&self, id: u64, part: u32, page: u64) -> anyhow::Result<Option<Page>> { Ok(self.0.iter().find(|p| p.book_id == id && p.part_index == part && p.page_id == page).cloned()) }
         fn freq_table(&self, _: FreqLayer) -> anyhow::Result<Arc<FreqTable>> { anyhow::bail!("none") }
-        fn find_pages(&self, _: &CandidateQuery) -> anyhow::Result<Vec<PageRef>> { Ok(vec![]) }
+        fn find_pages(&self, _: &CandidateQuery) -> anyhow::Result<crate::source::Hits> { Ok(crate::source::Hits::default()) }
     }
     fn setup() -> (Handles, Connection, Page) {
         let dir = std::env::temp_dir().join(format!("kashshaf-lab-isnad-ops-{}-{}", std::process::id(), rand_suffix()));

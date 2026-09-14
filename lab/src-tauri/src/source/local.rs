@@ -6,12 +6,12 @@
 //! read-only, and nothing in this module issues a write.
 
 use super::freq::{FreqLayer, FreqTable};
-use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Page, PageRef};
+use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, Page, PageRef};
 use std::sync::Mutex;
 use anyhow::{anyhow, Context, Result};
 use kashshaf_engine::{
-    check_corpus_schema_supported, tokens::PageKey, verify_corpus_versions_match, EngineConfig,
-    SearchEngine, TokenCache,
+    check_corpus_schema_supported, tokens::PageKey, verify_corpus_versions_match, EngineConfig, SearchEngine, SearchFilters,
+    SearchMode, TokenCache,
 };
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -314,10 +314,28 @@ impl BookSource for LocalSource {
         ))
     }
 
-    fn find_pages(&self, _q: &CandidateQuery) -> Result<Vec<PageRef>> {
-        // Phase 3 (§4.3 reuse candidates) implements this over the engine's
-        // phrase path.
-        Err(unavailable("Candidate retrieval", "not implemented before Phase 3"))
+    /// A multi-word query on one layer is a phrase query in the engine (the
+    /// same `SearchEngine::search` Kashshaf runs), so an anchor of three lemmas
+    /// returns exactly the pages where they occur in that order.
+    fn find_pages(&self, q: &CandidateQuery) -> Result<Hits> {
+        let mode = match q.layer {
+            Layer::Surface => SearchMode::Surface,
+            Layer::Lemma => SearchMode::Lemma,
+            Layer::Root => SearchMode::Root,
+        };
+        let query = q.terms.join(" ");
+        let r = self
+            .engine
+            .search(&query, mode, &SearchFilters::default(), q.limit.max(1), 0)
+            .with_context(|| format!("candidate query {:?} on {:?}", query, q.layer))?;
+        Ok(Hits {
+            total: r.total_hits,
+            pages: r
+                .results
+                .into_iter()
+                .map(|h| PageRef { book_id: h.id, part_index: h.part_index as u32, page_id: h.page_id })
+                .collect(),
+        })
     }
 
     fn as_local(&self) -> Option<&LocalSource> {

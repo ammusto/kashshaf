@@ -10,10 +10,10 @@
 
 use super::cache::{BulkCache, DEFAULT_MAX_BYTES};
 use super::freq::{FreqLayer, FreqTable};
-use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Page, PageRef, Token};
+use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, Page, PageRef, Token};
 use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::io::BufRead;
 use std::path::Path;
 use std::time::Duration;
@@ -204,6 +204,17 @@ impl ApiSource {
         self.cache.as_ref()
     }
 
+    fn post_json<B: Serialize, T: serde::de::DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
+        self.client
+            .post(format!("{}{}", self.base, path))
+            .json(body)
+            .send()
+            .with_context(|| format!("POST {}", path))?
+            .error_for_status()?
+            .json()
+            .with_context(|| format!("parsing the response to POST {}", path))
+    }
+
     fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.client
             .get(format!("{}{}", self.base, path))
@@ -328,7 +339,58 @@ impl BookSource for ApiSource {
         Ok(t)
     }
 
-    fn find_pages(&self, _q: &CandidateQuery) -> Result<Vec<PageRef>> {
-        Err(unavailable("Candidate retrieval", "not implemented before Phase 3"))
+    /// `POST /search/combined` with one `and_term` whose query is the phrase
+    /// — the server runs the same engine phrase query local mode does. The
+    /// server caps a page of results at 250, so a larger limit pages through
+    /// `offset`.
+    fn find_pages(&self, q: &CandidateQuery) -> Result<Hits> {
+        #[derive(Serialize)]
+        struct Term<'a> {
+            query: String,
+            mode: &'a str,
+        }
+        #[derive(Serialize)]
+        struct Req<'a> {
+            and_terms: Vec<Term<'a>>,
+            or_terms: Vec<Term<'a>>,
+            limit: usize,
+            offset: usize,
+        }
+        #[derive(Deserialize)]
+        struct Hit {
+            id: u64,
+            part_index: u64,
+            page_id: u64,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            total_hits: usize,
+            results: Vec<Hit>,
+        }
+        const SERVER_PAGE: usize = 250;
+        let mode = match q.layer {
+            Layer::Surface => "surface",
+            Layer::Lemma => "lemma",
+            Layer::Root => "root",
+        };
+        let limit = q.limit.max(1);
+        let mut hits = Hits::default();
+        let mut offset = 0usize;
+        loop {
+            let want = (limit - hits.pages.len()).min(SERVER_PAGE);
+            if want == 0 {
+                break;
+            }
+            let req = Req { and_terms: vec![Term { query: q.terms.join(" "), mode }], or_terms: vec![], limit: want, offset };
+            let resp: Resp = self.post_json("/search/combined", &req)?;
+            hits.total = resp.total_hits;
+            let n = resp.results.len();
+            hits.pages.extend(resp.results.into_iter().map(|h| PageRef { book_id: h.id, part_index: h.part_index as u32, page_id: h.page_id }));
+            offset += n;
+            if n < want || offset >= hits.total {
+                break;
+            }
+        }
+        Ok(hits)
     }
 }

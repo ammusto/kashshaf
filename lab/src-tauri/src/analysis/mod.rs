@@ -23,6 +23,7 @@ pub mod isnad;
 pub mod keyness;
 pub mod names;
 pub mod ngrams;
+pub mod reuse;
 pub mod sections;
 pub mod text;
 pub mod verify;

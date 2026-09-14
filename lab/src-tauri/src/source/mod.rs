@@ -84,6 +84,14 @@ pub struct CandidateQuery {
     pub limit: usize,
 }
 
+/// What a candidate query returns: up to `limit` pages, and how many pages
+/// match in all (the phrase's document frequency — how banal it is).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Hits {
+    pub pages: Vec<PageRef>,
+    pub total: usize,
+}
+
 /// Everything Lab's algorithms may ask of a corpus.
 ///
 /// Methods that a mode cannot answer return an error naming the reason, never
@@ -104,8 +112,10 @@ pub trait BookSource: Send + Sync {
     /// wrote, because `Token` carries no ids and a string is what both modes
     /// hold. Errors with the reason when the snapshot is unavailable.
     fn freq_table(&self, layer: FreqLayer) -> Result<Arc<FreqTable>>;
-    /// Phrase / term search used for reuse candidates (spec §4.3).
-    fn find_pages(&self, q: &CandidateQuery) -> Result<Vec<PageRef>>;
+    /// Phrase / term search used for reuse candidates (spec §4.3): the same
+    /// index query in both modes (engine phrase query locally,
+    /// `POST /search/combined` remotely), so the candidate set is the same.
+    fn find_pages(&self, q: &CandidateQuery) -> Result<Hits>;
 
     /// `Some` for the local corpus: what the operations that only make
     /// sense on disk (building the frequency snapshot) need.

@@ -14,6 +14,7 @@
 //!     cargo test -p kashshaf-lab --release --test mode_parity -- --nocapture
 //! ```
 
+use kashshaf_lab_lib::source::{CandidateQuery, Layer};
 use kashshaf_lab_lib::source::{api::ApiSource, local::LocalSource, BookSource};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -215,6 +216,38 @@ fn a_single_page_is_identical_in_both_modes() {
         assert_eq!(a.part_label, b.part_label);
         assert_eq!(a.page_number, b.page_number);
         assert_eq!(a.tokens.len(), b.tokens.len());
+    }
+}
+
+/// Spec §4.3: candidate retrieval is the same index query in both modes,
+/// so an anchor returns the same pages and the same total. A limit above
+/// the server's 250-per-request cap exercises the offset paging.
+#[test]
+fn candidate_retrieval_is_identical_in_both_modes() {
+    let Some(server) = Server::start() else { return };
+    let (local, api) = (local(), server.source());
+    let id = books_with_pages(&local, 1)[0];
+    let page = local.page_refs(id).expect("page_refs")[0];
+    let page = local.page(page.book_id, page.part_index, page.page_id).expect("page").expect("page");
+    // Three anchors from the first page: a rare-ish trigram, a common one
+    // (`قال` phrases hit hundreds of pages), and a bigram.
+    let lemmas: Vec<String> = page.tokens.iter().map(|t| t.lemma.clone()).collect();
+    let mut queries = vec![lemmas[0..3].to_vec(), lemmas[lemmas.len() / 2..lemmas.len() / 2 + 3].to_vec(), lemmas[1..3].to_vec()];
+    queries.push(vec!["قال".into(), "رسول".into(), "الله".into()]);
+    for terms in queries {
+        for limit in [5usize, 600] {
+            let q = CandidateQuery { layer: Layer::Lemma, terms: terms.clone(), limit };
+            let a = local.find_pages(&q).expect("local find_pages");
+            let b = api.find_pages(&q).expect("api find_pages");
+            assert_eq!(a.total, b.total, "total for {:?}", terms);
+            assert_eq!(a.pages.len(), b.pages.len(), "count for {:?} at limit {}", terms, limit);
+            let mut pa = a.pages.clone();
+            let mut pb = b.pages.clone();
+            pa.sort_by_key(|p| (p.book_id, p.part_index, p.page_id));
+            pb.sort_by_key(|p| (p.book_id, p.part_index, p.page_id));
+            assert_eq!(pa, pb, "pages for {:?} at limit {}", terms, limit);
+            assert!(a.pages.len() <= limit && a.pages.len() <= a.total);
+        }
     }
 }
 
