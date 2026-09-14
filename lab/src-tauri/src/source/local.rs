@@ -191,14 +191,38 @@ impl BookSource for LocalSource {
         Ok(refs)
     }
 
+    /// The whole book, through the engine's bulk path.
+    ///
+    /// `TokenCache::book_pages` reads every page's ids in one ordered
+    /// statement and `resolve_pages` resolves their definitions in one pass
+    /// over the union, which is the difference between seconds and tens of
+    /// milliseconds on a large book (§8). The index is still asked for each
+    /// page's `body`, `part_label` and `page_number`, but that costs
+    /// ~0.02 ms/page and has no bulk equivalent.
     fn book_pages(&self, id: u64, progress: &dyn Fn(u64, u64)) -> Result<Vec<Page>> {
-        let refs = self.page_refs(id)?;
-        let total = refs.len() as u64;
-        let mut pages = Vec::with_capacity(refs.len());
-        for (i, r) in refs.iter().enumerate() {
-            let key = PageKey::new(r.book_id, r.part_index as u64, r.page_id);
-            if let Some(p) = self.page_at(key)? {
-                pages.push(p);
+        let raw = self.token_cache.book_pages(id)?;
+        let total = raw.len() as u64;
+        if total == 0 {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<Vec<u32>> = raw.iter().map(|(_, _, ids)| ids.clone()).collect();
+        let resolved = self.token_cache.resolve_pages(&ids)?;
+
+        let mut pages = Vec::with_capacity(raw.len());
+        for (i, ((part_index, page_id, _), tokens)) in raw.into_iter().zip(resolved).enumerate() {
+            // A page in `page_tokens` with no document in the index has no
+            // body to align against, so it is skipped rather than carried
+            // with an empty one.
+            if let Some(result) = self.engine.get_page(id, part_index, page_id)? {
+                pages.push(Page {
+                    book_id: id,
+                    part_index: part_index as u32,
+                    page_id,
+                    part_label: result.part_label,
+                    page_number: result.page_number,
+                    body: result.body,
+                    tokens,
+                });
             }
             progress(i as u64 + 1, total);
         }

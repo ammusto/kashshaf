@@ -241,6 +241,65 @@ impl TokenCache {
         Ok((out, stats))
     }
 
+    /// Every page of one book in reading order, as decoded definition ids:
+    /// `(part_index, page_id, token_ids)`.
+    ///
+    /// One statement and one connection for the whole book. The primary key
+    /// `(book_id, part_index, page_id)` is also reading order — the order the
+    /// index is built in and the engine's reading-order check verifies — so
+    /// this is a single indexed range scan and the `ORDER BY` is free.
+    ///
+    /// Use this instead of a loop over [`Self::get`] when the unit of work is
+    /// a book: on a 6,336-page book the loop costs seconds, almost all of it
+    /// in per-page connections and per-page ad-hoc `IN (…)` statements.
+    ///
+    /// Deliberately does **not** populate the LRUs. A book is far larger than
+    /// their capacity, so caching it would evict everything a reader or a
+    /// search had warmed in exchange for entries this caller already holds.
+    pub fn book_pages(&self, book_id: u64) -> Result<Vec<(u64, u64, Vec<u32>)>> {
+        let conn = self.open()?;
+        let enc_col = if self.has_encoding_column { "encoding" } else { "1" };
+        let mut stmt = conn.prepare(&format!(
+            "SELECT part_index, page_id, {}, token_ids FROM page_tokens              WHERE book_id = ?1 ORDER BY part_index, page_id",
+            enc_col
+        ))?;
+        let rows = stmt.query_map([book_id as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as u64,
+                row.get::<_, i64>(1)? as u64,
+                RawPage { encoding: row.get(2)?, blob: row.get(3)? },
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (part_index, page_id, raw) = r?;
+            out.push((part_index, page_id, self.decode(raw.encoding, &raw.blob)?));
+        }
+        Ok(out)
+    }
+
+    /// Resolve many pages of definition ids to `Token`s at once.
+    ///
+    /// The definitions of a whole book are fetched in one pass over the union
+    /// of its ids rather than once per page: a 300K-token book draws on far
+    /// fewer distinct definitions than it has tokens, so the per-page query
+    /// was re-fetching the same rows thousands of times.
+    ///
+    /// Each output `Vec<Token>` has one token per input id, with the same
+    /// `idx` numbering [`Self::get`] produces, including the placeholder for a
+    /// definition that is missing.
+    pub fn resolve_pages(&self, pages: &[Vec<u32>]) -> Result<Vec<Vec<Token>>> {
+        let mut union: Vec<u32> = pages.iter().flatten().copied().collect();
+        union.sort_unstable();
+        union.dedup();
+        if union.is_empty() {
+            return Ok(pages.iter().map(|_| Vec::new()).collect());
+        }
+        let conn = self.open()?;
+        let defs = self.fetch_definitions(&conn, &union)?;
+        Ok(pages.iter().map(|ids| self.tokens_from_defs(ids, &defs)).collect())
+    }
+
     fn fetch_raw_batch(&self, conn: &Connection, keys: &[PageKey]) -> Result<Vec<(PageKey, RawPage)>> {
         let mut out = Vec::with_capacity(keys.len());
         let enc_col = if self.has_encoding_column { "encoding" } else { "1" };
@@ -352,8 +411,17 @@ impl TokenCache {
         }
         let conn = self.open()?;
         let defs = self.fetch_definitions(&conn, token_ids)?;
+        Ok(self.tokens_from_defs(token_ids, &defs))
+    }
 
-        Ok(token_ids
+    /// Build the `Token`s for one page from already-fetched definitions.
+    #[allow(clippy::type_complexity)]
+    fn tokens_from_defs(
+        &self,
+        token_ids: &[u32],
+        defs: &HashMap<u32, (String, i64, Option<i64>, i64, i64, i64)>,
+    ) -> Vec<Token> {
+        token_ids
             .iter()
             .enumerate()
             .map(|(idx, &token_id)| match defs.get(&token_id) {
@@ -388,7 +456,7 @@ impl TokenCache {
                     clitics: self.lookups.clitic_sets.get(cs_id).cloned().unwrap_or_default(),
                 },
             })
-            .collect())
+            .collect()
     }
 
     #[allow(clippy::type_complexity)]
