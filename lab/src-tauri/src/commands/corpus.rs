@@ -60,10 +60,11 @@ pub fn lab_dirs(state: State<'_, ManagedLabState>) -> Result<LabDirs, LabError> 
 pub async fn check_corpus_status() -> Result<CorpusStatus, LabError> {
     let data_dir =
         kashshaf_common::get_corpus_data_directory().map_err(|e| LabError::Other(e.to_string()))?;
-    // The manifest's `min_app_version` gates Kashshaf, not Lab; Lab passes
-    // Kashshaf's own compatibility floor from `.release` semantics by using
-    // its own version, and surfaces whatever the check says.
-    Ok(kashshaf_common::check_corpus_status(&data_dir, env!("CARGO_PKG_VERSION")).await)
+    // `min_app_version` gates Kashshaf's version, not Lab's (spec §2.4): Lab's
+    // floor is the oldest corpus this build supports. The engine's schema gate
+    // is the other half, applied when LocalSource opens the corpus.
+    let floor = kashshaf_common::CompatFloor::MinCorpusVersion(crate::MIN_CORPUS_VERSION);
+    Ok(kashshaf_common::check_corpus_status(&data_dir, floor).await)
 }
 
 static DOWNLOAD_CANCEL_TX: Mutex<Option<tokio::sync::watch::Sender<bool>>> = Mutex::new(None);

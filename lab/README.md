@@ -193,6 +193,10 @@ highlighting the wrong words if that page does not align.
 - **Versions.** `lab/package.json` and `lab/src-tauri/Cargo.toml` carry Lab's
   version explicitly — *not* `version.workspace = true`. `tauri.conf.json`
   reads `lab/package.json`. The two must agree.
+- **Compatibility is Lab's own.** `corpus_manifest.json`'s `min_app_version`
+  gates Kashshaf and is ignored here; Lab's floor is `MIN_CORPUS_VERSION` plus
+  the engine's schema gate (spec §2.4). That is what
+  `CompatFloor::MinCorpusVersion` expresses.
 
 ## Not done yet
 

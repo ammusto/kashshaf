@@ -26,3 +26,12 @@ pub use store::Store;
 
 /// Lab's version, independent of the workspace's (spec §2.1).
 pub const LAB_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The oldest corpus this build supports (spec §2.4, §10).
+///
+/// Schema 4 is the first the engine's compound path reads, and 4.0.0 is its
+/// first published corpus. From Phase 5 this is `lab_manifest.json`'s
+/// `min_corpus_version` and this constant is what that file is built from;
+/// until the manifest exists it is the whole rule, alongside the engine's own
+/// `check_corpus_schema_supported`.
+pub const MIN_CORPUS_VERSION: &str = "4.0.0";

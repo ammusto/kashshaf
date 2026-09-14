@@ -220,6 +220,48 @@ fn version_meets_minimum(app_version: &str, min_version: &str) -> bool {
     }
 }
 
+/// Which compatibility rule the caller wants applied to a remote corpus.
+///
+/// `corpus_manifest.json`'s `min_app_version` is the minimum *Kashshaf* version
+/// that can read a corpus. It says nothing about Kashshaf Lab, whose version is
+/// independent (Lab spec §2.1) and whose `0.1.x` would read as too old against
+/// every published manifest. So the floor is the caller's, not the manifest's
+/// alone (Lab spec §2.4, amended in spec 1.2).
+#[derive(Debug, Clone, Copy)]
+pub enum CompatFloor<'a> {
+    /// Kashshaf: refuse a corpus whose `min_app_version` exceeds this version.
+    AppVersion(&'a str),
+    /// Kashshaf Lab: ignore `min_app_version`; refuse a corpus older than this
+    /// (`lab_manifest.json`'s `min_corpus_version`, §10). The engine's schema
+    /// gate is the other half of Lab's rule and is applied when the corpus is
+    /// opened, not here.
+    MinCorpusVersion(&'a str),
+}
+
+impl CompatFloor<'_> {
+    /// `None` when the remote corpus is acceptable, else why it is not.
+    fn rejects(&self, remote: &RemoteManifest) -> Option<String> {
+        match self {
+            CompatFloor::AppVersion(v) => {
+                (!version_meets_minimum(v, &remote.min_app_version)).then(|| {
+                    format!(
+                        "App version {} is too old. Please update to at least {}",
+                        v, remote.min_app_version
+                    )
+                })
+            }
+            CompatFloor::MinCorpusVersion(min) => {
+                (!version_meets_minimum(&remote.corpus_version, min)).then(|| {
+                    format!(
+                        "Corpus {} is older than this build supports (minimum {}).",
+                        remote.corpus_version, min
+                    )
+                })
+            }
+        }
+    }
+}
+
 /// Check if essential corpus files exist (for manual installations without manifest.local.json)
 fn has_essential_files(data_dir: &Path) -> bool {
     let corpus_db = data_dir.join("corpus.db");
@@ -232,7 +274,7 @@ fn has_essential_files(data_dir: &Path) -> bool {
 }
 
 /// Check corpus status by comparing local and remote manifests
-pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusStatus {
+pub async fn check_corpus_status(data_dir: &Path, floor: CompatFloor<'_>) -> CorpusStatus {
     // Load local manifest
     let local = load_local_manifest(data_dir);
 
@@ -286,8 +328,8 @@ pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusSt
 
     let remote = remote.unwrap();
 
-    // Check app version compatibility
-    if !version_meets_minimum(app_version, &remote.min_app_version) {
+    // Compatibility, by the caller's rule (Lab spec §2.4).
+    if let Some(why) = floor.rejects(&remote) {
         return CorpusStatus {
             ready: false,
             local_version: local.as_ref().map(|l| l.corpus_version.clone()),
@@ -297,10 +339,7 @@ pub async fn check_corpus_status(data_dir: &Path, app_version: &str) -> CorpusSt
             missing_files: vec![],
             total_download_size: 0,
             remote_notes: Some(remote.notes.clone()).flatten(),
-            error: Some(format!(
-                "App version {} is too old. Please update to at least {}",
-                app_version, remote.min_app_version
-            )),
+            error: Some(why),
         };
     }
 
@@ -550,6 +589,47 @@ mod tests {
         assert!(!corpus_ready(None, true, true, false, || true));
         // interrupted first download: manifest present, files missing, same version
         assert!(!corpus_ready(Some(false), false, false, false, || false));
+    }
+
+    fn manifest(corpus: &str, min_app: &str) -> RemoteManifest {
+        RemoteManifest {
+            corpus_version: corpus.to_string(),
+            schema_version: 4,
+            min_app_version: min_app.to_string(),
+            built_at: "x".to_string(),
+            base_url: None,
+            notes: None,
+            files: vec![],
+        }
+    }
+
+    /// Lab spec §2.4: the two products refuse different corpora, and Lab never
+    /// consults `min_app_version` — its own `0.1.0` would fail every published
+    /// manifest.
+    #[test]
+    fn each_product_applies_its_own_compatibility_floor() {
+        let m = manifest("4.1.0", "0.5.0");
+
+        // Kashshaf: the manifest's min_app_version against this build.
+        assert!(CompatFloor::AppVersion("0.5.2").rejects(&m).is_none());
+        assert!(CompatFloor::AppVersion("0.5.0").rejects(&m).is_none());
+        let why = CompatFloor::AppVersion("0.4.9").rejects(&m).expect("too old");
+        assert!(why.contains("0.4.9") && why.contains("0.5.0"), "{}", why);
+
+        // Lab: min_app_version is ignored, whatever it says.
+        assert!(CompatFloor::MinCorpusVersion("4.0.0").rejects(&m).is_none());
+        assert!(
+            CompatFloor::MinCorpusVersion("4.0.0")
+                .rejects(&manifest("4.1.0", "99.0.0"))
+                .is_none(),
+            "Lab must ignore min_app_version entirely"
+        );
+        // ...but Lab does refuse a corpus below its own floor, and says which.
+        let why = CompatFloor::MinCorpusVersion("4.0.0")
+            .rejects(&manifest("3.2.0", "0.4.0"))
+            .expect("corpus too old");
+        assert!(why.contains("3.2.0") && why.contains("4.0.0"), "{}", why);
+        assert!(!why.contains("App version"), "{}", why);
     }
 
     #[test]

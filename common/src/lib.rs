@@ -19,7 +19,7 @@ pub use download::{download_corpus, DownloadProgress, DownloadState};
 pub use manifest::{
     archive_old_corpus, check_app_update, check_corpus_status, fetch_app_manifest,
     fetch_remote_manifest, load_local_manifest, save_local_manifest, verify_file_hash, AppManifest,
-    AppRelease, AppUpdateStatus, CorpusStatus, LocalFile, LocalManifest, PlatformDownloads,
-    RemoteFile, RemoteManifest,
+    AppRelease, AppUpdateStatus, CompatFloor, CorpusStatus, LocalFile, LocalManifest,
+    PlatformDownloads, RemoteFile, RemoteManifest,
 };
 pub use settings::{ensure_kv_table, get_kv, open_settings_db, set_kv};

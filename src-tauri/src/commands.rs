@@ -1205,10 +1205,11 @@ static DOWNLOAD_CANCEL_TX: Mutex<Option<tokio::sync::watch::Sender<bool>>> = Mut
 pub async fn check_corpus_status() -> Result<CorpusStatus, KashshafError> {
     let data_dir = get_corpus_data_directory().map_err(|e| KashshafError::Other(e.to_string()))?;
 
-    // Get app version from Cargo.toml
-    let app_version = env!("CARGO_PKG_VERSION");
+    // Kashshaf's rule is the manifest's `min_app_version` against this build
+    // (kashshaf_common::CompatFloor; Lab uses a different floor).
+    let floor = kashshaf_common::CompatFloor::AppVersion(env!("CARGO_PKG_VERSION"));
 
-    Ok(kashshaf_lib::check_corpus_status(&data_dir, app_version).await)
+    Ok(kashshaf_lib::check_corpus_status(&data_dir, floor).await)
 }
 
 /// Start corpus download - emits "download-progress" events
