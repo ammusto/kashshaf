@@ -50,6 +50,27 @@ describe('toRuns', () => {
 });
 
 describe('Reader', () => {
+  it('clears the selection on a background click and on Escape (fix 8)', () => {
+    const onClear = vi.fn();
+    const onSelect = vi.fn();
+    render(<Reader page={page()} pages={refs} index={0} onNavigate={() => {}} onSelectRange={onSelect} onClearSelection={onClear} loading={false} error={null} />);
+    const first = document.querySelector('[data-token="0"]') as HTMLElement;
+    fireEvent.mouseDown(first);
+    fireEvent.mouseUp(first);
+    expect(first.className).toContain('tok-selected');
+    // A click on the pane background, not on a token.
+    fireEvent.click(screen.getByTestId('reader-pane'));
+    expect(first.className).not.toContain('tok-selected');
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenLastCalledWith(null);
+    fireEvent.mouseDown(first);
+    fireEvent.mouseUp(first);
+    expect(first.className).toContain('tok-selected');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(first.className).not.toContain('tok-selected');
+    expect(onClear).toHaveBeenCalledTimes(2);
+  });
+
   const noop = () => {};
 
   it('renders one overlay span per token, indexed as the backend stores them', () => {

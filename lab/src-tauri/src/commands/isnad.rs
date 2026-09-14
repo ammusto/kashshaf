@@ -11,11 +11,11 @@
 //! whose `form_norm` matches a `name_form` is *shown* with the person; only
 //! an explicit `Link` or `AcceptSuggestions` writes anything.
 
-use crate::analysis::isnad::{self, Candidate, Class, Params};
+use crate::analysis::isnad::{self, Candidate, Class, Params, MATN_MAX_PAGES};
 use crate::analysis::names::{self, NameParts};
 use crate::error::LabError;
 use crate::lexicon;
-use crate::source::Page;
+use crate::source::{Page, Token};
 use crate::state::{handles, Handles, ManagedLabState};
 use crate::store::now;
 use kashshaf_engine::normalize_arabic;
@@ -33,8 +33,14 @@ pub struct TransmitterRow {
     pub id: i64,
     pub isnad_id: i64,
     pub position: i64,
+    /// Stream offsets from the isnād's start page (amendment 1.4).
     pub tok_start: usize,
     pub tok_end: usize,
+    /// The page the span starts on; `None` = the isnād's start page.
+    pub part_index: Option<u32>,
+    pub page_id: Option<u64>,
+    /// A place tag after the name (`بالكوفة`).
+    pub place: Option<String>,
     pub raw: String,
     pub kunya: Option<String>,
     pub ism: Option<String>,
@@ -54,13 +60,20 @@ pub struct TransmitterRow {
 pub struct IsnadRow {
     pub id: i64,
     pub book_id: u64,
+    /// The start page; offsets are stream offsets from its token 0 and may
+    /// run past its end (amendment 1.4).
     pub part_index: u32,
     pub page_id: u64,
     pub tok_start: usize,
     pub tok_end: usize,
+    /// The page `tok_end − 1` falls on; `None` = the start page.
+    pub end_part_index: Option<u32>,
+    pub end_page_id: Option<u64>,
     pub kind: String,
     pub matn_tok_start: Option<usize>,
     pub matn_tok_end: Option<usize>,
+    pub matn_end_part_index: Option<u32>,
+    pub matn_end_page_id: Option<u64>,
     pub links: i64,
     pub confidence: f64,
     pub confidence_json: String,
@@ -108,8 +121,8 @@ pub(crate) fn dberr(e: impl std::fmt::Display) -> LabError {
 fn read_transmitters(conn: &Connection, isnad_id: i64) -> Result<Vec<TransmitterRow>, LabError> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, isnad_id, position, tok_start, tok_end, raw, kunya, ism, nasab, nisba, laqab, verb_before, person_id \
-             FROM transmitter WHERE isnad_id = ?1 ORDER BY position",
+            "SELECT id, isnad_id, position, tok_start, tok_end, raw, kunya, ism, nasab, nisba, laqab, verb_before, person_id, \
+             part_index, page_id, place FROM transmitter WHERE isnad_id = ?1 ORDER BY position",
         )
         .map_err(dberr)?;
     let rows = stmt
@@ -121,6 +134,9 @@ fn read_transmitters(conn: &Connection, isnad_id: i64) -> Result<Vec<Transmitter
                 position: r.get(2)?,
                 tok_start: r.get::<_, i64>(3)? as usize,
                 tok_end: r.get::<_, i64>(4)? as usize,
+                part_index: r.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+                page_id: r.get::<_, Option<i64>>(14)?.map(|v| v as u64),
+                place: r.get(15)?,
                 form_norm: names::form_norm(&raw),
                 raw,
                 kunya: r.get(6)?,
@@ -152,7 +168,8 @@ fn read_isnad(conn: &Connection, id: i64) -> Result<IsnadRow, LabError> {
     let mut row = conn
         .query_row(
             "SELECT id, book_id, part_index, page_id, tok_start, tok_end, kind, matn_tok_start, matn_tok_end, links, \
-             confidence, confidence_json, status, created_at, updated_at, overrides_json FROM isnad WHERE id = ?1",
+             confidence, confidence_json, status, created_at, updated_at, overrides_json, \
+             end_part_index, end_page_id, matn_end_part_index, matn_end_page_id FROM isnad WHERE id = ?1",
             [id],
             |r| {
                 let overrides_json: String = r.get(15)?;
@@ -163,9 +180,13 @@ fn read_isnad(conn: &Connection, id: i64) -> Result<IsnadRow, LabError> {
                     page_id: r.get::<_, i64>(3)? as u64,
                     tok_start: r.get::<_, i64>(4)? as usize,
                     tok_end: r.get::<_, i64>(5)? as usize,
+                    end_part_index: r.get::<_, Option<i64>>(16)?.map(|v| v as u32),
+                    end_page_id: r.get::<_, Option<i64>>(17)?.map(|v| v as u64),
                     kind: r.get(6)?,
                     matn_tok_start: r.get::<_, Option<i64>>(7)?.map(|v| v as usize),
                     matn_tok_end: r.get::<_, Option<i64>>(8)?.map(|v| v as usize),
+                    matn_end_part_index: r.get::<_, Option<i64>>(18)?.map(|v| v as u32),
+                    matn_end_page_id: r.get::<_, Option<i64>>(19)?.map(|v| v as u64),
                     links: r.get(9)?,
                     confidence: r.get(10)?,
                     confidence_json: r.get(11)?,
@@ -197,14 +218,33 @@ pub(crate) fn snapshot(page: &Page, start: usize, end: usize) -> (String, String
     (s, hash)
 }
 
-fn insert_candidate(conn: &Connection, corpus_version: &str, page: &Page, c: &Candidate, lexicon_hash: &str, overrides: &HashMap<usize, Class>) -> Result<i64, LabError> {
+/// The pages a span runs over, as `(tokens, body)` for the extractor, and
+/// their stream starts.
+fn window_refs<'a>(pages: &[&'a Page]) -> Vec<(&'a [Token], &'a str)> {
+    pages.iter().map(|p| (p.tokens.as_slice(), p.body.as_str())).collect()
+}
+
+/// The page of a stream offset in a window, as `(part_index, page_id)`.
+fn page_of(window: &[&Page], starts: &[usize], offset: usize) -> (u32, u64) {
+    let (k, _) = isnad::locate(starts, offset.min(starts[starts.len() - 1].saturating_sub(1)));
+    let p = window[k.min(window.len() - 1)];
+    (p.part_index, p.page_id)
+}
+
+/// Insert a candidate whose offsets are stream offsets over `window`
+/// (the start page first). The snapshot covers the start page only.
+fn insert_candidate(conn: &Connection, corpus_version: &str, window: &[&Page], c: &Candidate, lexicon_hash: &str, overrides: &HashMap<usize, Class>) -> Result<i64, LabError> {
+    let page = window[0];
+    let starts = isnad::page_starts(&window_refs(window));
     let (snap, hash) = snapshot(page, c.tok_start, c.tok_end);
+    let (end_part, end_page) = page_of(window, &starts, c.tok_end.saturating_sub(1));
+    let matn_end = c.matn.map(|(_, e)| page_of(window, &starts, e.saturating_sub(1)));
     let ts = now();
     conn.execute(
         "INSERT INTO isnad (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
          kind, matn_tok_start, matn_tok_end, links, confidence, confidence_json, status, created_at, updated_at, \
-         extractor_version, lexicon_hash, overrides_json) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'candidate', ?15, ?15, ?16, ?17, ?18)",
+         extractor_version, lexicon_hash, overrides_json, end_part_index, end_page_id, matn_end_part_index, matn_end_page_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'candidate', ?15, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         params![
             corpus_version,
             page.book_id as i64,
@@ -224,21 +264,45 @@ fn insert_candidate(conn: &Connection, corpus_version: &str, page: &Page, c: &Ca
             isnad::EXTRACTOR_VERSION,
             lexicon_hash,
             serde_json::to_string(overrides).unwrap_or_else(|_| "{}".into()),
+            end_part as i64,
+            end_page as i64,
+            matn_end.map(|(p, _)| p as i64),
+            matn_end.map(|(_, g)| g as i64),
         ],
     )
     .map_err(dberr)?;
     let id = conn.last_insert_rowid();
     for t in &c.transmitters {
-        insert_transmitter(conn, id, t.position as i64, t.tok_start, t.tok_end, &t.raw, &t.parts, t.verb_before.as_deref())?;
+        let (tp, tg) = page_of(window, &starts, t.tok_start);
+        insert_transmitter(conn, id, t.position as i64, t.tok_start, t.tok_end, &t.raw, &t.parts, t.verb_before.as_deref(), Some((tp, tg)), t.place.as_deref())?;
     }
     Ok(id)
 }
 
-fn insert_transmitter(conn: &Connection, isnad_id: i64, position: i64, start: usize, end: usize, raw: &str, parts: &NameParts, verb: Option<&str>) -> Result<i64, LabError> {
+/// The pages an isnād runs over — start page through the later of its end
+/// page and its matn's end page — and its tokens as one stream.
+fn span_window(h: &Handles, row: &IsnadRow) -> Result<Vec<Page>, LabError> {
+    let refs = h.source.page_refs(row.book_id)?;
+    let start = refs.iter().position(|r| r.part_index == row.part_index && r.page_id == row.page_id).ok_or_else(|| LabError::NotFound(format!("page {}:{}", row.part_index, row.page_id)))?;
+    let find = |p: Option<u32>, g: Option<u64>| p.zip(g).and_then(|(p, g)| refs.iter().position(|r| r.part_index == p && r.page_id == g));
+    let end = [find(row.end_part_index, row.end_page_id), find(row.matn_end_part_index, row.matn_end_page_id)].into_iter().flatten().max().unwrap_or(start).max(start);
+    let mut pages = Vec::with_capacity(end - start + 1);
+    for r in &refs[start..=end.min(start + MATN_MAX_PAGES)] {
+        pages.push(h.source.page(r.book_id, r.part_index, r.page_id)?.ok_or_else(|| LabError::NotFound(format!("page {}:{}", r.part_index, r.page_id)))?);
+    }
+    Ok(pages)
+}
+
+fn stream_tokens(pages: &[Page]) -> Vec<Token> {
+    pages.iter().flat_map(|p| p.tokens.iter().cloned()).collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_transmitter(conn: &Connection, isnad_id: i64, position: i64, start: usize, end: usize, raw: &str, parts: &NameParts, verb: Option<&str>, page: Option<(u32, u64)>, place: Option<&str>) -> Result<i64, LabError> {
     conn.execute(
-        "INSERT INTO transmitter (isnad_id, position, tok_start, tok_end, raw, kunya, ism, nasab, nisba, laqab, verb_before) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![isnad_id, position, start as i64, end as i64, raw, parts.kunya, parts.ism, parts.nasab, parts.nisba, parts.laqab, verb],
+        "INSERT INTO transmitter (isnad_id, position, tok_start, tok_end, raw, kunya, ism, nasab, nisba, laqab, verb_before, part_index, page_id, place) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![isnad_id, position, start as i64, end as i64, raw, parts.kunya, parts.ism, parts.nasab, parts.nisba, parts.laqab, verb, page.map(|p| p.0 as i64), page.map(|p| p.1 as i64), place],
     )
     .map_err(dberr)?;
     Ok(conn.last_insert_rowid())
@@ -296,16 +360,20 @@ pub async fn isnad_run(window: Window, state: State<'_, ManagedLabState>, book_i
             if h.cancel.load(Ordering::SeqCst) {
                 break;
             }
-            let cands = isnad::extract_page(&page.tokens, &page.body, &lex, &params, &no_overrides);
+            // The book as one stream (amendment 1.4): this page plus the
+            // pages a chain or matn may run on to; only chains that start
+            // here are kept, so nothing is emitted twice.
+            let win_pages: Vec<&Page> = book.pages[i..(i + 1 + MATN_MAX_PAGES).min(book.pages.len())].iter().collect();
+            let cands = isnad::extract_stream(&window_refs(&win_pages), &lex, &params, &no_overrides);
             conn.execute_batch("BEGIN").map_err(dberr)?;
-            for c in &cands {
+            for c in cands.iter().filter(|c| c.tok_start < page.tokens.len()) {
                 let overlaps_kept = kept.iter().any(|(p, g, s, e)| {
                     *p == page.part_index as i64 && *g == page.page_id as i64 && (c.tok_start as i64) < *e && *s < (c.tok_end as i64)
                 });
                 if overlaps_kept {
                     continue;
                 }
-                insert_candidate(&conn, &corpus_version, page, c, &lex.hash, &no_overrides)?;
+                insert_candidate(&conn, &corpus_version, &win_pages, c, &lex.hash, &no_overrides)?;
                 found += 1;
             }
             conn.execute_batch("COMMIT").map_err(dberr)?;
@@ -385,13 +453,16 @@ pub async fn isnad_classes(state: State<'_, ManagedLabState>, id: i64) -> Result
     tokio::task::spawn_blocking(move || {
         let conn = db(&h)?;
         let row = read_isnad(&conn, id)?;
-        let page = h
-            .source
-            .page(row.book_id, row.part_index, row.page_id)?
-            .ok_or_else(|| LabError::NotFound(format!("page {}:{}", row.part_index, row.page_id)))?;
+        let pages = span_window(&h, &row)?;
         let lex = lexicon::load(&conn).map_err(dberr)?;
-        let views: Vec<isnad::View> = page.tokens.iter().map(isnad::View::of).collect();
-        let headings: Vec<(usize, usize)> = crate::analysis::sections::headings(&page.body).into_iter().map(|x| (x.tok_start, x.tok_end)).collect();
+        let refs: Vec<&Page> = pages.iter().collect();
+        let starts = isnad::page_starts(&window_refs(&refs));
+        let mut views: Vec<isnad::View> = Vec::new();
+        let mut headings: Vec<(usize, usize)> = Vec::new();
+        for (k, p) in pages.iter().enumerate() {
+            views.extend(p.tokens.iter().map(isnad::View::of));
+            headings.extend(crate::analysis::sections::headings(&p.body).into_iter().map(|x| (x.tok_start + starts[k], x.tok_end + starts[k])));
+        }
         let (classes, _, _) = isnad::classify(&views, &lex, &Params::default(), &row.overrides, &headings);
         Ok(classes.into_iter().enumerate().collect())
     })
@@ -568,9 +639,10 @@ fn apply_inner(conn: &Connection, h: &Handles, op: &Op) -> Result<Op, LabError> 
                 return Err(LabError::Other("split point must be inside the transmitter".into()));
             }
             let row = read_isnad(conn, t.isnad_id)?;
-            let page = h.source.page(row.book_id, row.part_index, row.page_id)?.ok_or_else(|| LabError::NotFound("page".into()))?;
-            let raw_of = |a: usize, b: usize| page.tokens[a..b].iter().map(|x| x.surface.clone()).collect::<Vec<_>>().join(" ");
-            let parts_of = |a: usize, b: usize| names::parse(&page.tokens[a..b].iter().map(|x| normalize_arabic(&x.surface)).collect::<Vec<_>>());
+            let pages = span_window(h, &row)?;
+            let tokens = stream_tokens(&pages);
+            let raw_of = |a: usize, b: usize| tokens[a..b].iter().map(|x| x.surface.clone()).collect::<Vec<_>>().join(" ");
+            let parts_of = |a: usize, b: usize| names::parse(&tokens[a..b].iter().map(|x| normalize_arabic(&x.surface)).collect::<Vec<_>>());
             let (la, lb) = (t.tok_start, *at);
             let (ra, rb) = (*at, t.tok_end);
             let lp = parts_of(la, lb);
@@ -580,7 +652,10 @@ fn apply_inner(conn: &Connection, h: &Handles, op: &Op) -> Result<Op, LabError> 
             )
             .map_err(dberr)?;
             conn.execute("UPDATE transmitter SET position = position + 1 WHERE isnad_id = ?1 AND position > ?2", params![t.isnad_id, t.position]).map_err(dberr)?;
-            let right_id = insert_transmitter(conn, t.isnad_id, t.position + 1, ra, rb, &raw_of(ra, rb), &parts_of(ra, rb), None)?;
+            let refs: Vec<&Page> = pages.iter().collect();
+            let starts = isnad::page_starts(&window_refs(&refs));
+            let right_id = insert_transmitter(conn, t.isnad_id, t.position + 1, ra, rb, &raw_of(ra, rb), &parts_of(ra, rb), None, Some(page_of(&refs, &starts, ra)), t.place.as_deref())?;
+            conn.execute("UPDATE transmitter SET place = NULL WHERE id = ?1", [t.id]).map_err(dberr)?;
             conn.execute("UPDATE isnad SET links = (SELECT COUNT(*) FROM transmitter WHERE isnad_id = ?1) WHERE id = ?1", [t.isnad_id]).map_err(dberr)?;
             touch_isnad(conn, t.isnad_id)?;
             Ok(Op::MergeTransmitters { left_id: t.id, right_id })
@@ -592,12 +667,12 @@ fn apply_inner(conn: &Connection, h: &Handles, op: &Op) -> Result<Op, LabError> 
                 return Err(LabError::Other("only adjacent transmitters of one isnād can be merged".into()));
             }
             let row = read_isnad(conn, l.isnad_id)?;
-            let page = h.source.page(row.book_id, row.part_index, row.page_id)?.ok_or_else(|| LabError::NotFound("page".into()))?;
-            let raw = page.tokens[l.tok_start..r.tok_end].iter().map(|x| x.surface.clone()).collect::<Vec<_>>().join(" ");
-            let parts = names::parse(&page.tokens[l.tok_start..r.tok_end].iter().map(|x| normalize_arabic(&x.surface)).collect::<Vec<_>>());
+            let tokens = stream_tokens(&span_window(h, &row)?);
+            let raw = tokens[l.tok_start..r.tok_end].iter().map(|x| x.surface.clone()).collect::<Vec<_>>().join(" ");
+            let parts = names::parse(&tokens[l.tok_start..r.tok_end].iter().map(|x| normalize_arabic(&x.surface)).collect::<Vec<_>>());
             conn.execute(
-                "UPDATE transmitter SET tok_end = ?2, raw = ?3, kunya = ?4, ism = ?5, nasab = ?6, nisba = ?7, laqab = ?8 WHERE id = ?1",
-                params![l.id, r.tok_end as i64, raw, parts.kunya, parts.ism, parts.nasab, parts.nisba, parts.laqab],
+                "UPDATE transmitter SET tok_end = ?2, raw = ?3, kunya = ?4, ism = ?5, nasab = ?6, nisba = ?7, laqab = ?8, place = COALESCE(?9, place) WHERE id = ?1",
+                params![l.id, r.tok_end as i64, raw, parts.kunya, parts.ism, parts.nasab, parts.nisba, parts.laqab, r.place],
             )
             .map_err(dberr)?;
             conn.execute("DELETE FROM transmitter WHERE id = ?1", [r.id]).map_err(dberr)?;
@@ -746,7 +821,7 @@ fn apply_inner(conn: &Connection, h: &Handles, op: &Op) -> Result<Op, LabError> 
             }
             let lex = lexicon::load(conn).map_err(dberr)?;
             let c = manual_candidate(&page, &lex, *tok_start, *tok_end);
-            let id = insert_candidate(conn, h.source.corpus_version(), &page, &c, &lex.hash, &HashMap::new())?;
+            let id = insert_candidate(conn, h.source.corpus_version(), &[&page], &c, &lex.hash, &HashMap::new())?;
             conn.execute("UPDATE isnad SET status = 'confirmed' WHERE id = ?1", [id]).map_err(dberr)?;
             Ok(Op::DeleteIsnad { isnad_id: id })
         }
@@ -764,21 +839,22 @@ fn apply_inner(conn: &Connection, h: &Handles, op: &Op) -> Result<Op, LabError> 
             conn.execute(
                 "INSERT INTO isnad (id, corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
                  kind, matn_tok_start, matn_tok_end, links, confidence, confidence_json, status, created_at, updated_at, \
-                 extractor_version, lexicon_hash, overrides_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                 extractor_version, lexicon_hash, overrides_json, end_part_index, end_page_id, matn_end_part_index, matn_end_page_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
                 params![
                     row.id, corpus_version, row.book_id as i64, row.part_index as i64, row.page_id as i64, row.tok_start as i64, row.tok_end as i64,
                     snapshot, snapshot_hash, row.kind, row.matn_tok_start.map(|v| v as i64), row.matn_tok_end.map(|v| v as i64), row.links,
                     row.confidence, row.confidence_json, row.status, row.created_at, now(), extractor_version, lexicon_hash,
-                    serde_json::to_string(&row.overrides).unwrap_or_default()
+                    serde_json::to_string(&row.overrides).unwrap_or_default(),
+                    row.end_part_index.map(|v| v as i64), row.end_page_id.map(|v| v as i64), row.matn_end_part_index.map(|v| v as i64), row.matn_end_page_id.map(|v| v as i64)
                 ],
             )
             .map_err(dberr)?;
             for t in &row.transmitters {
                 conn.execute(
-                    "INSERT INTO transmitter (id, isnad_id, position, tok_start, tok_end, raw, kunya, ism, nasab, nisba, laqab, verb_before, person_id) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                    params![t.id, row.id, t.position, t.tok_start as i64, t.tok_end as i64, t.raw, t.kunya, t.ism, t.nasab, t.nisba, t.laqab, t.verb_before, t.person_id],
+                    "INSERT INTO transmitter (id, isnad_id, position, tok_start, tok_end, raw, kunya, ism, nasab, nisba, laqab, verb_before, person_id, part_index, page_id, place) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                    params![t.id, row.id, t.position, t.tok_start as i64, t.tok_end as i64, t.raw, t.kunya, t.ism, t.nasab, t.nisba, t.laqab, t.verb_before, t.person_id, t.part_index.map(|v| v as i64), t.page_id.map(|v| v as i64), t.place],
                 )
                 .map_err(dberr)?;
             }
@@ -786,9 +862,9 @@ fn apply_inner(conn: &Connection, h: &Handles, op: &Op) -> Result<Op, LabError> 
         }
         Op::RestoreTransmitter { row } => {
             conn.execute(
-                "INSERT INTO transmitter (id, isnad_id, position, tok_start, tok_end, raw, kunya, ism, nasab, nisba, laqab, verb_before, person_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![row.id, row.isnad_id, row.position, row.tok_start as i64, row.tok_end as i64, row.raw, row.kunya, row.ism, row.nasab, row.nisba, row.laqab, row.verb_before, row.person_id],
+                "INSERT INTO transmitter (id, isnad_id, position, tok_start, tok_end, raw, kunya, ism, nasab, nisba, laqab, verb_before, person_id, part_index, page_id, place) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                params![row.id, row.isnad_id, row.position, row.tok_start as i64, row.tok_end as i64, row.raw, row.kunya, row.ism, row.nasab, row.nisba, row.laqab, row.verb_before, row.person_id, row.part_index.map(|v| v as i64), row.page_id.map(|v| v as i64), row.place],
             )
             .map_err(dberr)?;
             Ok(Op::Batch { ops: vec![] })
@@ -822,6 +898,7 @@ fn manual_candidate(page: &Page, lex: &lexicon::Lexicon, start: usize, end: usiz
                     tok_end: at,
                     raw: views[a..at].iter().map(|v| v.surface.clone()).collect::<Vec<_>>().join(" "),
                     parts: names::parse(&views[a..at].iter().map(|v| v.norm.clone()).collect::<Vec<_>>()),
+                    place: None,
                     verb_before: verb.clone(),
                 });
             }
@@ -891,7 +968,7 @@ pub async fn transmitters_list(state: State<'_, ManagedLabState>, book_id: u64, 
         let conn = db(&h)?;
         let mut stmt = conn
             .prepare(
-                "SELECT t.id, i.id, i.part_index, i.page_id, i.status FROM transmitter t JOIN isnad i ON i.id = t.isnad_id \
+                "SELECT t.id, i.id, COALESCE(t.part_index, i.part_index), COALESCE(t.page_id, i.page_id), i.status FROM transmitter t JOIN isnad i ON i.id = t.isnad_id \
                  WHERE i.book_id = ?1 AND (?2 = 0 OR i.status = 'confirmed') AND i.status != 'rejected' \
                  ORDER BY i.part_index, i.page_id, t.tok_start",
             )
@@ -999,9 +1076,9 @@ pub async fn retag_counts(state: State<'_, ManagedLabState>, book_id: u64) -> Re
                 continue;
             }
             let row = read_isnad(&conn, id)?;
-            let Some(page) = h.source.page(row.book_id, row.part_index, row.page_id)? else { continue };
+            let tokens = stream_tokens(&span_window(&h, &row)?);
             for (tok, class) in ov {
-                if let Some(t) = page.tokens.get(tok) {
+                if let Some(t) = tokens.get(tok) {
                     *counts.entry((normalize_arabic(&t.surface), class)).or_insert(0) += 1;
                 }
             }
@@ -1085,11 +1162,13 @@ pub async fn isnad_export(state: State<'_, ManagedLabState>, book_id: u64, forma
                         i.transmitters.iter().map(move |t| {
                             serde_json::json!({
                                 "isnad_id": i.id, "book_id": i.book_id, "part_index": i.part_index, "page_id": i.page_id,
+                                "end_part_index": i.end_part_index, "end_page_id": i.end_page_id,
                                 "isnad_tok_start": i.tok_start, "isnad_tok_end": i.tok_end, "kind": i.kind, "status": i.status,
                                 "confidence": i.confidence, "links": i.links, "matn_tok_start": i.matn_tok_start, "matn_tok_end": i.matn_tok_end,
                                 "position": t.position, "tok_start": t.tok_start, "tok_end": t.tok_end, "raw": t.raw,
                                 "kunya": t.kunya, "ism": t.ism, "nasab": t.nasab, "nisba": t.nisba, "laqab": t.laqab,
-                                "verb_before": t.verb_before, "person_id": t.person_id, "person": t.person_id.and_then(|p| names.get(&p).cloned()),
+                                "verb_before": t.verb_before, "place": t.place, "transmitter_part_index": t.part_index, "transmitter_page_id": t.page_id,
+                                "person_id": t.person_id, "person": t.person_id.and_then(|p| names.get(&p).cloned()),
                             })
                         })
                     })
@@ -1097,11 +1176,13 @@ pub async fn isnad_export(state: State<'_, ManagedLabState>, book_id: u64, forma
                 serde_json::to_string_pretty(&flat).unwrap_or_default()
             }
             (_, "nested") => {
-                let mut out = vec![vec!["isnad_id", "book_id", "part_index", "page_id", "tok_start", "tok_end", "kind", "status", "confidence", "links", "matn_tok_start", "matn_tok_end", "chain"].into_iter().map(String::from).collect::<Vec<_>>()];
+                let mut out = vec![vec!["isnad_id", "book_id", "part_index", "page_id", "end_part_index", "end_page_id", "tok_start", "tok_end", "kind", "status", "confidence", "links", "matn_tok_start", "matn_tok_end", "chain"].into_iter().map(String::from).collect::<Vec<_>>()];
                 for i in &rows {
-                    let chain = i.transmitters.iter().map(|t| format!("[{}] {}", t.verb_before.clone().unwrap_or_default(), t.raw)).collect::<Vec<_>>().join(" → ");
+                    let chain = i.transmitters.iter().map(|t| format!("[{}] {}{}", t.verb_before.clone().unwrap_or_default(), t.raw, t.place.as_ref().map(|p| format!(" ({})", p)).unwrap_or_default())).collect::<Vec<_>>().join(" → ");
                     out.push(vec![
-                        i.id.to_string(), i.book_id.to_string(), i.part_index.to_string(), i.page_id.to_string(), i.tok_start.to_string(), i.tok_end.to_string(),
+                        i.id.to_string(), i.book_id.to_string(), i.part_index.to_string(), i.page_id.to_string(),
+                        i.end_part_index.map(|v| v.to_string()).unwrap_or_default(), i.end_page_id.map(|v| v.to_string()).unwrap_or_default(),
+                        i.tok_start.to_string(), i.tok_end.to_string(),
                         i.kind.clone(), i.status.clone(), format!("{:.3}", i.confidence), i.links.to_string(),
                         i.matn_tok_start.map(|v| v.to_string()).unwrap_or_default(), i.matn_tok_end.map(|v| v.to_string()).unwrap_or_default(), chain,
                     ]);
@@ -1109,13 +1190,17 @@ pub async fn isnad_export(state: State<'_, ManagedLabState>, book_id: u64, forma
                 csv(out)
             }
             _ => {
-                let mut out = vec![vec!["isnad_id", "book_id", "part_index", "page_id", "isnad_tok_start", "isnad_tok_end", "kind", "status", "confidence", "links", "position", "tok_start", "tok_end", "raw", "kunya", "ism", "nasab", "nisba", "laqab", "verb_before", "person_id", "person"].into_iter().map(String::from).collect::<Vec<_>>()];
+                let mut out = vec![vec!["isnad_id", "book_id", "part_index", "page_id", "end_part_index", "end_page_id", "isnad_tok_start", "isnad_tok_end", "kind", "status", "confidence", "links", "position", "transmitter_part_index", "transmitter_page_id", "tok_start", "tok_end", "raw", "place", "kunya", "ism", "nasab", "nisba", "laqab", "verb_before", "person_id", "person"].into_iter().map(String::from).collect::<Vec<_>>()];
                 for i in &rows {
                     for t in &i.transmitters {
                         out.push(vec![
-                            i.id.to_string(), i.book_id.to_string(), i.part_index.to_string(), i.page_id.to_string(), i.tok_start.to_string(), i.tok_end.to_string(),
-                            i.kind.clone(), i.status.clone(), format!("{:.3}", i.confidence), i.links.to_string(), t.position.to_string(), t.tok_start.to_string(), t.tok_end.to_string(),
-                            t.raw.clone(), t.kunya.clone().unwrap_or_default(), t.ism.clone().unwrap_or_default(), t.nasab.clone().unwrap_or_default(),
+                            i.id.to_string(), i.book_id.to_string(), i.part_index.to_string(), i.page_id.to_string(),
+                            i.end_part_index.map(|v| v.to_string()).unwrap_or_default(), i.end_page_id.map(|v| v.to_string()).unwrap_or_default(),
+                            i.tok_start.to_string(), i.tok_end.to_string(),
+                            i.kind.clone(), i.status.clone(), format!("{:.3}", i.confidence), i.links.to_string(), t.position.to_string(),
+                            t.part_index.map(|v| v.to_string()).unwrap_or_default(), t.page_id.map(|v| v.to_string()).unwrap_or_default(),
+                            t.tok_start.to_string(), t.tok_end.to_string(),
+                            t.raw.clone(), t.place.clone().unwrap_or_default(), t.kunya.clone().unwrap_or_default(), t.ism.clone().unwrap_or_default(), t.nasab.clone().unwrap_or_default(),
                             t.nisba.clone().unwrap_or_default(), t.laqab.clone().unwrap_or_default(), t.verb_before.clone().unwrap_or_default(),
                             t.person_id.map(|p| p.to_string()).unwrap_or_default(), t.person_id.and_then(|p| names.get(&p).cloned()).unwrap_or_default(),
                         ]);
@@ -1204,7 +1289,7 @@ mod tests {
         let lex = lexicon::load(conn).unwrap();
         let c = isnad::extract_page(&page.tokens, &page.body, &lex, &Params::default(), &HashMap::new());
         assert_eq!(c.len(), 1, "{:?}", c.iter().map(|x| x.links).collect::<Vec<_>>());
-        insert_candidate(conn, h.source.corpus_version(), page, &c[0], &lex.hash, &HashMap::new()).unwrap()
+        insert_candidate(conn, h.source.corpus_version(), &[page], &c[0], &lex.hash, &HashMap::new()).unwrap()
     }
 
     #[test]
@@ -1279,7 +1364,7 @@ mod tests {
         assert_eq!(p.forms[0].form_norm, "ابو داود");
 
         // A second, unlinked occurrence of the same form is *suggested*, not linked.
-        let id2 = insert_candidate(&conn, "test", &page, &{
+        let id2 = insert_candidate(&conn, "test", &[&page], &{
             let lex = lexicon::load(&conn).unwrap();
             isnad::extract_page(&page.tokens, &page.body, &lex, &Params::default(), &HashMap::new()).remove(0)
         }, "x", &HashMap::new()).unwrap();

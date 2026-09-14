@@ -16,9 +16,9 @@
 //! boundary accuracy is the share of matched chains whose predicted matn
 //! start equals the gold one.
 
-use kashshaf_lab_lib::analysis::isnad::{extract_page, Candidate, Kind, Params};
+use kashshaf_lab_lib::analysis::isnad::{extract_page, extract_stream, page_starts, Candidate, Kind, Params, View, MATN_MAX_PAGES};
 use kashshaf_lab_lib::lexicon::Lexicon;
-use kashshaf_lab_lib::source::{local::LocalSource, BookSource};
+use kashshaf_lab_lib::source::{local::LocalSource, BookSource, Page, Token};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,47 @@ use std::path::{Path, PathBuf};
 #[derive(Deserialize)]
 struct Gold {
     chains: Vec<GoldChain>,
+    /// Chains given as tokens (`surface/pos`, `+place` for a `ب`-fused
+    /// proper noun) rather than corpus coordinates — for text that is not in
+    /// the sample corpus (amendment 1.4, fix 2). Scored without a corpus.
+    #[serde(default)]
+    inline: Vec<InlineChain>,
+}
+
+#[derive(Deserialize, Clone)]
+struct InlineChain {
+    id: u32,
+    #[serde(default)]
+    note: String,
+    tokens: String,
+    /// Stream offsets at which a new page starts (fix 1: cross-page chains).
+    #[serde(default)]
+    page_breaks: Vec<usize>,
+    isnad: [usize; 2],
+    matn_start: Option<usize>,
+    #[serde(default)]
+    matn_end: Option<usize>,
+    transmitters: Vec<[usize; 2]>,
+    #[serde(default)]
+    places: Vec<Option<String>>,
+}
+
+/// A page and the pages after it a chain may run on to (amendment 1.4):
+/// the extractor's window for a whole-book run.
+fn window(source: &LocalSource, book: u64, part: u32, page_id: u64) -> Vec<Page> {
+    let refs = source.page_refs(book).expect("page_refs");
+    let start = refs.iter().position(|r| r.part_index == part && r.page_id == page_id).expect("gold page in the book");
+    refs[start..(start + 1 + MATN_MAX_PAGES).min(refs.len())]
+        .iter()
+        .map(|r| source.page(r.book_id, r.part_index, r.page_id).expect("page").expect("page exists"))
+        .collect()
+}
+
+/// Candidates that *start* on the window's first page, stream offsets.
+fn extract_window(pages: &[Page], lex: &Lexicon, params: &Params) -> Vec<Candidate> {
+    let refs: Vec<(&[Token], &str)> = pages.iter().map(|p| (p.tokens.as_slice(), p.body.as_str())).collect();
+    let first = pages[0].tokens.len();
+    extract_stream(&refs, lex, params, &HashMap::new()).into_iter().filter(|c| c.tok_start < first).collect()
 }
 
 #[derive(Deserialize, Clone)]
@@ -204,11 +245,8 @@ fn the_gold_set_baseline() {
     let mut all_notes = Vec::new();
     for key in pages {
         let chains = &by_page[&key];
-        let page = source
-            .page(key.0, key.1, key.2)
-            .expect("page")
-            .unwrap_or_else(|| panic!("gold page {:?} is not in the sample corpus", key));
-        let pred = extract_page(&page.tokens, &page.body, &lex, &params, &HashMap::new());
+        let pages = window(&source, key.0, key.1, key.2);
+        let pred = extract_window(&pages, &lex, &params);
         let (t, notes) = score_page(chains, &pred);
         total.add(&t);
         for c in chains {
@@ -248,6 +286,101 @@ fn the_gold_set_baseline() {
 
 /// Spec §8: a 1M-token book in under 10 s. The sample's largest book is
 /// ~6,336 pages; the whole 25-book sample is 4.1M tokens.
+/// The inline chains (fix 2): scored from their tokens, no corpus needed.
+#[test]
+fn the_inline_gold_chains() {
+    let gold = gold();
+    let lex = Lexicon::shipped();
+    let params = Params::default();
+    for g in &gold.inline {
+        let mut views: Vec<View> = Vec::new();
+        for w in g.tokens.split_whitespace() {
+            let (w, place) = match w.strip_suffix("+place") {
+                Some(x) => (x, true),
+                None => (w, false),
+            };
+            let (sf, pos) = w.split_once('/').unwrap_or((w, "noun"));
+            let t = Token { idx: views.len(), surface: sf.to_string(), noclitic_surface: None, lemma: sf.to_string(), root: None, pos: pos.to_string(), features: vec![], clitics: vec![] };
+            let mut v = View::of(&t);
+            v.place = place;
+            views.push(v);
+        }
+        let pred = if g.page_breaks.is_empty() {
+            kashshaf_lab_lib::analysis::isnad::extract_views(&views, &[], &[], &lex, &params, &HashMap::new())
+        } else {
+            // Split the tokens into pages at the breaks and run the stream.
+            let tokens: Vec<Token> = views
+                .iter()
+                .enumerate()
+                .map(|(i, v)| Token {
+                    idx: i,
+                    surface: v.surface.clone(),
+                    noclitic_surface: None,
+                    lemma: v.surface.clone(),
+                    root: None,
+                    pos: v.pos.clone(),
+                    features: vec![],
+                    // A place tag is a `ب` proclitic on a proper noun, as the pipeline writes it.
+                    clitics: if v.place { vec![kashshaf_lab_lib::source::TokenClitic { clitic_type: "bi_prep".into(), display: "بـ".into() }] } else { vec![] },
+                })
+                .collect();
+            let mut bounds = vec![0usize];
+            bounds.extend(g.page_breaks.iter().copied());
+            bounds.push(tokens.len());
+            let pages: Vec<Vec<Token>> = bounds.windows(2).map(|w| tokens[w[0]..w[1]].iter().cloned().map(|mut t| { t.idx -= w[0]; t }).collect()).collect();
+            let refs: Vec<(&[Token], &str)> = pages.iter().map(|p| (p.as_slice(), "")).collect();
+            extract_stream(&refs, &lex, &params, &HashMap::new())
+        };
+        let hit = pred.iter().find(|c| c.tok_start == g.isnad[0]).unwrap_or_else(|| panic!("inline #{} ({}): no chain starts at {}: {:?}", g.id, g.note, g.isnad[0], pred.iter().map(|c| (c.tok_start, c.tok_end)).collect::<Vec<_>>()));
+        assert_eq!(hit.tok_end, g.isnad[1], "inline #{} ({}): chain end", g.id, g.note);
+        let spans: Vec<[usize; 2]> = hit.transmitters.iter().map(|t| [t.tok_start, t.tok_end]).collect();
+        assert_eq!(spans, g.transmitters, "inline #{} ({}): transmitters", g.id, g.note);
+        assert_eq!(hit.matn.map(|m| m.0), g.matn_start, "inline #{} ({}): matn start", g.id, g.note);
+        if let Some(e) = g.matn_end {
+            assert_eq!(hit.matn.map(|m| m.1), Some(e), "inline #{} ({}): matn end", g.id, g.note);
+        }
+        for (k, p) in g.places.iter().enumerate() {
+            assert_eq!(hit.transmitters.get(k).and_then(|t| t.place.clone()), *p, "inline #{} ({}): place of transmitter {}", g.id, g.note, k);
+        }
+        println!("inline #{} ok: {} links, matn at {:?}", g.id, hit.links, hit.matn.map(|m| m.0));
+    }
+    assert!(!gold.inline.is_empty(), "the gold set has inline chains");
+}
+
+/// Lists chains that cross a page break in the sample's ḥadīth books — the
+/// pool the cross-page gold entries were checked from. Prints only.
+#[test]
+fn cross_page_candidates() {
+    let Some(dir) = sample_dir() else { return };
+    let source = LocalSource::open_with_index(&dir, &index_dir(&dir)).expect("open the sample corpus");
+    let lex = Lexicon::shipped();
+    let params = Params::default();
+    let books: Vec<u64> = source.books().unwrap().into_iter().map(|b| b.id).filter(|id| !source.page_refs(*id).unwrap_or_default().is_empty()).collect();
+    for book in books {
+        let refs = source.page_refs(book).expect("page_refs");
+        let mut shown = 0;
+        for (i, r) in refs.iter().enumerate().take(400) {
+            let pages = window(&source, book, r.part_index, r.page_id);
+            let first = pages[0].tokens.len();
+            let starts = page_starts(&pages.iter().map(|p| (p.tokens.as_slice(), p.body.as_str())).collect::<Vec<_>>());
+            for c in extract_window(&pages, &lex, &params) {
+                let matn_end = c.matn.map(|m| m.1).unwrap_or(0);
+                if c.links >= 3 && (c.tok_end > first || matn_end > first) {
+                    let text: String = pages.iter().flat_map(|p| p.tokens.iter()).skip(c.tok_start).take(c.tok_end - c.tok_start).map(|t| t.surface.as_str()).collect::<Vec<_>>().join(" ");
+                    println!(
+                        "{} {}:{} (#{}) chain [{}..{}) {} links, page-1 len {}, matn {:?}, ends page {}  «{}»",
+                        book, r.part_index, r.page_id, i, c.tok_start, c.tok_end, c.links, first, c.matn, kashshaf_lab_lib::analysis::isnad::locate(&starts, c.tok_end - 1).0, text.chars().take(160).collect::<String>()
+                    );
+                    shown += 1;
+                }
+            }
+            if shown >= 12 {
+                break;
+            }
+        }
+    }
+}
+
 #[test]
 fn whole_sample_extraction_is_fast() {
     let Some(dir) = sample_dir() else { return };
@@ -264,6 +397,7 @@ fn whole_sample_extraction_is_fast() {
         for p in &pages {
             tokens += p.tokens.len();
             candidates += extract_page(&p.tokens, &p.body, &lex, &params, &HashMap::new()).len();
+            let _ = &page_starts;
         }
         extract_ms += t0.elapsed().as_millis();
     }
@@ -271,3 +405,5 @@ fn whole_sample_extraction_is_fast() {
     println!("[isnad] {} tokens, {} candidates, extraction {} ms = {:.0} ms per 1M tokens (spec §8: < 10 000)", tokens, candidates, extract_ms, per_million);
     assert!(per_million < 10_000.0, "{:.0} ms per 1M tokens", per_million);
 }
+
+

@@ -51,6 +51,7 @@ export function Reader({
   index,
   onNavigate,
   onSelectRange,
+  onClearSelection,
   highlight,
   layerClass,
   onTokenClick,
@@ -63,6 +64,8 @@ export function Reader({
   onNavigate: (nextIndex: number) => void;
   /** A confirmed token range `[start, end)`, or null when cleared. */
   onSelectRange?: (range: [number, number] | null) => void;
+  /** A click on the pane background, or Escape, cleared the selection (fix 8). */
+  onClearSelection?: () => void;
   /**
    * A token range to mark and scroll to — a concordance hit, a section
    * heading (spec §7.3 click-through). Distinct from the user's selection.
@@ -142,11 +145,27 @@ export function Reader({
     }
   };
 
+  // Fix 8: a click on the pane background (not on a token) or Escape
+  // clears whatever is highlighted.
+  const clearAll = useCallback(() => {
+    anchor.current = null;
+    setPopup(null);
+    finishSelection(null);
+    onClearSelection?.();
+  }, [finishSelection, onClearSelection]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') clearAll();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [clearAll]);
+
   // Bring a highlighted hit into view once the page has rendered.
   useEffect(() => {
     if (!highlight || !bodyRef.current) return;
     const el = bodyRef.current.querySelector(`[data-token="${highlight[0]}"]`);
-    el?.scrollIntoView({ block: 'center' });
+    if (el && typeof (el as HTMLElement).scrollIntoView === 'function') (el as HTMLElement).scrollIntoView({ block: 'center' });
   }, [highlight, page]);
 
   const canPrev = index > 0;
@@ -210,7 +229,14 @@ export function Reader({
         </div>
       )}
 
-      <div ref={bodyRef} className="flex-1 overflow-y-auto px-8 py-6">
+      <div
+        ref={bodyRef}
+        className="flex-1 overflow-y-auto px-8 py-6"
+        data-testid="reader-pane"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) clearAll();
+        }}
+      >
         {loading && !page && <div className="text-sm text-app-text-tertiary">Loading page…</div>}
         {page && (
           <div

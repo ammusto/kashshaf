@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
-import { labApi, type Page } from '../../api/lab';
+import { labApi, type Page, type PageRef } from '../../api/lab';
 import {
   applyTracked,
   DEFAULT_PARAMS,
   emptyStack,
   isnadApi,
   layersFor,
+  pageLabel,
   redoTracked,
+  spansPages,
   undoTracked,
   type Confidence,
   type Group,
@@ -58,7 +60,15 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
   const bookId = book?.id ?? null;
   const [rows, setRows] = useState<IsnadRow[]>([]);
   const [index, setIndex] = useState(0);
-  const [page, setPage] = useState<Page | null>(null);
+  /** A row opened from the transmitter table that the filter does not list. */
+  const [pinned, setPinned] = useState<IsnadRow | null>(null);
+  /** The pages the current row runs over (start page first) and which one is shown. */
+  const [spanPages, setSpanPages] = useState<Page[]>([]);
+  const [spanOffset, setSpanOffset] = useState(0);
+  const [highlight, setHighlight] = useState<[number, number] | null>(null);
+  const [pendingJump, setPendingJump] = useState<{ tok_start: number; tok_end: number } | null>(null);
+  const [occurrences, setOccurrences] = useState<TransmitterListRow[] | null>(null);
+  const [bookRefs, setBookRefs] = useState<PageRef[]>([]);
   const [classes, setClasses] = useState<[number, TokenClass][]>([]);
   const [filter, setFilter] = useState<IsnadFilter>({ status: 'candidate', min_confidence: 0.2 });
   const [params, setParams] = useState<Params>(DEFAULT_PARAMS);
@@ -82,7 +92,10 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
   const stack = useRef<OpStack>(emptyStack());
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const current = rows[index] ?? null;
+  const current = pinned ?? rows[index] ?? null;
+  const page = spanPages[spanOffset] ?? null;
+  /** Stream offset of the shown page's token 0. */
+  const offset = spanPages.slice(0, spanOffset).reduce((n, p) => n + p.tokens.length, 0);
 
   // ---------------------------------------------------------- loading ---
 
@@ -116,22 +129,37 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
     void reloadTable();
   }, [reloadTable]);
 
-  // The current candidate's page and classes.
+  useEffect(() => {
+    setBookRefs([]);
+    setPinned(null);
+    if (bookId == null) return;
+    labApi.listPageRefs(bookId).then(setBookRefs).catch(() => {});
+  }, [bookId]);
+
+  // The current candidate's pages — start page through the later of its
+  // end page and its matn's end page (spec 1.4) — and its classes.
   useEffect(() => {
     if (!current) {
-      setPage(null);
+      setSpanPages([]);
+      setSpanOffset(0);
       setClasses([]);
       return;
     }
     let alive = true;
     (async () => {
       try {
-        const [p, c] = await Promise.all([
-          labApi.getPage(current.book_id, current.part_index, current.page_id),
+        const refs = bookRefs.length ? bookRefs : await labApi.listPageRefs(current.book_id);
+        const at = (p: number | null, g: number | null) => (p == null || g == null ? -1 : refs.findIndex((r) => r.part_index === p && r.page_id === g));
+        const start = at(current.part_index, current.page_id);
+        const end = Math.max(start, at(current.end_part_index, current.end_page_id), at(current.matn_end_part_index, current.matn_end_page_id));
+        const wanted = start < 0 ? [{ book_id: current.book_id, part_index: current.part_index, page_id: current.page_id }] : refs.slice(start, end + 1);
+        const [pages, c] = await Promise.all([
+          Promise.all(wanted.map((r) => labApi.getPage(r.book_id, r.part_index, r.page_id))),
           isnadApi.classes(current.id),
         ]);
         if (alive) {
-          setPage(p);
+          setSpanPages(pages.filter((p): p is Page => p != null));
+          setSpanOffset(0);
           setClasses(c);
         }
       } catch (e) {
@@ -142,6 +170,23 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
       alive = false;
     };
   }, [current?.id, current?.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A jump requested from the transmitter table (fix 7): once the span's
+  // pages are here, step to the page holding the span and highlight it.
+  useEffect(() => {
+    if (!pendingJump || !spanPages.length) return;
+    let acc = 0;
+    for (let k = 0; k < spanPages.length; k++) {
+      const len = spanPages[k].tokens.length;
+      if (pendingJump.tok_start < acc + len || k === spanPages.length - 1) {
+        setSpanOffset(k);
+        setHighlight([pendingJump.tok_start - acc, pendingJump.tok_end - acc]);
+        break;
+      }
+      acc += len;
+    }
+    setPendingJump(null);
+  }, [pendingJump, spanPages]);
 
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -207,8 +252,51 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
     if (!current) return;
     void doOp({ op: 'set_status', isnad_id: current.id, status });
   };
-  const next = () => setIndex((i) => Math.min(i + 1, rows.length - 1));
-  const prev = () => setIndex((i) => Math.max(i - 1, 0));
+  const next = () => { setPinned(null); setHighlight(null); setIndex((i) => Math.min(i + 1, rows.length - 1)); };
+  const prev = () => { setPinned(null); setHighlight(null); setIndex((i) => Math.max(i - 1, 0)); };
+
+  /** Fix 7: open the reader at a transmitter's occurrence, name highlighted. */
+  const jumpTo = useCallback(
+    async (r: TransmitterListRow) => {
+      setOccurrences(null);
+      setSelectedRows([r.id]);
+      const inList = rows.findIndex((x) => x.id === r.isnad_id);
+      if (inList >= 0) {
+        setPinned(null);
+        setIndex(inList);
+      } else {
+        try {
+          setPinned(await isnadApi.get(r.isnad_id));
+        } catch (e) {
+          setError(String(e));
+          return;
+        }
+      }
+      setSelectedTransmitter(r.id);
+      setPendingJump({ tok_start: r.tok_start, tok_end: r.tok_end });
+    },
+    [rows]
+  );
+
+  /** Fix 7: a row click — one occurrence jumps; a grouped row offers its occurrences. */
+  const onRowClick = (r: TransmitterListRow) => {
+    if (groupByForm) {
+      const all = table.filter((x) => x.form_norm === r.form_norm);
+      if (all.length > 1) {
+        setOccurrences(all);
+        setSelectedRows([r.id]);
+        return;
+      }
+    }
+    void jumpTo(r);
+  };
+
+  /** Fix 8: a background click or Escape in the reader clears the selection. */
+  const onClearSelection = useCallback(() => {
+    setSelectedTransmitter(null);
+    setSelectedToken(null);
+    setHighlight(null);
+  }, []);
 
   const nudgeBoundary = (delta: number) => {
     if (!current || current.matn_tok_start == null) return;
@@ -216,8 +304,9 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
     void doOp({ op: 'set_matn', isnad_id: current.id, start, end: current.matn_tok_end });
   };
 
-  const onTokenClick = (idx: number) => {
+  const onTokenClick = (local: number) => {
     if (!current) return;
+    const idx = local + offset;
     if (mode === 'matn-start') {
       void doOp({ op: 'set_matn', isnad_id: current.id, start: idx, end: current.matn_tok_end && current.matn_tok_end > idx ? current.matn_tok_end : null });
       setMode('none');
@@ -234,12 +323,18 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
       setMode('none');
     } else {
       // Plain click: select the transmitter under it (for split/merge/link),
-      // and remember the token (for retag).
+      // remember the token (for retag), and select its row on the right,
+      // scrolled into view (fix 7).
       const t = current.transmitters.find((x) => idx >= x.tok_start && idx < x.tok_end);
       setSelectedTransmitter(t ? t.id : null);
       setSelectedToken(idx);
+      if (t) {
+        setSelectedRows([t.id]);
+        setScrollToRow(t.id);
+      }
     }
   };
+  const [scrollToRow, setScrollToRow] = useState<number | null>(null);
 
   const retag = async (cls: TokenClass) => {
     if (!current || selectedToken == null) return;
@@ -389,7 +484,7 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
         case 'a': void acceptSuggestions(); break;
         case 'g': setGroupByForm((v) => !v); break;
         case '/': e.preventDefault(); searchRef.current?.focus(); break;
-        case 'Escape': setMode('none'); setPersonMenu(null); setPendingSuggestions(null); break;
+        case 'Escape': setMode('none'); setPersonMenu(null); setPendingSuggestions(null); setOccurrences(null); break;
         default: return;
       }
     };
@@ -399,14 +494,15 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
 
   // ---------------------------------------------------------- render ---
 
-  const layers = useMemo(() => (current ? layersFor(current, classes) : new Map()), [current, classes]);
+  const layers = useMemo(() => (current ? layersFor(current, classes, offset) : new Map()), [current, classes, offset]);
   const transmitterIndex = useMemo(() => {
     const m = new Map<number, number>();
     current?.transmitters.forEach((t, i) => {
-      for (let x = t.tok_start; x < t.tok_end; x++) m.set(x, i);
+      for (let x = t.tok_start; x < t.tok_end; x++) m.set(x - offset, i);
     });
     return m;
-  }, [current]);
+  }, [current, offset]);
+  const multiPage = current ? spansPages(current) || spanPages.length > 1 : false;
 
   const layerClass = useCallback(
     (idx: number) => {
@@ -438,7 +534,7 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
     { key: 'parts', label: 'Parsed', sortValue: (r) => [r.kunya, r.ism, r.nasab, r.nisba].filter(Boolean).join(' · '), rtl: true, width: '3fr', render: (r) => [r.kunya && `ك:${r.kunya}`, r.ism && `ا:${r.ism}`, r.nasab, r.nisba && `ن:${r.nisba}`, r.laqab && `ل:${r.laqab}`].filter(Boolean).join(' · ') },
     { key: 'count', label: '#', sortValue: (r) => r.form_count, align: 'right', width: '48px', render: (r) => fmt(r.form_count) },
     { key: 'person', label: 'Person', sortValue: (r) => r.person_name ?? r.suggested_person_name ?? '', rtl: true, width: '2fr', render: (r) => r.person_name ? <span>{r.person_name}</span> : r.suggested_person_name ? <span className="border border-dashed border-app-accent text-app-accent px-1 rounded" title="Suggested from a matching form; not linked">{r.suggested_person_name}?</span> : <span className="text-app-text-tertiary">—</span> },
-    { key: 'where', label: 'Page', sortValue: (r) => r.page_id, width: '70px', render: (r) => `${r.part_index}:${r.page_id}` },
+    { key: 'where', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => pageLabel(r.part_index, r.page_id, book?.parts) },
   ];
 
   const conf: Confidence | null = current ? safeConf(current.confidence_json) : null;
@@ -518,7 +614,11 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
           <div className="px-3 py-2 border-b border-app-border-light bg-app-surface text-sm" data-testid="chain-view">
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`px-1.5 rounded text-xs ${current.status === 'confirmed' ? 'bg-app-highlight-lemma' : current.status === 'rejected' ? 'bg-red-100' : 'bg-app-surface-variant'}`}>{current.status}</span>
-              <span className="text-xs text-app-text-tertiary">{current.kind} · {current.links} links · {current.part_index}:{current.page_id}</span>
+              <span className="text-xs text-app-text-tertiary">
+                {current.kind} · {current.links} links · p. {pageLabel(current.part_index, current.page_id, book.parts)}
+                {multiPage && current.end_page_id != null && ` → ${pageLabel(current.end_part_index ?? current.part_index, current.end_page_id, book.parts)}`}
+                {pinned && ' · opened from the table'}
+              </span>
               <span className="text-xs" title={conf ? `links ${conf.links.toFixed(2)} · noun_prop ${conf.noun_prop.toFixed(2)} · terminal ${conf.terminal.toFixed(0)} · clean ${conf.clean.toFixed(2)}` : ''} data-testid="confidence">
                 confidence {current.confidence.toFixed(2)}
                 {conf && <span className="text-app-text-tertiary"> (why: links {conf.links.toFixed(2)}, noun_prop {conf.noun_prop.toFixed(2)}, terminal {conf.terminal.toFixed(0)}, clean {conf.clean.toFixed(2)})</span>}
@@ -528,15 +628,16 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
               {current.transmitters.map((t, i) => (
                 <span key={t.id} className="flex items-baseline gap-1">
                   <span className="text-xs text-app-text-tertiary font-ui" dir="ltr">[{t.verb_before ?? '—'}]</span>
-                  <button onClick={() => setSelectedTransmitter(t.id)} className={`lay-t${i % 6} px-1 rounded ${t.id === selectedTransmitter ? 'lay-t-selected' : ''}`} title={[t.kunya, t.ism, t.nasab, t.nisba, t.laqab].filter(Boolean).join(' · ')}>
+                  <button onClick={() => setSelectedTransmitter(t.id)} className={`lay-t${i % 6} px-1 rounded ${t.id === selectedTransmitter ? 'lay-t-selected' : ''}`} title={[t.kunya, t.ism, t.nasab, t.nisba, t.laqab, t.place && `place: ${t.place}`].filter(Boolean).join(' · ')}>
                     {t.raw}
+                    {t.place && <span className="text-xs text-app-text-tertiary"> ({t.place})</span>}
                   </button>
                   {i < current.transmitters.length - 1 && <span className="text-app-text-tertiary">←</span>}
                 </span>
               ))}
-              {current.matn_tok_start != null && page && (
+              {current.matn_tok_start != null && spanPages.length > 0 && (
                 <span className="text-app-text-secondary">
-                  ← <span className="lay-matn px-1">{page.tokens.slice(current.matn_tok_start, Math.min(current.matn_tok_end ?? current.matn_tok_start + 12, current.matn_tok_start + 12)).map((t) => t.surface).join(' ')}…</span>
+                  ← <span className="lay-matn px-1">{spanPages.flatMap((p) => p.tokens).slice(current.matn_tok_start, Math.min(current.matn_tok_end ?? current.matn_tok_start + 12, current.matn_tok_start + 12)).map((t) => t.surface).join(' ')}…</span>
                 </span>
               )}
             </div>
@@ -581,8 +682,17 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
           <div className="px-3 py-1 text-xs text-app-error" role="alert">{error}</div>
         )}
 
+        {multiPage && spanPages.length > 1 && (
+          <div className="px-3 py-1 text-xs bg-app-accent-light border-b border-app-border-light flex items-center gap-2" data-testid="span-pages">
+            <span>This isnād runs over {spanPages.length} pages — showing page {spanOffset + 1} of {spanPages.length} ({pageLabel(page?.part_index ?? 0, page?.page_id ?? 0, book.parts)}).</span>
+            <button onClick={() => setSpanOffset((k) => Math.max(0, k - 1))} disabled={spanOffset === 0} className="px-2 border border-app-border-medium rounded disabled:opacity-40">‹ previous page</button>
+            <button onClick={() => setSpanOffset((k) => Math.min(spanPages.length - 1, k + 1))} disabled={spanOffset >= spanPages.length - 1} className="px-2 border border-app-border-medium rounded disabled:opacity-40">next page ›</button>
+            {spanOffset < spanPages.length - 1 && <span className="text-app-text-tertiary">⤵ continues on the next page</span>}
+            {spanOffset > 0 && <span className="text-app-text-tertiary">⤴ continued from the previous page</span>}
+          </div>
+        )}
         <div className="flex-1 min-h-0">
-          <Reader page={page} pages={[]} index={0} onNavigate={() => {}} layerClass={layerClass} onTokenClick={onTokenClick} loading={false} error={null} />
+          <Reader page={page} pages={[]} index={0} onNavigate={() => {}} highlight={highlight} layerClass={layerClass} onTokenClick={onTokenClick} onClearSelection={onClearSelection} loading={false} error={null} />
         </div>
       </section>
 
@@ -625,15 +735,33 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
           <PersonEditor person={persons.find((p) => p.id === personMenu) ?? null} table={table} onClose={() => setPersonMenu(null)} onOp={(op) => doOp(op, { whole: true })} />
         )}
 
+        {occurrences && (
+          <div className="px-3 py-2 border-b border-app-border-light bg-app-accent-light text-xs" data-testid="occurrences">
+            <div className="mb-1 flex items-center">
+              <span className="font-arabic" dir="rtl">{occurrences[0].raw}</span>
+              <span className="ml-2 text-app-text-tertiary">{occurrences.length} occurrences — choose one</span>
+              <button onClick={() => setOccurrences(null)} className="ml-auto">×</button>
+            </div>
+            <ul className="max-h-32 overflow-y-auto">
+              {occurrences.map((o) => (
+                <li key={o.id}>
+                  <button onClick={() => void jumpTo(o)} className="text-app-accent underline">
+                    p. {pageLabel(o.part_index, o.page_id, book.parts)} · [{o.tok_start}–{o.tok_end}) · {o.isnad_status}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="flex-1 min-h-0 overflow-y-auto p-2">
           <VirtualTable
             columns={tableColumns}
             rows={shownTable}
             rowKey={(r) => r.id}
             height={640}
-            onRowClick={(r) => {
-              setSelectedRows((sel) => (sel.includes(r.id) ? sel.filter((x) => x !== r.id) : [...sel.slice(-1), r.id]));
-            }}
+            onRowClick={onRowClick}
+            onRowCtrlClick={(r) => setSelectedRows((sel) => (sel.includes(r.id) ? sel.filter((x) => x !== r.id) : [...sel.slice(-1), r.id]))}
+            scrollToKey={scrollToRow}
             emptyText={table.length ? 'No transmitter matches.' : 'Run the extractor to fill this table.'}
             testId="transmitter-table"
           />

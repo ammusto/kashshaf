@@ -9,6 +9,9 @@
 //!   run and re-synced on every start without touching user rows or
 //!   user-disabled shipped rows.
 //! - Migration 3 (Phase 3): text reuse and Qurʾān quotation tables (§6.4).
+//! - Migration 4 (Phase 4, amendment 1.4): spans that cross a page break —
+//!   end-page columns on `isnad` (chain and matn), a page and a place on
+//!   `transmitter`; `ayas_json` on `quran_match` for ambiguous hits.
 
 use anyhow::{anyhow, Context, Result};
 use rusqlite::Connection;
@@ -160,6 +163,24 @@ const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX IF NOT EXISTS quran_match_page ON quran_match(book_id, part_index, page_id);
         CREATE INDEX IF NOT EXISTS quran_match_book ON quran_match(book_id, sura, aya_start);
+    "#,
+    },
+    Migration {
+        version: 4,
+        name: "end pages on isnad, page and place on transmitter, ayas_json on quran_match",
+        // Token offsets in `isnad` and `transmitter` are stream offsets from
+        // the start page's token 0 and may run past its end; the end columns
+        // name the page the last token falls on. NULL = the start page (rows
+        // written before this migration).
+        sql: r#"
+        ALTER TABLE isnad ADD COLUMN end_part_index INTEGER;
+        ALTER TABLE isnad ADD COLUMN end_page_id INTEGER;
+        ALTER TABLE isnad ADD COLUMN matn_end_part_index INTEGER;
+        ALTER TABLE isnad ADD COLUMN matn_end_page_id INTEGER;
+        ALTER TABLE transmitter ADD COLUMN part_index INTEGER;
+        ALTER TABLE transmitter ADD COLUMN page_id INTEGER;
+        ALTER TABLE transmitter ADD COLUMN place TEXT;
+        ALTER TABLE quran_match ADD COLUMN ayas_json TEXT;
     "#,
     },
 ];
@@ -381,6 +402,39 @@ mod tests {
         }
         let status: String = conn.query_row("SELECT status FROM isnad WHERE id = 1", [], |r| r.get(0)).unwrap();
         assert_eq!(status, "confirmed", "the Phase 2 isnād survives");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Phase 3 database (schema 3) gains the end-page columns and keeps
+    /// its rows; a row written before has NULL ends, meaning the start page.
+    #[test]
+    fn a_phase_3_database_migrates_to_the_end_page_schema() {
+        let dir = temp("from-v3");
+        let path = dir.join("analysis.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..3] {
+                conn.execute_batch(&migration_sql(m)).unwrap();
+            }
+            conn.execute("INSERT INTO lab_info (key, value) VALUES ('schema_version', '3')", []).unwrap();
+            conn.execute(
+                "INSERT INTO isnad (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
+                 kind, links, confidence, confidence_json, status, created_at, updated_at, extractor_version, lexicon_hash) \
+                 VALUES ('4.1.0', 1, 0, 1, 0, 5, 'x', 'h', 'isnad', 2, 0.5, '{}', 'confirmed', 't', 't', 'v', 'l')",
+                [],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO transmitter (isnad_id, position, tok_start, tok_end, raw) VALUES (1, 0, 1, 3, 'x')", []).unwrap();
+        }
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.schema_version().unwrap(), target_schema_version());
+        let conn = store.connect().unwrap();
+        let (end, place): (Option<i64>, Option<String>) = conn
+            .query_row("SELECT i.end_page_id, t.place FROM isnad i JOIN transmitter t ON t.isnad_id = i.id WHERE i.id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(end, None, "an old row's end is its start page");
+        assert_eq!(place, None);
+        conn.execute("UPDATE isnad SET end_part_index = 0, end_page_id = 2 WHERE id = 1", []).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

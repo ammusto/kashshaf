@@ -26,6 +26,7 @@ const api = vi.hoisted(() => {
   };
   const lab = {
     getPage: vi.fn(),
+    listPageRefs: vi.fn(async () => [{ book_id: 527, part_index: 0, page_id: 9 }]),
     statsCancel: vi.fn(),
     saveExport: vi.fn(async (name: string, _c: string) => `C:/lab/exports/${name}`),
   };
@@ -84,6 +85,7 @@ const page = {
 function transmitter(id: number, position: number, s: number, e: number, raw: string, extra: Partial<TransmitterListRow> = {}): TransmitterListRow {
   return {
     id, isnad_id: 1, position, tok_start: s, tok_end: e, raw, kunya: null, ism: raw, nasab: null, nisba: null, laqab: null,
+    place: null,
     verb_before: 'نا', person_id: null, form_norm: raw, suggested_person_id: null,
     part_index: 0, page_id: 9, isnad_status: 'candidate', form_count: 1, person_name: null, suggested_person_name: null, ...extra,
   };
@@ -91,6 +93,10 @@ function transmitter(id: number, position: number, s: number, e: number, raw: st
 
 const row: IsnadRow = {
   id: 1, book_id: 527, part_index: 0, page_id: 9, tok_start: 0, tok_end: 19, kind: 'isnad',
+  end_part_index: null,
+  end_page_id: null,
+  matn_end_part_index: null,
+  matn_end_page_id: null,
   matn_tok_start: 19, matn_tok_end: 23, links: 5, confidence: 0.6,
   confidence_json: JSON.stringify({ links: 1, noun_prop: 0, terminal: 1, clean: 1, total: 0.6 }),
   status: 'candidate', created_at: 't', updated_at: 't', overrides: {},
@@ -123,6 +129,64 @@ beforeEach(() => {
 });
 
 describe('IsnadWorkbench', () => {
+  it('renders a span that crosses a page break with the break marked and steps through it (fix 1)', async () => {
+    // Page 9 (23 tokens) holds the chain's start; page 10 holds its end and the matn.
+    const page10 = { ...page, page_id: 10, page_number: '10', body: 'عن وهب بن منبه قال اني اجد في كتاب الله', tokens: 'عن وهب بن منبه قال اني اجد في كتاب الله'.split(' ').map((w, i) => ({ idx: i, surface: w, lemma: w, root: null, pos: 'noun', features: [], clitics: [] })) };
+    const twoPage: IsnadRow = {
+      ...row,
+      tok_start: 0,
+      tok_end: 29,
+      end_part_index: 0,
+      end_page_id: 10,
+      matn_tok_start: 29,
+      matn_tok_end: 34,
+      matn_end_part_index: 0,
+      matn_end_page_id: 10,
+      transmitters: [...row.transmitters, { ...row.transmitters[0], id: 99, position: 4, tok_start: 25, tok_end: 28, raw: 'وهب بن منبه', part_index: 0, page_id: 10 }],
+    };
+    api.lab.listPageRefs.mockResolvedValue([{ book_id: 527, part_index: 0, page_id: 9 }, { book_id: 527, part_index: 0, page_id: 10 }, { book_id: 527, part_index: 0, page_id: 11 }]);
+    api.lab.getPage.mockImplementation(async (_b: number, _p: number, id: number) => (id === 9 ? page : id === 10 ? page10 : null));
+    api.isnad.list.mockResolvedValue([twoPage]);
+    api.isnad.classes.mockResolvedValue([[0, 'verb'], [24, 'connect'], [28, 'verb']]);
+    api.isnad.transmitters.mockResolvedValue([]);
+    api.isnad.persons.mockResolvedValue([]);
+    render(<IsnadWorkbench book={book} />);
+    const bar = await screen.findByTestId('span-pages');
+    expect(bar).toHaveTextContent('runs over 2 pages');
+    expect(bar).toHaveTextContent('continues on the next page');
+    // The first page: the chain layer runs to the page end.
+    await waitFor(() => expect(document.querySelector('[data-token="22"]')?.className).toContain('lay-'));
+    fireEvent.click(screen.getByRole('button', { name: 'next page ›' }));
+    await waitFor(() => expect(screen.getByTestId('span-pages')).toHaveTextContent('page 2 of 2'));
+    expect(screen.getByTestId('span-pages')).toHaveTextContent('continued from the previous page');
+    // On the second page the transmitter at stream 25–28 is page-local 2–5, and the matn follows at 6.
+    await waitFor(() => expect(document.querySelector('[data-token="2"]')?.className).toMatch(/lay-t\d/));
+    expect(document.querySelector('[data-token="6"]')?.className).toContain('lay-matn');
+    // A matn-start click on the second page sends the stream offset.
+    fireEvent.click(screen.getByRole('button', { name: /Matn starts at/ }));
+    fireEvent.mouseDown(document.querySelector('[data-token="7"]') as HTMLElement);
+    fireEvent.mouseUp(document.querySelector('[data-token="7"]') as HTMLElement);
+    await waitFor(() => expect(api.isnad.apply).toHaveBeenCalledWith(expect.objectContaining({ op: 'set_matn', start: 30 })));
+  });
+
+  it('opens the reader at a table row’s occurrence with the name highlighted, and a token click selects its row (fix 7)', async () => {
+    api.isnad.list.mockResolvedValue([row]);
+    api.isnad.get.mockResolvedValue(row);
+    api.isnad.classes.mockResolvedValue([]);
+    const tableRows = row.transmitters;
+    api.isnad.transmitters.mockResolvedValue(tableRows);
+    api.isnad.persons.mockResolvedValue([]);
+    render(<IsnadWorkbench book={book} />);
+    await screen.findByTestId('transmitter-table');
+    const cell = await screen.findByText(tableRows[1].raw, { selector: '[role="gridcell"], span, div' });
+    fireEvent.click(cell.closest('[role="row"]') ?? cell);
+    await waitFor(() => expect(document.querySelector(`[data-token="${tableRows[1].tok_start}"]`)?.className).toContain('tok-hit'));
+    // A token inside the first transmitter selects that row on the right.
+    fireEvent.mouseDown(document.querySelector('[data-token="1"]') as HTMLElement);
+    fireEvent.mouseUp(document.querySelector('[data-token="1"]') as HTMLElement);
+    await waitFor(() => expect(screen.getByText(tableRows[0].raw, { selector: 'span.font-semibold' })).toBeInTheDocument());
+  });
+
   it('asks for a book first', () => {
     render(<IsnadWorkbench book={null} />);
     expect(screen.getByText('Choose a book in Books first.')).toBeInTheDocument();

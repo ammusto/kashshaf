@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 pub use freq::{Freq, FreqLayer, FreqTable};
 
-pub use kashshaf_engine::tokens::Token;
+pub use kashshaf_engine::tokens::{Token, TokenClitic};
 
 /// Book metadata as `metadata.db` stores it. The same shape both modes return
 /// and the same shape the TypeScript `BookMetadata` in `@kashshaf/shared`
@@ -82,6 +82,11 @@ pub struct CandidateQuery {
     /// Matched as a phrase, in order, on `layer`.
     pub terms: Vec<String>,
     pub limit: usize,
+    /// Positions of leniency between the words (amendment 1.4, the
+    /// whole-passage fallback). Local mode honours it; the server has no
+    /// slop route, so api mode runs the exact phrase.
+    #[serde(default)]
+    pub slop: u32,
 }
 
 /// What a candidate query returns: up to `limit` pages, and how many pages

@@ -19,6 +19,16 @@
 //! `noun_prop` is 11.5% of all tokens. So the tag is strong evidence inside
 //! a chain and no licence to open one.
 //!
+//! Amendment 1.4 (Phase 4): the extractor runs over a *stream* of pages —
+//! [`extract_stream`] concatenates a window of pages in reading order, so an
+//! open chain continues across a page break and a matn runs to its real
+//! terminator; only a `<title>` heading or the window's end stops it. Token
+//! offsets in a [`Candidate`] are stream offsets from the first page's token
+//! 0, and the caller maps them back to pages. Two token rules came with it:
+//! a *bridge word* (`به بذلك بهذا لنا لي له`) between a verb and a name keeps
+//! the door open, and a *place tag* (`ب` + `noun_prop`: `بالكوفة`) inside a
+//! chain is CONNECT-class and attaches to the preceding transmitter.
+//!
 //! Three departures from the letter of §4.2, each forced by that:
 //!
 //! - A nisba is as often tagged `noun` as `adj` (`السجستاني/noun`,
@@ -102,6 +112,8 @@ pub struct TransmitterSpan {
     pub tok_end: usize,
     pub raw: String,
     pub parts: NameParts,
+    /// A place tag that followed the name (`بالكوفة`), amendment 1.4.
+    pub place: Option<String>,
     /// The transmission verb that introduced this link.
     pub verb_before: Option<String>,
 }
@@ -143,13 +155,31 @@ pub struct View {
     pub surface: String,
     pub norm: String,
     pub pos: String,
+    /// `ب` fused with a proper noun (`بالكوفة`, `بمصر`): a place tag when it
+    /// sits inside a chain (amendment 1.4).
+    pub place: bool,
 }
 
 impl View {
     pub fn of(t: &Token) -> Self {
-        Self { surface: t.surface.clone(), norm: normalize_arabic(&t.surface), pos: t.pos.clone() }
+        let place = t.pos == "noun_prop" && t.clitics.iter().any(|c| c.clitic_type.starts_with("bi_")) && t.surface.starts_with('ب');
+        Self { surface: t.surface.clone(), norm: normalize_arabic(&t.surface), pos: t.pos.clone(), place }
     }
 }
+
+/// Words that may stand between a transmission verb and the name it
+/// introduces without closing the door: `أخبرنا به يحيى`, `قال لنا محمد`
+/// (amendment 1.4).
+const BRIDGES: [&str; 8] = ["به", "بذلك", "بهذا", "لنا", "لي", "له", "بها", "لهم"];
+
+/// Pages the matn of one chain may run on before it is cut (amendment 1.4).
+pub const MATN_MAX_PAGES: usize = 5;
+
+/// Comparative closers: a chain that ends in `بمعناه` / `نحوه` / `مثله` has
+/// no matn of its own, and the next `حدثنا` opens a new one. Without this,
+/// consecutive isnād-only ḥadīths merge into one chain — on one page or, with
+/// the stream (amendment 1.4), across a page break.
+const CLOSERS: [&str; 8] = ["بمعناه", "نحوه", "بنحوه", "مثله", "بمثله", "بمعني", "معناه", "بنحو"];
 
 /// §4.2's list, plus the inflected kin words the corpus actually uses for a
 /// pronominal link (`عن أبيه`, `عن والده`, `عن عمه`): the spec's bare `والد`
@@ -251,6 +281,9 @@ pub fn classify(
         let prev = if i == 0 { Class::Other } else { classes[i - 1] };
         classes[i] = if CONNECT_WORDS.contains(&w) {
             Class::Connect
+        } else if views[i].place && matches!(prev, Class::Name | Class::Connect | Class::Formula) {
+            // A place tag after a name: transparent, attached to the name.
+            Class::Connect
         } else if views[i].pos == "noun_prop" {
             Class::Name
         } else if is_nominal(&views[i].pos) && matches!(prev, Class::Verb | Class::Connect) {
@@ -317,11 +350,50 @@ fn is_terminal(views: &[View], matn_start: usize, last_verb: Option<&str>) -> bo
     last_verb == Some("قال")
 }
 
-/// Extract every candidate on one page, in reading order.
+/// Extract every candidate on one page, in reading order — the page as a
+/// stream of one; a chain reaching the page end ends there.
 pub fn extract_page(tokens: &[Token], body: &str, lex: &Lexicon, params: &Params, overrides: &HashMap<usize, Class>) -> Vec<Candidate> {
-    let views: Vec<View> = tokens.iter().map(View::of).collect();
-    let headings: Vec<(usize, usize)> = sections::headings(body).into_iter().map(|h| (h.tok_start, h.tok_end)).collect();
-    let markers = hadith_markers(body);
+    extract_stream(&[(tokens, body)], lex, params, overrides)
+}
+
+/// Where each page of a stream starts: `starts[k]` is the stream offset of
+/// page `k`'s token 0; `starts[len]` is the stream length.
+pub fn page_starts(pages: &[(&[Token], &str)]) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(pages.len() + 1);
+    let mut acc = 0;
+    for (t, _) in pages {
+        starts.push(acc);
+        acc += t.len();
+    }
+    starts.push(acc);
+    starts
+}
+
+/// The page index and page-local token of a stream offset.
+pub fn locate(starts: &[usize], offset: usize) -> (usize, usize) {
+    let k = starts[..starts.len() - 1].partition_point(|&s| s <= offset).saturating_sub(1);
+    (k, offset - starts[k])
+}
+
+/// Extract every candidate over a window of pages in reading order, as one
+/// stream (amendment 1.4): a chain open at a page end continues on the next
+/// page, and a matn runs to its terminator or the window's end. Offsets in
+/// the result are stream offsets (`page_starts`); `overrides` is keyed the
+/// same way. The caller decides which candidates to keep — a whole-book run
+/// keeps those that *start* on the window's first page and slides the
+/// window one page at a time, so the window's end is the `MATN_MAX_PAGES`
+/// cap.
+pub fn extract_stream(pages: &[(&[Token], &str)], lex: &Lexicon, params: &Params, overrides: &HashMap<usize, Class>) -> Vec<Candidate> {
+    let starts = page_starts(pages);
+    let mut views: Vec<View> = Vec::with_capacity(starts[starts.len() - 1]);
+    let mut headings: Vec<(usize, usize)> = Vec::new();
+    let mut markers: Vec<usize> = Vec::new();
+    for (k, (tokens, body)) in pages.iter().enumerate() {
+        let off = starts[k];
+        views.extend(tokens.iter().map(View::of));
+        headings.extend(sections::headings(body).into_iter().map(|h| (h.tok_start + off, h.tok_end + off)));
+        markers.extend(hadith_markers(body).into_iter().map(|m| m + off));
+    }
     extract_views(&views, &headings, &markers, lex, params, overrides)
 }
 
@@ -352,7 +424,9 @@ pub fn extract_views(
             Class::Connect => door || views[x].norm == "عن",
             Class::Name => door,
             Class::Formula => door,
-            Class::Other | Class::Boundary => false,
+            // A bridge word right after the verb keeps the door open.
+            Class::Other => door && BRIDGES.contains(&views[x].norm.as_str()),
+            Class::Boundary => false,
         };
     }
     // Names that can actually start or continue a span, for the lookahead.
@@ -382,16 +456,19 @@ pub fn extract_views(
         let verb_text = |at: usize| -> String { views[at..at + lens[at].max(1)].iter().map(|v| v.norm.clone()).collect::<Vec<_>>().join(" ") };
 
         let mut spans: Vec<(usize, usize, Option<String>)> = Vec::new();
+        let mut places: Vec<Option<String>> = Vec::new();
         let mut cur: Option<(usize, usize)> = None;
         let mut last_verb: Option<String> = Some(verb_text(i));
         let mut noise = 0usize;
         let mut ended_at: Option<usize> = None;
+        let mut restart_at: Option<usize> = None;
         let mut j = i + lens[i];
 
-        let close = |cur: &mut Option<(usize, usize)>, spans: &mut Vec<(usize, usize, Option<String>)>, last_verb: &Option<String>| {
+        let close = |cur: &mut Option<(usize, usize)>, spans: &mut Vec<(usize, usize, Option<String>)>, places: &mut Vec<Option<String>>, last_verb: &Option<String>| {
             if let Some((a, b)) = cur.take() {
                 if b > a {
                     spans.push((a, b, last_verb.clone()));
+                    places.push(None);
                 }
             }
         };
@@ -428,10 +505,16 @@ pub fn extract_views(
                 Class::Connect => {
                     let w = views[j].norm.as_str();
                     let next_is_name = classes.get(j + 1) == Some(&Class::Name);
-                    if w == "عن" {
+                    if views[j].place && !CONNECT_WORDS.contains(&w) {
+                        // A place tag: close the name it follows and attach.
+                        close(&mut cur, &mut spans, &mut places, &last_verb);
+                        if let Some(p) = places.last_mut() {
+                            *p = Some(views[j].surface.clone());
+                        }
+                    } else if w == "عن" {
                         // `عن` is a link, not part of a name: X عن Y are two
                         // transmitters, and Y's verb_before is عن.
-                        close(&mut cur, &mut spans, &last_verb);
+                        close(&mut cur, &mut spans, &mut places, &last_verb);
                         last_verb = Some("عن".to_string());
                     } else if !CONNECT_WORDS.contains(&w) {
                         // An ال-word continuing a name (a nisba): part of the span.
@@ -441,7 +524,7 @@ pub fn extract_views(
                     } else if cur.is_some() && (next_is_name || ALWAYS_CONTINUE.contains(&w)) {
                         cur = cur.map(|(a, _)| (a, j + 1));
                     } else if cur.is_some() {
-                        close(&mut cur, &mut spans, &last_verb);
+                        close(&mut cur, &mut spans, &mut places, &last_verb);
                     } else if opened[j] && (next_is_name || KIN.contains(&w)) {
                         // A name that starts with its connector (أبو X, ابن X,
                         // مولى X) — or is one: عن أبيه قال.
@@ -452,10 +535,27 @@ pub fn extract_views(
                 Class::Formula => {
                     j += lens[j].max(1);
                 }
+                Class::Verb if spans.is_empty() && cur.is_none() && noise > 0 => {
+                    // The opening verb introduced nothing but noise before
+                    // this verb (`فقال هذا أوردني الموارد حدثنا …`): a chain
+                    // does not begin with noise. Restart here.
+                    restart_at = Some(j);
+                    break;
+                }
                 Class::Verb => {
-                    close(&mut cur, &mut spans, &last_verb);
+                    close(&mut cur, &mut spans, &mut places, &last_verb);
                     last_verb = Some(verb_text(j));
                     j += lens[j].max(1);
+                }
+                Class::Other if CLOSERS.contains(&views[j].norm.as_str()) => {
+                    // `… عن عمر بن الخطاب بمعناه`: the chain is complete and
+                    // has no matn; whatever follows is a new chain.
+                    ended_at = Some(j);
+                    break;
+                }
+                Class::Other if cur.is_none() && j > 0 && BRIDGES.contains(&views[j].norm.as_str()) && matches!(classes[j - 1], Class::Verb | Class::Other) && opened[j] => {
+                    // `أخبرنا به يحيى`: the bridge is neither noise nor a boundary.
+                    j += 1;
                 }
                 Class::Other => {
                     if alive_after(j) {
@@ -463,7 +563,7 @@ pub fn extract_views(
                         if cur.is_some() && is_nominal(&views[j].pos) && cur.map(|(_, b)| b == j).unwrap_or(false) {
                             cur = cur.map(|(a, _)| (a, j + 1));
                         } else {
-                            close(&mut cur, &mut spans, &last_verb);
+                            close(&mut cur, &mut spans, &mut places, &last_verb);
                         }
                         j += 1;
                     } else {
@@ -473,7 +573,11 @@ pub fn extract_views(
                 }
             }
         }
-        close(&mut cur, &mut spans, &last_verb);
+        if let Some(r) = restart_at {
+            i = r;
+            continue;
+        }
+        close(&mut cur, &mut spans, &mut places, &last_verb);
         let chain_end = ended_at.unwrap_or(n);
         let links = spans.len();
 
@@ -551,6 +655,7 @@ pub fn extract_views(
                     tok_end: *b,
                     raw: views[*a..*b].iter().map(|v| v.surface.clone()).collect::<Vec<_>>().join(" "),
                     parts: names::parse(&views[*a..*b].iter().map(|v| v.norm.clone()).collect::<Vec<_>>()),
+                    place: places.get(pos).cloned().flatten(),
                     verb_before: verb.clone(),
                 })
                 .collect();
@@ -600,11 +705,22 @@ mod tests {
     use super::*;
 
     /// `surface/pos` words → views; a bare word is a `noun`.
+    /// `surface/pos` words → tokens (lemma = surface; a bare word is a noun).
+    fn toks(spec: &str) -> Vec<Token> {
+        spec.split_whitespace()
+            .enumerate()
+            .map(|(i, w)| {
+                let (sf, pos) = w.split_once('/').unwrap_or((w, "noun"));
+                Token { idx: i, surface: sf.to_string(), noclitic_surface: None, lemma: sf.to_string(), root: None, pos: pos.to_string(), features: vec![], clitics: vec![] }
+            })
+            .collect()
+    }
+
     fn views(s: &str) -> Vec<View> {
         s.split_whitespace()
             .map(|w| {
                 let (sf, pos) = w.split_once('/').unwrap_or((w, "noun"));
-                View { surface: sf.to_string(), norm: normalize_arabic(sf), pos: pos.to_string() }
+                View { surface: sf.to_string(), norm: normalize_arabic(sf), pos: pos.to_string(), place: false }
             })
             .collect()
     }
@@ -643,6 +759,90 @@ mod tests {
         assert_eq!(c[6], Class::Name);
         assert_eq!(c[7], Class::Formula);
         assert_eq!(c[10], Class::Verb);
+    }
+
+    /// Amendment 1.4, fix 2: `أخبرنا به يحيى … بالكوفة قال سمعت …` — a bridge
+    /// word after the verb and place tags after names. The first three links
+    /// are the user's example verbatim; the last two are synthetic (the text
+    /// is not in the sample corpus), shaped like the real continuation.
+    fn akrami_chain() -> Vec<View> {
+        let mut v = views(
+            "اخبرنا/verb به/prep يحيي/noun_prop بن محمد/noun_prop العكرمي/noun_prop بالكوفة/noun_prop قال/verb سمعت/verb الحسين/noun_prop بن محمد/noun_prop بن الفرزدق/noun_prop بمصر/noun_prop قال/verb سمعت/verb احمد/noun_prop بن حموك/noun_prop قال/verb سمعت/verb ابا/noun_prop عمرو/noun_prop الشيباني/adj قال/verb سمعت/verb ابن/noun_prop الاعرابي/noun_prop يذكر/verb ذلك/pron_dem قال/verb وكان/verb رجلا/noun فاضلا/adj",
+        );
+        for i in [6usize, 14] {
+            v[i].place = true;
+        }
+        v
+    }
+
+    #[test]
+    fn a_bridge_word_keeps_the_door_open_and_a_place_tag_attaches_to_the_name() {
+        let v = akrami_chain();
+        let (c, _, _) = classify(&v, &Lexicon::shipped(), &Params::default(), &HashMap::new(), &[]);
+        assert_eq!(c[1], Class::Other, "به is not a name");
+        assert_eq!(c[2], Class::Name, "the name after the bridge is still a name");
+        assert_eq!(c[6], Class::Connect, "بالكوفة is a place tag, CONNECT-class");
+        let out = extract_views(&v, &[], &[], &Lexicon::shipped(), &Params::default(), &HashMap::new());
+        assert_eq!(out.len(), 1, "{:?}", out.iter().map(|x| (x.tok_start, x.tok_end, x.links)).collect::<Vec<_>>());
+        let x = &out[0];
+        assert_eq!(x.links, 5, "{:?}", x.transmitters.iter().map(|t| t.raw.clone()).collect::<Vec<_>>());
+        assert_eq!(x.transmitters[0].raw, "يحيي بن محمد العكرمي");
+        assert_eq!(x.transmitters[0].place.as_deref(), Some("بالكوفة"));
+        assert_eq!(x.transmitters[0].verb_before.as_deref(), Some("اخبرنا"));
+        assert_eq!(x.transmitters[1].raw, "الحسين بن محمد بن الفرزدق");
+        assert_eq!(x.transmitters[1].place.as_deref(), Some("بمصر"));
+        assert_eq!(x.transmitters[2].raw, "احمد بن حموك");
+        assert_eq!(x.transmitters[2].place, None);
+        assert_eq!(x.transmitters[4].raw, "ابن الاعرابي");
+        // The chain ends at يذكر ذلك: the matn starts there.
+        assert_eq!(x.matn.map(|m| m.0), Some(29), "matn starts at يذكر (token 29)");
+        assert_eq!(x.tok_end, 29);
+    }
+
+    #[test]
+    fn a_comparative_closer_ends_the_chain_before_the_next_one() {
+        // Two isnād-only ḥadīths in a row (al-Zuhd 67–68): بمعناه closes the
+        // first; the second is its own chain, not five more links.
+        let out = run("حدثنا/verb ابو داود قال/verb نا/verb مالك عن/prep عمر بن عبد الرحمن عن/prep ابيه عن/prep عمر بن الخطاب بمعناه/noun حدثنا/verb ابو داود قال/verb نا/verb احمد بن صالح قال/verb نا/verb عبد الله بن نافع قال/verb ان/conj عمر بن الخطاب اتي/verb بمال/noun");
+        assert_eq!(out.len(), 2, "{:?}", out.iter().map(|x| (x.tok_start, x.tok_end, x.links)).collect::<Vec<_>>());
+        assert_eq!(out[0].links, 5);
+        assert_eq!(out[0].tok_end, 17, "the chain ends at بمعناه");
+        assert_eq!(out[1].tok_start, 18);
+        assert_eq!(out[1].links, 3, "{:?}", out[1].transmitters.iter().map(|t| t.raw.clone()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_chain_and_its_matn_continue_across_a_page_break() {
+        let lex = Lexicon::shipped();
+        let p = Params::default();
+        // Page 1 ends inside the chain; page 2 holds the rest and the matn;
+        // page 3 opens a new chain, which ends the matn.
+        let t1 = toks("حدثنا/verb ابو داود قال/verb نا/verb محمد بن كثير قال/verb انا/verb سفيان عن/prep");
+        let t2 = toks("سماك بن حرب عن/prep النعمان بن بشير قال/verb سمعت/verb عمر قال/verb في/prep قول الله توبة نصوحا الرجل يذنب الذنب فلا يعود");
+        let t3 = toks("حدثنا/verb ابو داود قال/verb نا/verb مسدد قال/verb نا/verb يحيي عن/prep سفيان قال/verb ذكر لي");
+        let pages: Vec<(&[Token], &str)> = vec![(&t1, ""), (&t2, ""), (&t3, "")];
+        let starts = page_starts(&pages);
+        assert_eq!(starts, vec![0, t1.len(), t1.len() + t2.len(), t1.len() + t2.len() + t3.len()]);
+        assert_eq!(locate(&starts, t1.len()), (1, 0));
+        assert_eq!(locate(&starts, t1.len() - 1), (0, t1.len() - 1));
+        let out = extract_stream(&pages, &lex, &p, &HashMap::new());
+        let first = out.iter().find(|c| c.tok_start == 0).expect("the chain that starts on page 1");
+        assert_eq!(first.links, 6, "{:?}", first.transmitters.iter().map(|t| t.raw.clone()).collect::<Vec<_>>());
+        assert!(first.tok_end > t1.len(), "the chain runs onto page 2");
+        assert_eq!(first.transmitters[4].raw, "النعمان بن بشير");
+        assert_eq!(first.transmitters[5].raw, "عمر");
+        let (page, local) = locate(&starts, first.transmitters[4].tok_start);
+        assert_eq!((page, local), (1, 4));
+        let m = first.matn.expect("a matn");
+        assert!(m.0 > t1.len() && m.0 < starts[2], "the matn starts on page 2");
+        assert_eq!(m.1, starts[2], "…and ends where page 3's chain starts");
+        // Page 3's chain is emitted too, starting on page 3.
+        assert!(out.iter().any(|c| c.tok_start == starts[2]));
+        // The same page 1 alone ends at its edge: the old behaviour, now a
+        // stream of one.
+        let alone = extract_page(&t1, "", &lex, &p, &HashMap::new());
+        assert_eq!(alone.len(), 1);
+        assert_eq!(alone[0].links, 3);
     }
 
     #[test]

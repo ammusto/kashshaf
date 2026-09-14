@@ -35,8 +35,14 @@ export interface TransmitterRow {
   id: number;
   isnad_id: number;
   position: number;
+  /** Stream offsets from the isnād's start page (spec 1.4, §6.2). */
   tok_start: number;
   tok_end: number;
+  /** The page the span starts on; null = the isnād's start page. */
+  part_index: number | null;
+  page_id: number | null;
+  /** A place tag after the name (بالكوفة). */
+  place: string | null;
   raw: string;
   kunya: string | null;
   ism: string | null;
@@ -54,11 +60,17 @@ export interface IsnadRow {
   book_id: number;
   part_index: number;
   page_id: number;
+  /** Stream offsets from the start page's token 0; they may run past its end. */
   tok_start: number;
   tok_end: number;
+  /** The page tok_end − 1 falls on; null = the start page. */
+  end_part_index: number | null;
+  end_page_id: number | null;
   kind: 'isnad' | 'citation';
   matn_tok_start: number | null;
   matn_tok_end: number | null;
+  matn_end_part_index: number | null;
+  matn_end_page_id: number | null;
   links: number;
   confidence: number;
   /** JSON of `Confidence`. */
@@ -222,19 +234,36 @@ export async function redoTracked(stack: OpStack): Promise<boolean> {
 /** Tokens of one isnād's page, coloured (spec §7.4): the four layers. */
 export type Layer = 'transmitter' | 'verb' | 'matn' | 'chain';
 
-export function layersFor(row: IsnadRow, classes: [number, TokenClass][]): Map<number, Layer> {
+/**
+ * The layer of each token, keyed by *page-local* index for the page that
+ * starts at stream offset `offset` (0 = the start page). A span that crosses
+ * a page break is drawn on each of its pages with the same call and a
+ * different offset (spec 1.4, §7.4).
+ */
+export function layersFor(row: IsnadRow, classes: [number, TokenClass][], offset = 0): Map<number, Layer> {
   const m = new Map<number, Layer>();
-  for (let t = row.tok_start; t < row.tok_end; t++) m.set(t, 'chain');
+  for (let t = row.tok_start; t < row.tok_end; t++) m.set(t - offset, 'chain');
   for (const [t, c] of classes) {
-    if (t >= row.tok_start && t < row.tok_end && c === 'verb') m.set(t, 'verb');
+    if (t >= row.tok_start && t < row.tok_end && c === 'verb') m.set(t - offset, 'verb');
   }
   for (const tr of row.transmitters) {
-    for (let t = tr.tok_start; t < tr.tok_end; t++) m.set(t, 'transmitter');
+    for (let t = tr.tok_start; t < tr.tok_end; t++) m.set(t - offset, 'transmitter');
   }
   if (row.matn_tok_start != null && row.matn_tok_end != null) {
-    for (let t = row.matn_tok_start; t < row.matn_tok_end; t++) m.set(t, 'matn');
+    for (let t = row.matn_tok_start; t < row.matn_tok_end; t++) m.set(t - offset, 'matn');
   }
   return m;
+}
+
+/** Whether a row runs past its start page. */
+export function spansPages(row: IsnadRow): boolean {
+  const notStart = (p: number | null, g: number | null) => p != null && g != null && (p !== row.part_index || g !== row.page_id);
+  return notStart(row.end_part_index, row.end_page_id) || notStart(row.matn_end_part_index, row.matn_end_page_id);
+}
+
+/** `vol:page`, or just the page for a single-part book (fix 10b). */
+export function pageLabel(partIndex: number, pageId: number, parts: number | null | undefined): string {
+  return parts != null && parts <= 1 ? String(pageId) : `${partIndex}:${pageId}`;
 }
 
 /**

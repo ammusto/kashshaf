@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 /**
@@ -37,6 +37,8 @@ export function VirtualTable<T>({
   rows,
   rowKey,
   onRowClick,
+  onRowCtrlClick,
+  scrollToKey,
   height = 480,
   emptyText = 'Nothing to show.',
   testId,
@@ -45,6 +47,10 @@ export function VirtualTable<T>({
   rows: T[];
   rowKey: (row: T, i: number) => string | number;
   onRowClick?: (row: T) => void;
+  /** Ctrl/⌘-click, when it should do something other than a plain click. */
+  onRowCtrlClick?: (row: T) => void;
+  /** Scroll the row with this key into view whenever it changes. */
+  scrollToKey?: string | number | null;
   height?: number;
   emptyText?: string;
   testId?: string;
@@ -78,6 +84,18 @@ export function VirtualTable<T>({
   // jsdom) the virtualiser lays out nothing. Rather than a blank table, show
   // the first screen of rows plainly; the virtual layout takes over as soon
   // as a measurement exists.
+  useEffect(() => {
+    if (scrollToKey == null) return;
+    const i = sorted.findIndex((r, k) => rowKey(r, k) === scrollToKey);
+    if (i >= 0) {
+      try {
+        virtualizer.scrollToIndex(i, { align: 'center' });
+      } catch {
+        /* unmeasured under jsdom */
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToKey, sorted]);
   const measured = virtualizer.getVirtualItems();
   const fallback = measured.length === 0 && sorted.length > 0;
   const items = fallback
@@ -121,7 +139,7 @@ export function VirtualTable<T>({
                 <div
                   key={rowKey(row, v.index)}
                   role="row"
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  onClick={onRowClick || onRowCtrlClick ? (e) => ((e.ctrlKey || e.metaKey) && onRowCtrlClick ? onRowCtrlClick(row) : onRowClick?.(row)) : undefined}
                   className={`grid items-center text-sm border-b border-app-border-light ${
                     onRowClick ? 'cursor-pointer hover:bg-app-accent-light' : ''
                   }`}
