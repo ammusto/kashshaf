@@ -3,6 +3,41 @@
 All notable changes to the Kashshaf desktop app, API server, and data pipeline, and to Kashshaf Lab. The two products are released separately: `## [X.Y.Z]` sections are Kashshaf, `## [lab X.Y.Z]` sections are Lab. Format loosely follows Keep a Changelog. Dates are build dates; nothing below has been tagged or published yet.
 
 ---
+## [lab 0.2.0] — 2026-09-14
+
+**New: the Stats panel.** Six tabs over the current book, on the surface,
+lemma or root layer, with or without stop words, for the whole book or one
+section:
+
+- **Frequencies** — every word with its count and rate, and the corpus count,
+  rank and rate alongside.
+- **Concordance** — every hit of a word or phrase with its context, using the
+  same matching as a Kashshaf search (wildcards, clitics); click a line to
+  open the reader at that page with the hit marked.
+- **Keyness** — what this book uses more, and less, than the rest of the
+  corpus, the same author, genre or century, or books you choose; scored by
+  log-likelihood with a Bayes-factor threshold and Log Ratio.
+- **Dispersion** — where a word falls across the book, as a strip plot and
+  Gries's DP, with a per-section breakdown.
+- **Collocations** and **n-grams** — words that keep company, scored three
+  ways (MI, log-likelihood, t-score).
+- **Sections** — the table of contents with each section's length; any tab
+  can be restricted to one section.
+
+Every table sorts by any column and exports to CSV or JSON.
+
+**Online mode now loads whole books** through a new server route, cached on
+disk, so every Stats tab works without a local corpus. Keyness against the
+corpus needs a frequency snapshot that newer corpora ship; without it Lab
+says so rather than guessing. Settings gains the stop-word editor and, in
+local mode, a one-off build of that snapshot.
+
+Loading a book is 22× faster than in 0.1.0.
+
+*Spec sections implemented: §3.4 frequency snapshot, §4.1 text statistics,
+§5.1 bulk token route, §7.3 Stats panel, §9 mode parity. Spec amended to 1.2
+(§1, §2.4, §3.1, §3.3, §5.1, §10).*
+
 ## [lab 0.1.0] — 2026-09-13
 
 **New: Kashshaf Lab**, a companion application for studying one text in depth
