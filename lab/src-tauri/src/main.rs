@@ -45,6 +45,23 @@ fn main() {
             commands::books::list_page_refs,
             commands::books::get_page,
             commands::books::open_book,
+            // Stats (§4.1, §7.3)
+            commands::stats::stats_load_book,
+            commands::stats::stats_cancel,
+            commands::stats::stats_page_labels,
+            commands::stats::stats_frequencies,
+            commands::stats::stats_concordance,
+            commands::stats::stats_keyness,
+            commands::stats::stats_dispersion,
+            commands::stats::stats_ngrams,
+            commands::stats::stats_collocations,
+            commands::stats::stats_sections,
+            commands::stats::stats_freq_status,
+            commands::stats::stats_build_freq_tables,
+            commands::stats::get_stopwords,
+            commands::stats::set_stopwords,
+            commands::stats::reset_stopwords,
+            commands::stats::save_export,
             // Debug
             commands::debug::verify_alignment,
         ])

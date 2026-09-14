@@ -6,3 +6,4 @@
 pub mod books;
 pub mod corpus;
 pub mod debug;
+pub mod stats;

@@ -1,12 +1,24 @@
 //! Lab's algorithms (Lab spec §4).
 //!
-//! Everything here is a pure function over `&dyn BookSource` or over plain
-//! data: no Tauri types, no HTTP. That is what makes them testable on
-//! fixtures from the sample corpus and identical in both modes (§9, "mode
-//! parity").
+//! Everything here is a pure function over plain data: a [`text::BookText`]
+//! built from the pages a `BookSource` returned, a stop list, a frequency
+//! table. No Tauri types, no HTTP. That is what makes them testable on
+//! fixtures with hand-computed expectations, and identical in both modes
+//! (§9, "mode parity").
 //!
-//! Phase 0 provides the alignment contract the rest is addressed in;
-//! §4.1–§4.6 arrive with their phases.
+//! - `align` / `verify` — the alignment contract (§3.3)
+//! - `text` — the book as a token stream on a layer, and the stop list
+//! - `freq`, `keyness`, `dispersion`, `ngrams`, `concordance`, `sections` —
+//!   the text statistics of §4.1
+//!
+//! §4.2–§4.6 arrive with their phases.
 
 pub mod align;
+pub mod concordance;
+pub mod dispersion;
+pub mod freq;
+pub mod keyness;
+pub mod ngrams;
+pub mod sections;
+pub mod text;
 pub mod verify;

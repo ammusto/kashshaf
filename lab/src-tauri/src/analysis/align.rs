@@ -40,7 +40,7 @@ fn is_digit(c: char) -> bool {
 }
 
 /// Stripped before tokenization, so it neither starts nor ends a word.
-fn should_skip(c: char) -> bool {
+pub fn should_skip(c: char) -> bool {
     is_punct(c) || is_latin_letter(c) || is_digit(c)
 }
 

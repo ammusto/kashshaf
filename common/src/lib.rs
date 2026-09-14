@@ -18,7 +18,7 @@ pub use data_dir::{
 pub use download::{download_corpus, DownloadProgress, DownloadState};
 pub use manifest::{
     archive_old_corpus, check_app_update, check_corpus_status, fetch_app_manifest,
-    fetch_remote_manifest, load_local_manifest, save_local_manifest, verify_file_hash, AppManifest,
+    fetch_remote_manifest, fetch_remote_manifest_blocking, load_local_manifest, save_local_manifest, verify_file_hash, AppManifest,
     AppRelease, AppUpdateStatus, CompatFloor, CorpusStatus, LocalFile, LocalManifest,
     PlatformDownloads, RemoteFile, RemoteManifest,
 };

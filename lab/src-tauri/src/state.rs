@@ -1,15 +1,53 @@
 //! Lab's application state.
 //!
-//! The resolved [`BookSource`], the status that explains it, and
-//! `analysis.db`. Held behind an `RwLock` so that downloading a corpus can
-//! swap a running api-mode session into local mode without a restart
-//! (spec §2.4).
+//! The resolved [`BookSource`], the status that explains it, `analysis.db`,
+//! and the one *current* book (spec §7.1) with its per-layer token streams.
+//! Held behind an `RwLock` so that downloading a corpus can swap a running
+//! api-mode session into local mode without a restart (spec §2.4).
 
+use crate::analysis::sections::{self, Section};
+use crate::analysis::text::BookText;
 use crate::error::LabError;
 use crate::mode::{self, LabStatus};
-use crate::source::BookSource;
+use crate::source::{BookSource, Layer, Page};
 use crate::store::Store;
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock};
+
+/// The current book, loaded whole (spec §7.1: every panel operates on it).
+///
+/// The pages are read once; each layer's [`BookText`] is built on first use
+/// and kept, so switching the layer selector in the Stats panel does not
+/// re-read the book.
+pub struct LoadedBook {
+    pub id: u64,
+    pub pages: Arc<Vec<Page>>,
+    pub sections: Arc<Vec<Section>>,
+    texts: Mutex<HashMap<Layer, Arc<BookText>>>,
+    /// How long `book_pages` took, for the UI's estimates.
+    pub load_ms: u64,
+}
+
+impl LoadedBook {
+    pub fn new(id: u64, pages: Vec<Page>, load_ms: u64) -> Self {
+        // Sections need any layer's page offsets; surface is the cheapest.
+        let surface = BookText::build(&pages, Layer::Surface);
+        let secs = sections::sections(&surface, &pages);
+        let mut texts = HashMap::new();
+        texts.insert(Layer::Surface, Arc::new(surface));
+        Self { id, pages: Arc::new(pages), sections: Arc::new(secs), texts: Mutex::new(texts), load_ms }
+    }
+
+    pub fn text(&self, layer: Layer) -> Arc<BookText> {
+        let mut texts = self.texts.lock().unwrap();
+        Arc::clone(texts.entry(layer).or_insert_with(|| Arc::new(BookText::build(&self.pages, layer))))
+    }
+
+    pub fn tokens(&self) -> usize {
+        self.pages.iter().map(|p| p.tokens.len()).sum()
+    }
+}
 
 pub struct LabState {
     pub source: Option<Arc<dyn BookSource>>,
@@ -17,6 +55,11 @@ pub struct LabState {
     /// `None` only if Lab's own directory could not be created; the app still
     /// opens read-only so the user can see why.
     pub store: Option<Arc<Store>>,
+    /// The current book, once one has been loaded for analysis.
+    pub loaded: Arc<Mutex<Option<Arc<LoadedBook>>>>,
+    /// Set by the Cancel button; polled by every batch operation (ground
+    /// rule 6). Cleared when an operation starts.
+    pub cancel: Arc<AtomicBool>,
 }
 
 pub type ManagedLabState = Arc<RwLock<LabState>>;
@@ -38,7 +81,13 @@ impl LabState {
             .map(Arc::new)
             .map_err(|e| eprintln!("[lab] analysis.db unavailable: {}", e))
             .ok();
-        Self { source: resolved.source, status: resolved.status, store }
+        Self {
+            source: resolved.source,
+            status: resolved.status,
+            store,
+            loaded: Arc::new(Mutex::new(None)),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn require_source(&self) -> Result<Arc<dyn BookSource>, LabError> {
@@ -58,4 +107,22 @@ impl LabState {
 pub fn source_of(state: &ManagedLabState) -> Result<Arc<dyn BookSource>, LabError> {
     let guard = state.read().map_err(|_| LabError::Other("Lab state lock poisoned".into()))?;
     guard.require_source()
+}
+
+/// The pieces a batch command needs, cloned out from behind the lock.
+pub struct Handles {
+    pub source: Arc<dyn BookSource>,
+    pub loaded: Arc<Mutex<Option<Arc<LoadedBook>>>>,
+    pub cancel: Arc<AtomicBool>,
+    pub store: Option<Arc<Store>>,
+}
+
+pub fn handles(state: &ManagedLabState) -> Result<Handles, LabError> {
+    let guard = state.read().map_err(|_| LabError::Other("Lab state lock poisoned".into()))?;
+    Ok(Handles {
+        source: guard.require_source()?,
+        loaded: Arc::clone(&guard.loaded),
+        cancel: Arc::clone(&guard.cancel),
+        store: guard.store.clone(),
+    })
 }

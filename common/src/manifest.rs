@@ -177,6 +177,19 @@ pub async fn fetch_remote_manifest() -> Result<RemoteManifest> {
     Ok(manifest)
 }
 
+/// [`fetch_remote_manifest`] for callers without an async runtime (Lab's
+/// `ApiSource` is blocking).
+pub fn fetch_remote_manifest_blocking() -> Result<RemoteManifest> {
+    let response = reqwest::blocking::Client::new()
+        .get(MANIFEST_URL)
+        .send()
+        .context("Failed to fetch remote manifest")?;
+    if !response.status().is_success() {
+        return Err(anyhow!("Failed to fetch manifest: HTTP {}", response.status()));
+    }
+    response.json().context("Failed to parse remote manifest")
+}
+
 /// Load local manifest from disk
 pub fn load_local_manifest(data_dir: &Path) -> Option<LocalManifest> {
     let manifest_path = data_dir.join("manifest.local.json");

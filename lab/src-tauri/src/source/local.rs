@@ -5,7 +5,9 @@
 //! Kashshaf has the same files open. Every connection here is opened
 //! read-only, and nothing in this module issues a write.
 
-use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Layer, Page, PageRef};
+use super::freq::{FreqLayer, FreqTable};
+use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Page, PageRef};
+use std::sync::Mutex;
 use anyhow::{anyhow, Context, Result};
 use kashshaf_engine::{
     check_corpus_schema_supported, tokens::PageKey, verify_corpus_versions_match, EngineConfig,
@@ -28,6 +30,8 @@ pub struct LocalSource {
     corpus_version: String,
     schema_version: Option<i64>,
     data_dir: PathBuf,
+    /// Loaded frequency tables, one per layer (spec §3.4).
+    freq: Mutex<[Option<Arc<FreqTable>>; 2]>,
 }
 
 impl LocalSource {
@@ -77,7 +81,37 @@ impl LocalSource {
             corpus_version,
             schema_version,
             data_dir: data_dir.to_path_buf(),
+            freq: Mutex::new([None, None]),
         })
+    }
+
+    pub fn token_cache(&self) -> &Arc<TokenCache> {
+        &self.token_cache
+    }
+
+    /// Where a shipped or locally built frequency table would be: the corpus
+    /// directory first (the manifest lists them when present), then Lab's own
+    /// cache, where a local build lands.
+    pub fn freq_candidates(&self, layer: FreqLayer) -> Vec<PathBuf> {
+        let mut v = vec![self.data_dir.join(layer.file_name())];
+        if let Ok(lab) = kashshaf_common::lab_data_dir() {
+            v.push(lab.join("cache").join(format!("{}-{}", self.corpus_version, layer.file_name())));
+        }
+        v
+    }
+
+    /// Store tables a local build produced, so `freq_table` finds them.
+    pub fn install_freq_tables(&self, lemma: FreqTable, root: FreqTable) -> Result<()> {
+        let lab = kashshaf_common::lab_data_dir()?;
+        let dir = lab.join("cache");
+        std::fs::create_dir_all(&dir)?;
+        for t in [&lemma, &root] {
+            t.write(&dir.join(format!("{}-{}", self.corpus_version, t.layer.file_name())))?;
+        }
+        let mut slots = self.freq.lock().unwrap();
+        slots[0] = Some(Arc::new(lemma));
+        slots[1] = Some(Arc::new(root));
+        Ok(())
     }
 
     pub fn schema_version(&self) -> Option<i64> {
@@ -242,14 +276,51 @@ impl BookSource for LocalSource {
         self.page_at(PageKey::new(id, part as u64, page))
     }
 
-    fn freq(&self, _layer: Layer, _id: u32) -> Result<u64> {
-        // Phase 1 (§4.1 keyness) implements this over token_definitions ranks.
-        Err(unavailable("Corpus frequency", "not implemented before Phase 1"))
+    fn freq_table(&self, layer: FreqLayer) -> Result<Arc<FreqTable>> {
+        let slot = match layer {
+            FreqLayer::Lemma => 0,
+            FreqLayer::Root => 1,
+        };
+        if let Some(t) = &self.freq.lock().unwrap()[slot] {
+            return Ok(Arc::clone(t));
+        }
+        for path in self.freq_candidates(layer) {
+            if !path.is_file() {
+                continue;
+            }
+            let t = FreqTable::read(&path)?;
+            if t.corpus_version != self.corpus_version {
+                eprintln!(
+                    "[lab] ignoring {}: built for corpus {}, this is {}",
+                    path.display(),
+                    t.corpus_version,
+                    self.corpus_version
+                );
+                continue;
+            }
+            if t.layer != layer {
+                return Err(anyhow!("{} holds the {:?} layer, not {:?}", path.display(), t.layer, layer));
+            }
+            let t = Arc::new(t);
+            self.freq.lock().unwrap()[slot] = Some(Arc::clone(&t));
+            return Ok(t);
+        }
+        Err(unavailable(
+            "Corpus frequencies",
+            &format!(
+                "{} is not in the corpus directory. Build it from Settings (a one-off scan of the corpus), or update the corpus: newer manifests ship it.",
+                layer.file_name()
+            ),
+        ))
     }
 
     fn find_pages(&self, _q: &CandidateQuery) -> Result<Vec<PageRef>> {
         // Phase 3 (§4.3 reuse candidates) implements this over the engine's
         // phrase path.
         Err(unavailable("Candidate retrieval", "not implemented before Phase 3"))
+    }
+
+    fn as_local(&self) -> Option<&LocalSource> {
+        Some(self)
     }
 }

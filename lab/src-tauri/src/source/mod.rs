@@ -7,10 +7,14 @@
 
 pub mod api;
 pub mod cache;
+pub mod freq;
 pub mod local;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+pub use freq::{Freq, FreqLayer, FreqTable};
 
 pub use kashshaf_engine::tokens::Token;
 
@@ -63,7 +67,7 @@ pub struct PageRef {
 }
 
 /// Which annotation layer a statistic or a query runs on (spec §4.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Layer {
     Surface,
@@ -95,10 +99,25 @@ pub trait BookSource: Send + Sync {
     /// what the reader needs to page forward and back.
     fn page_refs(&self, id: u64) -> Result<Vec<PageRef>>;
     fn page(&self, id: u64, part: u32, page: u64) -> Result<Option<Page>>;
-    /// Corpus-wide frequency of a definition / lemma / root id.
-    fn freq(&self, layer: Layer, id: u32) -> Result<u64>;
+    /// Corpus-wide frequencies for one layer (spec §3.4), loaded once and
+    /// shared. Keyed by the lemma / root string rather than the id the spec
+    /// wrote, because `Token` carries no ids and a string is what both modes
+    /// hold. Errors with the reason when the snapshot is unavailable.
+    fn freq_table(&self, layer: FreqLayer) -> Result<Arc<FreqTable>>;
     /// Phrase / term search used for reuse candidates (spec §4.3).
     fn find_pages(&self, q: &CandidateQuery) -> Result<Vec<PageRef>>;
+
+    /// `Some` for the local corpus: what the operations that only make
+    /// sense on disk (building the frequency snapshot) need.
+    fn as_local(&self) -> Option<&local::LocalSource> {
+        None
+    }
+
+    /// Which mode this source is, for the few places that limit a feature
+    /// by mode rather than by capability (api-mode reference sets, §2.4).
+    fn is_local(&self) -> bool {
+        self.as_local().is_some()
+    }
 }
 
 /// The error a source returns for something its mode genuinely cannot do, so

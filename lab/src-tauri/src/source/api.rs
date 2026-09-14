@@ -9,7 +9,9 @@
 //! which would look like a hang.
 
 use super::cache::{BulkCache, DEFAULT_MAX_BYTES};
-use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Layer, Page, PageRef, Token};
+use super::freq::{FreqLayer, FreqTable};
+use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Page, PageRef, Token};
+use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::io::BufRead;
@@ -40,6 +42,8 @@ pub struct ApiSource {
     /// Bulk bodies on disk (spec §2.5). `None` when Lab has no directory of
     /// its own; api mode then works, just without caching.
     cache: Option<BulkCache>,
+    lab_dir: Option<std::path::PathBuf>,
+    freq: Mutex<[Option<Arc<FreqTable>>; 2]>,
 }
 
 /// One NDJSON line of `GET /book/{id}/tokens` (spec §5.1).
@@ -89,7 +93,15 @@ impl ApiSource {
             .clone()
             .ok_or_else(|| anyhow!("{} does not report a corpus version", base))?;
         let cache = lab_dir.map(|d| BulkCache::new(d, DEFAULT_MAX_BYTES));
-        Ok(Self { base, client, corpus_version, health, cache })
+        Ok(Self {
+            base,
+            client,
+            corpus_version,
+            health,
+            cache,
+            lab_dir: lab_dir.map(Path::to_path_buf),
+            freq: Mutex::new([None, None]),
+        })
     }
 
     /// The raw zstd body of `GET /book/{id}/tokens`, from the cache when it is
@@ -250,13 +262,70 @@ impl BookSource for ApiSource {
         }))
     }
 
-    fn freq(&self, _layer: Layer, _id: u32) -> Result<u64> {
-        // §3.4: api mode reads frequencies from the shipped snapshot, added in
-        // Phase 1 with keyness.
-        Err(unavailable(
-            "Corpus frequency",
-            "it comes from the shipped frequency snapshot (spec §3.4), added with keyness in Phase 1",
-        ))
+    /// §3.4: the shipped snapshot, downloaded once from the corpus CDN into
+    /// Lab's cache. The manifest lists `lemma_freq.bin` / `root_freq.bin`
+    /// when the corpus build produced them; a corpus without them means
+    /// keyness is unavailable online, and this says so.
+    fn freq_table(&self, layer: FreqLayer) -> Result<Arc<FreqTable>> {
+        let slot = match layer {
+            FreqLayer::Lemma => 0,
+            FreqLayer::Root => 1,
+        };
+        if let Some(t) = &self.freq.lock().unwrap()[slot] {
+            return Ok(Arc::clone(t));
+        }
+        let Some(lab_dir) = &self.lab_dir else {
+            return Err(unavailable("Corpus frequencies", "Lab has no writable directory to keep the snapshot in"));
+        };
+        let dir = lab_dir.join("cache");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}-{}", self.corpus_version, layer.file_name()));
+        if !path.is_file() {
+            let manifest = kashshaf_common::fetch_remote_manifest_blocking()?;
+            let Some(entry) = manifest.files.iter().find(|f| f.name == layer.file_name()) else {
+                return Err(unavailable(
+                    "Corpus frequencies",
+                    &format!(
+                        "corpus {} does not ship {} (spec §3.4), so keyness needs a local corpus",
+                        manifest.corpus_version,
+                        layer.file_name()
+                    ),
+                ));
+            };
+            if manifest.corpus_version != self.corpus_version {
+                return Err(unavailable(
+                    "Corpus frequencies",
+                    &format!(
+                        "the published snapshot is for corpus {} but the server serves {}",
+                        manifest.corpus_version, self.corpus_version
+                    ),
+                ));
+            }
+            let bytes = self
+                .client
+                .get(manifest.file_url(&entry.name))
+                .send()
+                .with_context(|| format!("downloading {}", entry.name))?
+                .error_for_status()?
+                .bytes()?;
+            let tmp = path.with_extension("part");
+            std::fs::write(&tmp, &bytes)?;
+            if !kashshaf_common::verify_file_hash(&tmp, &entry.hash)? {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(anyhow!("{} failed hash verification after download", entry.name));
+            }
+            std::fs::rename(&tmp, &path)?;
+        }
+        let t = FreqTable::read(&path)?;
+        if t.corpus_version != self.corpus_version {
+            return Err(unavailable(
+                "Corpus frequencies",
+                &format!("{} is for corpus {}, the server serves {}", path.display(), t.corpus_version, self.corpus_version),
+            ));
+        }
+        let t = Arc::new(t);
+        self.freq.lock().unwrap()[slot] = Some(Arc::clone(&t));
+        Ok(t)
     }
 
     fn find_pages(&self, _q: &CandidateQuery) -> Result<Vec<PageRef>> {
