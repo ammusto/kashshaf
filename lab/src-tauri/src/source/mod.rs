@@ -6,6 +6,7 @@
 //! in-memory fake in tests and against either mode at runtime.
 
 pub mod api;
+pub mod cache;
 pub mod local;
 
 use anyhow::Result;

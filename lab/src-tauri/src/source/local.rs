@@ -111,7 +111,16 @@ impl LocalSource {
         let sql = match filter {
             // Lab operates on one text at a time, so the browser lists only
             // books whose pages are actually in the corpus.
-            None => format!("SELECT {} FROM books WHERE in_corpus = 1 ORDER BY death_ah ASC, id ASC", cols),
+            //
+            // `NULLS LAST` is required, not cosmetic: SQLite sorts NULLs first
+            // under a bare ASC, while the API's /books uses NULLS LAST. Without
+            // it the two modes would list undated books at opposite ends of the
+            // browser — a parity break the sample corpus cannot show, because
+            // none of its in-corpus books lacks a death year.
+            None => format!(
+                "SELECT {} FROM books WHERE in_corpus = 1 ORDER BY death_ah ASC NULLS LAST, id ASC",
+                cols
+            ),
             Some(_) => format!("SELECT {} FROM books WHERE id = ?1", cols),
         };
         let mut stmt = conn.prepare(&sql)?;

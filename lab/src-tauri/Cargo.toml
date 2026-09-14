@@ -37,6 +37,8 @@ anyhow = "1.0"
 thiserror = "1.0"
 tokio = { version = "1", features = ["rt", "sync", "fs"] }
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"], default-features = false }
+# Decompresses the bulk token stream (spec §5.1).
+zstd = "0.13"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 

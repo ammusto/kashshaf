@@ -1,6 +1,8 @@
 //! Kashshaf API server (axum). Thin HTTP layer over `kashshaf-engine`, the
 //! same engine the desktop app embeds.
 
+mod bulk;
+
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -34,6 +36,9 @@ struct AppState {
     db_schema_version: Option<i64>,
     /// Page-cache warm-up: 0 disabled, 1 pending, 2 complete (`/health.warm_cache`).
     warm_cache: Arc<std::sync::atomic::AtomicU8>,
+    /// Per-client caps for `GET /book/{id}/tokens` (Lab spec §5.1), which is
+    /// exempt from the per-request limiter.
+    bulk_limiter: Arc<bulk::BulkLimiter>,
 }
 
 const WARM_DISABLED: u8 = 0;
@@ -203,6 +208,9 @@ struct HealthResponse {
     /// Page-cache warm-up state: `pending`, `complete` or `disabled`
     /// (`KASHSHAF_WARM_CACHE`). Deploys wait for `complete` before the smoke test.
     warm_cache: String,
+    /// This server implements `GET /book/{id}/tokens` (Lab spec §5.1).
+    /// Kashshaf Lab reads it to tell "unsupported" from "failed".
+    bulk_tokens: bool,
     /// Process memory, MiB (working set includes mmapped index pages).
     rss_mb: f64,
     peak_rss_mb: f64,
@@ -270,6 +278,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
             _ => "disabled",
         }
         .to_string(),
+        bulk_tokens: true,
         rss_mb: mem.rss_mb(),
         peak_rss_mb: mem.peak_rss_mb(),
         private_mb: mem.private_mb(),
@@ -577,6 +586,7 @@ async fn main() -> anyhow::Result<()> {
         corpus_version,
         db_schema_version,
         warm_cache: warm_cache.clone(),
+        bulk_limiter: Arc::new(bulk::BulkLimiter::default()),
     });
 
     // Optional page-cache warm-up: read the index and corpus.db once so the
@@ -657,8 +667,13 @@ async fn main() -> anyhow::Result<()> {
         None => limited,
     };
 
+    // /book/{id}/tokens is exempt from the per-request limiter (Lab spec
+    // §5.1): one legitimate call transfers a whole book and would otherwise
+    // burn a client's entire burst. It carries its own per-client caps —
+    // 4 concurrent, 30 per hour — inside the handler.
     let app = Router::new()
         .route("/health", get(health))
+        .route("/book/:id/tokens", get(bulk::get_book_tokens))
         .merge(limited)
         .layer(cors)
         .with_state(state);

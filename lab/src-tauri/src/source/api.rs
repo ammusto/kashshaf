@@ -1,16 +1,19 @@
 //! `ApiSource`: the corpus over HTTP, for users without a local copy
 //! (Lab spec §2.4, §3.1).
 //!
-//! Phase 0 uses only routes the server already has — `/health`, `/books`,
-//! `/page`, `/page/tokens` — so the book browser and the reader work online
-//! today. The bulk fetch that Phase 1's statistics need is `GET
-//! /book/{id}/tokens` (§5.1); until the server reports `bulk_tokens: true`,
-//! [`BookSource::book_pages`] here says so rather than fetching 500 pages one
-//! at a time.
+//! Single pages come from the routes the server has always had — `/page` and
+//! `/page/tokens`. A whole book comes from `GET /book/{id}/tokens` (§5.1): one
+//! zstd-compressed NDJSON body, cached on disk (§2.5) so the second panel to
+//! ask for the same book pays nothing. A server that does not report
+//! `bulk_tokens` is refused with the reason rather than fetched page by page,
+//! which would look like a hang.
 
+use super::cache::{BulkCache, DEFAULT_MAX_BYTES};
 use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Layer, Page, PageRef, Token};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
+use std::io::BufRead;
+use std::path::Path;
 use std::time::Duration;
 
 pub const DEFAULT_API_BASE: &str = "https://api.kashshaf.com";
@@ -34,6 +37,20 @@ pub struct ApiSource {
     client: reqwest::blocking::Client,
     corpus_version: String,
     health: Health,
+    /// Bulk bodies on disk (spec §2.5). `None` when Lab has no directory of
+    /// its own; api mode then works, just without caching.
+    cache: Option<BulkCache>,
+}
+
+/// One NDJSON line of `GET /book/{id}/tokens` (spec §5.1).
+#[derive(Debug, Deserialize)]
+struct BulkPage {
+    part_index: u32,
+    page_id: u64,
+    part_label: String,
+    page_number: String,
+    body: String,
+    tokens: Vec<Token>,
 }
 
 /// The `/page` response: a `SearchResult`, of which Lab uses the page fields.
@@ -49,6 +66,13 @@ impl ApiSource {
     /// Probe `/health` and keep the answer. Called at startup, so a server
     /// that is down or too old is reported before any panel opens.
     pub fn connect(base: &str) -> Result<Self> {
+        Self::connect_with_cache(base, kashshaf_common::lab_data_dir().ok().as_deref())
+    }
+
+    /// As [`Self::connect`], with the bulk cache under `lab_dir` (spec §2.5).
+    /// `None` disables caching, which is what the mode-parity test wants: it
+    /// must compare what the server sends, not what a previous run left.
+    pub fn connect_with_cache(base: &str, lab_dir: Option<&Path>) -> Result<Self> {
         let base = base.trim_end_matches('/').to_string();
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -64,7 +88,74 @@ impl ApiSource {
             .corpus_version
             .clone()
             .ok_or_else(|| anyhow!("{} does not report a corpus version", base))?;
-        Ok(Self { base, client, corpus_version, health })
+        let cache = lab_dir.map(|d| BulkCache::new(d, DEFAULT_MAX_BYTES));
+        Ok(Self { base, client, corpus_version, health, cache })
+    }
+
+    /// The raw zstd body of `GET /book/{id}/tokens`, from the cache when it is
+    /// there and from the server otherwise.
+    ///
+    /// The ETag is `corpus_version + book_id` and the cache key is the same
+    /// pair, so a hit is by construction a body for this corpus — there is
+    /// nothing to revalidate and no request to make.
+    fn bulk_body(&self, book_id: u64) -> Result<Vec<u8>> {
+        if let Some(hit) = self.cache.as_ref().and_then(|c| c.get(&self.corpus_version, book_id)) {
+            return Ok(hit);
+        }
+        let url = format!("{}/book/{}/tokens", self.base, book_id);
+        let response = self
+            .client
+            .get(&url)
+            // The body is zstd whatever the transport does; asking for an
+            // identity transfer encoding keeps a proxy from double-wrapping it.
+            .header("Accept-Encoding", "identity")
+            .send()
+            .with_context(|| format!("GET {}", url))?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(anyhow!("book {} is not in the server's corpus", book_id));
+        }
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let msg = response.text().unwrap_or_default();
+            return Err(anyhow!(
+                "the server is limiting bulk requests ({}). Try again shortly, or download the corpus for local mode.",
+                msg.trim()
+            ));
+        }
+        let bytes = response.error_for_status()?.bytes()?.to_vec();
+        if let Some(c) = &self.cache {
+            c.put(&self.corpus_version, book_id, &bytes);
+        }
+        Ok(bytes)
+    }
+
+    /// Decode a bulk body into pages, reporting progress by line.
+    fn decode_bulk(&self, book_id: u64, body: &[u8], progress: &dyn Fn(u64, u64)) -> Result<Vec<Page>> {
+        let ndjson = zstd::decode_all(body)
+            .with_context(|| format!("decompressing the token stream for book {}", book_id))?;
+        // The line count is known only after decompression, so progress is
+        // reported against it rather than against the compressed bytes.
+        let total = ndjson.iter().filter(|b| **b == b'\n').count() as u64;
+        let mut pages = Vec::with_capacity(total as usize);
+        for (i, line) in ndjson.lines().enumerate() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let p: BulkPage = serde_json::from_str(&line)
+                .with_context(|| format!("book {}, stream line {}", book_id, i + 1))?;
+            pages.push(Page {
+                book_id,
+                part_index: p.part_index,
+                page_id: p.page_id,
+                part_label: p.part_label,
+                page_number: p.page_number,
+                body: p.body,
+                tokens: p.tokens,
+            });
+            progress(i as u64 + 1, total);
+        }
+        Ok(pages)
     }
 
     pub fn health(&self) -> &Health {
@@ -78,6 +169,27 @@ impl ApiSource {
     /// Whether the server implements the bulk token fetch of §5.1.
     pub fn supports_bulk_tokens(&self) -> bool {
         self.health.bulk_tokens
+    }
+
+    /// Refuse, with the reason, on a server that predates §5.1 — rather than
+    /// falling back to 500 single-page requests, which would look like a hang.
+    fn require_bulk(&self) -> Result<()> {
+        if self.supports_bulk_tokens() {
+            Ok(())
+        } else {
+            Err(unavailable(
+                "Loading a whole book",
+                &format!(
+                    "this server ({}) does not report bulk_tokens, so it predates GET /book/{{id}}/tokens (spec §5.1)",
+                    self.health.version
+                ),
+            ))
+        }
+    }
+
+    /// The bulk cache, for the settings panel and the parity test.
+    pub fn cache(&self) -> Option<&BulkCache> {
+        self.cache.as_ref()
     }
 
     fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
@@ -105,25 +217,21 @@ impl BookSource for ApiSource {
         Ok(self.books()?.into_iter().find(|b| b.id == id))
     }
 
-    fn page_refs(&self, _id: u64) -> Result<Vec<PageRef>> {
-        // There is no page-list route, and §5.2 adds none: the page list comes
-        // out of the bulk fetch (§5.1) when Phase 1 wires it up. The reader
-        // navigates by part/page label in the meantime.
-        Err(unavailable(
-            "Listing a book's pages",
-            "the server route for it is GET /book/{id}/tokens (spec §5.1), which is not implemented yet",
-        ))
+    /// §5.2 adds no page-list route: the coordinates come out of the bulk
+    /// fetch, whose body the cache then holds, so paging through the reader
+    /// afterwards costs nothing.
+    fn page_refs(&self, id: u64) -> Result<Vec<PageRef>> {
+        self.require_bulk()?;
+        Ok(self
+            .decode_bulk(id, &self.bulk_body(id)?, &|_, _| {})?
+            .into_iter()
+            .map(|p| PageRef { book_id: p.book_id, part_index: p.part_index, page_id: p.page_id })
+            .collect())
     }
 
-    fn book_pages(&self, _id: u64, _progress: &dyn Fn(u64, u64)) -> Result<Vec<Page>> {
-        Err(unavailable(
-            "Loading a whole book",
-            if self.supports_bulk_tokens() {
-                "Lab does not use the server's bulk token route before Phase 1"
-            } else {
-                "this server is too old: it does not report bulk_tokens (spec §5.1)"
-            },
-        ))
+    fn book_pages(&self, id: u64, progress: &dyn Fn(u64, u64)) -> Result<Vec<Page>> {
+        self.require_bulk()?;
+        self.decode_bulk(id, &self.bulk_body(id)?, progress)
     }
 
     fn page(&self, id: u64, part: u32, page: u64) -> Result<Option<Page>> {

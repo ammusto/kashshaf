@@ -75,6 +75,25 @@ Verified with 60 sequential and 60 concurrent requests from one address:
 of 30. The two limiters' 429 bodies differ (`retry in 0 s` from the app,
 `retry in 1 s` from nginx), which is how `smoke.sh` reports which one answered.
 
+## `/book/{id}/tokens` is exempt too, and carries its own caps
+
+The bulk token fetch for Kashshaf Lab (`dev-docs/KASHSHAF_LAB_SPEC.md` §5.1)
+sends a whole book as one zstd-compressed NDJSON body. One legitimate call
+would burn most of a client's burst of 30, so it bypasses the per-request
+limiter at both layers the same way `/health` does:
+
+- **nginx**: `location ~ ^/book/[0-9]+/tokens$` has no `limit_req`, sets
+  `proxy_read_timeout 300s` (a large book takes tens of seconds to assemble),
+  `proxy_buffering off`, and `gzip off` (the body is already zstd).
+- **app**: the route is registered on the unlimited router next to `/health`.
+
+Instead the handler enforces, per client IP (the same `X-Forwarded-For` key
+the governor uses): at most **4 in flight** and **30 per hour**, answering 429
+with the standard JSON body naming which cap was hit. A conditional request
+whose `If-None-Match` matches the ETag (`"<corpus_version>-<book_id>"`) is
+answered 304 before either cap is consulted. `/health` reports
+`"bulk_tokens": true` so Lab can tell an old server from a broken one.
+
 ## Rollback by hand
 
 ```
