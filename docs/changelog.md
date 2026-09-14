@@ -3,6 +3,9 @@
 All notable changes to the Kashshaf desktop app, API server, and data pipeline. Format loosely follows Keep a Changelog. Dates are build dates; nothing below has been tagged or published yet.
 
 ---
+## [0.5.2] — 2026-09-13
+
+**Fixed:** the corpus update prompt now distinguishes an optional update from a first install. If you have a working corpus and a newer one is available, you'll see what changed and can choose to update later.
 
 ## [0.5.1] — 2026-09-12
 
