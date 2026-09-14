@@ -51,7 +51,8 @@ export function VirtualTable<T>({
   onRowCtrlClick?: (row: T) => void;
   /** Scroll the row with this key into view whenever it changes. */
   scrollToKey?: string | number | null;
-  height?: number;
+  /** Pixels, or `'fill'` to take the parent's height (the parent must have one). */
+  height?: number | 'fill';
   emptyText?: string;
   testId?: string;
 }) {
@@ -98,8 +99,9 @@ export function VirtualTable<T>({
   }, [scrollToKey, sorted]);
   const measured = virtualizer.getVirtualItems();
   const fallback = measured.length === 0 && sorted.length > 0;
+  const fallbackRows = height === 'fill' ? 40 : Math.ceil(height / ROW_HEIGHT) + 8;
   const items = fallback
-    ? sorted.slice(0, Math.ceil(height / ROW_HEIGHT) + 8).map((_, index) => ({ index, start: index * ROW_HEIGHT, size: ROW_HEIGHT }))
+    ? sorted.slice(0, fallbackRows).map((_, index) => ({ index, start: index * ROW_HEIGHT, size: ROW_HEIGHT }))
     : measured;
   const totalSize = fallback ? sorted.length * ROW_HEIGHT : virtualizer.getTotalSize();
 
@@ -109,7 +111,7 @@ export function VirtualTable<T>({
   const grid = columns.map((c) => c.width ?? 'minmax(80px, 1fr)').join(' ');
 
   return (
-    <div className="border border-app-border-light rounded overflow-hidden bg-app-surface" data-testid={testId}>
+    <div className={`border border-app-border-light rounded overflow-hidden bg-app-surface ${height === 'fill' ? 'h-full flex flex-col' : ''}`} data-testid={testId}>
       <div
         role="row"
         className="grid text-xs font-medium text-app-text-secondary bg-app-surface-variant border-b border-app-border-light"
@@ -128,7 +130,7 @@ export function VirtualTable<T>({
           </button>
         ))}
       </div>
-      <div ref={parentRef} style={{ height, overflow: 'auto' }}>
+      <div ref={parentRef} className={height === 'fill' ? 'flex-1 min-h-0' : ''} style={{ height: height === 'fill' ? undefined : height, overflow: 'auto' }}>
         {sorted.length === 0 ? (
           <div className="p-4 text-sm text-app-text-tertiary">{emptyText}</div>
         ) : (

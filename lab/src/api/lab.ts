@@ -329,6 +329,9 @@ export const labApi = {
   statsSections: (bookId: number) => invoke<SectionsResponse>('stats_sections', { bookId }),
   statsFreqStatus: () => invoke<FreqStatus>('stats_freq_status'),
   statsBuildFreqTables: () => invoke<FreqStatus>('stats_build_freq_tables'),
+  /** A panel's persisted parameters (`lab_setting`), as the JSON it stored. */
+  getSetting: (key: string) => invoke<string | null>('lab_setting_get', { key }),
+  setSetting: (key: string, value: string) => invoke<void>('lab_setting_set', { key, value }),
   getStopwords: () => invoke<string[]>('get_stopwords'),
   setStopwords: (words: string[]) => invoke<number>('set_stopwords', { words }),
   resetStopwords: () => invoke<string[]>('reset_stopwords'),

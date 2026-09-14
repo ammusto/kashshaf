@@ -27,6 +27,8 @@ const api = vi.hoisted(() => {
   const lab = {
     getPage: vi.fn(),
     listPageRefs: vi.fn(async () => [{ book_id: 527, part_index: 0, page_id: 9 }]),
+    getSetting: vi.fn(async () => null),
+    setSetting: vi.fn(async () => {}),
     statsCancel: vi.fn(),
     saveExport: vi.fn(async (name: string, _c: string) => `C:/lab/exports/${name}`),
   };
@@ -117,7 +119,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.isnad.list.mockResolvedValue([row]);
   api.isnad.get.mockResolvedValue(row);
-  api.isnad.classes.mockResolvedValue(page.tokens.map((t, i) => [i, [0, 3, 4, 9, 10, 18].includes(i) ? 'verb' : 'name'] as [number, 'verb' | 'name']));
+  api.isnad.classes.mockResolvedValue(page.tokens.map((_t, i) => [i, [0, 3, 4, 9, 10, 18].includes(i) ? 'verb' : 'name'] as [number, 'verb' | 'name']));
   api.isnad.transmitters.mockResolvedValue([
     ...row.transmitters,
     transmitter(21, 0, 1, 3, 'ابو داود', { isnad_id: 2, page_id: 10, person_id: 7, person_name: 'أبو داود السجستاني', form_count: 2 }),
@@ -321,7 +323,11 @@ describe('IsnadWorkbench', () => {
     api.isnad.run.mockResolvedValue({ book_id: 527, pages: 553, candidates: 412, kept_confirmed: 3, elapsed_ms: 1800, lexicon_hash: 'h' });
     render(<IsnadWorkbench book={book} />);
     await screen.findByTestId('structured-chain');
+    // The parameters sit behind the gear (fix 9): open, change, apply — persisted.
+    fireEvent.click(screen.getByRole('button', { name: 'Extraction settings' }));
     fireEvent.change(screen.getByLabelText('Min links'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(api.lab.setSetting).toHaveBeenCalledWith('isnad.params', expect.stringContaining('"min_links":3')));
     fireEvent.click(screen.getByRole('button', { name: 'Extract isnāds' }));
     await waitFor(() => expect(api.isnad.run).toHaveBeenCalledWith(527, expect.objectContaining({ min_links: 3, lookahead: 3 })));
     expect(await screen.findByTestId('run-summary')).toHaveTextContent('412 candidates on 553 pages in 1.8 s · 3 decided rows kept');

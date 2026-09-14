@@ -134,6 +134,24 @@ pub fn stats_cancel(state: State<'_, ManagedLabState>) -> Result<(), LabError> {
 
 const STOPWORDS_KEY: &str = "stopwords";
 
+/// A panel's persisted parameters (spec 1.4, fix 9): the JSON the panel
+/// stored under its key, or nothing.
+#[tauri::command]
+pub fn lab_setting_get(state: State<'_, ManagedLabState>, key: String) -> Result<Option<String>, LabError> {
+    let guard = state.read().map_err(|_| LabError::Other("Lab state lock poisoned".into()))?;
+    let Some(store) = &guard.store else { return Ok(None) };
+    let conn = store.connect().map_err(|e| LabError::Database(e.to_string()))?;
+    kashshaf_common::get_kv(&conn, "lab_setting", &key).map_err(|e| LabError::Database(e.to_string()))
+}
+
+#[tauri::command]
+pub fn lab_setting_set(state: State<'_, ManagedLabState>, key: String, value: String) -> Result<(), LabError> {
+    let guard = state.read().map_err(|_| LabError::Other("Lab state lock poisoned".into()))?;
+    let store = guard.store.as_ref().ok_or_else(|| LabError::Database("analysis.db is not available".into()))?;
+    let conn = store.connect().map_err(|e| LabError::Database(e.to_string()))?;
+    kashshaf_common::set_kv(&conn, "lab_setting", &key, &value).map_err(|e| LabError::Database(e.to_string()))
+}
+
 /// The user's list from `lab_setting`, else the shipped default.
 fn stop_list(h: &Handles) -> StopList {
     if let Some(store) = &h.store {

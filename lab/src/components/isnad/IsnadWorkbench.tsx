@@ -26,6 +26,7 @@ import {
   type TransmitterListRow,
 } from '../../api/isnad';
 import { Reader } from '../Reader';
+import { GearButton, SettingsModal } from '../SettingsModal';
 import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
 
 /**
@@ -55,6 +56,7 @@ import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
 type Mode = 'none' | 'matn-start' | 'matn-end' | 'split' | 'retag';
 
 const CLASS_KEYS: Record<string, TokenClass> = { v: 'verb', n: 'name', f: 'formula', o: 'other' };
+const ISNAD_SETTING_KEY = 'isnad.params';
 
 export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
   const bookId = book?.id ?? null;
@@ -72,6 +74,8 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
   const [classes, setClasses] = useState<[number, TokenClass][]>([]);
   const [filter, setFilter] = useState<IsnadFilter>({ status: 'candidate', min_confidence: 0.2 });
   const [params, setParams] = useState<Params>(DEFAULT_PARAMS);
+  const [draft, setDraft] = useState<Params>(DEFAULT_PARAMS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [progress, setProgress] = useState<RunProgress | null>(null);
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [busy, setBusy] = useState(false);
@@ -191,8 +195,39 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
   useEffect(() => {
     let un: (() => void) | undefined;
     isnadApi.onRunProgress((p) => setProgress(p)).then((u) => (un = u)).catch(() => {});
+    // The extraction parameters persist in lab_setting (spec 1.4, fix 9).
+    labApi
+      .getSetting(ISNAD_SETTING_KEY)
+      .then((v) => {
+        if (!v) return;
+        try {
+          const p = { ...DEFAULT_PARAMS, ...(JSON.parse(v) as Partial<Params>) };
+          setParams(p);
+          setDraft(p);
+        } catch {
+          /* a bad setting is ignored */
+        }
+      })
+      .catch(() => {});
     return () => un?.();
   }, []);
+
+  const applySettings = async () => {
+    const clean: Params = {
+      ...draft,
+      min_links: Math.max(1, Math.round(draft.min_links) || DEFAULT_PARAMS.min_links),
+      lookahead: Math.min(5, Math.max(2, Math.round(draft.lookahead) || DEFAULT_PARAMS.lookahead)),
+      groups: draft.groups.length ? draft.groups : DEFAULT_PARAMS.groups,
+    };
+    setParams(clean);
+    setDraft(clean);
+    setSettingsOpen(false);
+    try {
+      await labApi.setSetting(ISNAD_SETTING_KEY, JSON.stringify(clean));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   // ------------------------------------------------------------- run ---
 
@@ -551,20 +586,7 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
           <button onClick={run} disabled={busy} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40">
             {busy ? 'Extracting…' : 'Extract isnāds'}
           </button>
-          <label className="flex items-center gap-1">
-            min links
-            <input type="number" min={1} max={10} value={params.min_links} onChange={(e) => setParams({ ...params, min_links: Math.max(1, Number(e.target.value) || 2) })} className="w-12 border border-app-border-medium rounded px-1" aria-label="Min links" />
-          </label>
-          <label className="flex items-center gap-1">
-            lookahead
-            <input type="number" min={2} max={5} value={params.lookahead} onChange={(e) => setParams({ ...params, lookahead: Math.min(5, Math.max(2, Number(e.target.value) || 3)) })} className="w-12 border border-app-border-medium rounded px-1" aria-label="Lookahead" />
-          </label>
-          {(['core', 'history', 'written', 'citation'] as Group[]).map((g) => (
-            <label key={g} className="flex items-center gap-1">
-              <input type="checkbox" checked={params.groups.includes(g)} onChange={(e) => setParams({ ...params, groups: e.target.checked ? [...params.groups, g] : params.groups.filter((x) => x !== g) })} />
-              {g}
-            </label>
-          ))}
+          <GearButton onClick={() => { setDraft(params); setSettingsOpen(true); }} label="Extraction settings" />
           {summary && (
             <span className="text-app-text-tertiary" data-testid="run-summary">
               {summary.candidates.toLocaleString()} candidates on {summary.pages.toLocaleString()} pages in {(summary.elapsed_ms / 1000).toFixed(1)} s
@@ -672,6 +694,28 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
           </div>
         )}
 
+        <SettingsModal title="Isnād extraction" open={settingsOpen} onClose={() => setSettingsOpen(false)} onApply={() => void applySettings()} onReset={() => setDraft(DEFAULT_PARAMS)}>
+          <label className="flex items-center justify-between gap-2">
+            <span title="Links an isnād needs (spec §4.2: 2; a citation needs 1)">Minimum links</span>
+            <input type="number" min={1} max={10} value={draft.min_links} onChange={(e) => setDraft({ ...draft, min_links: Number(e.target.value) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Min links" />
+          </label>
+          <label className="flex items-center justify-between gap-2">
+            <span title="Tokens the boundary lookahead inspects (spec §4.2: 3; 2–5)">Lookahead</span>
+            <input type="number" min={2} max={5} value={draft.lookahead} onChange={(e) => setDraft({ ...draft, lookahead: Number(e.target.value) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Lookahead" />
+          </label>
+          <div className="flex items-center justify-between gap-2">
+            <span title="Transmission-lexicon groups in play (spec §4.2)">Lexicon groups</span>
+            <span className="flex gap-2">
+              {(['core', 'history', 'written', 'citation'] as Group[]).map((g) => (
+                <label key={g} className="flex items-center gap-1">
+                  <input type="checkbox" checked={draft.groups.includes(g)} onChange={(e) => setDraft({ ...draft, groups: e.target.checked ? [...draft.groups, g] : draft.groups.filter((x) => x !== g) })} aria-label={`Group ${g}`} />
+                  {g}
+                </label>
+              ))}
+            </span>
+          </div>
+          <p className="text-xs text-app-text-tertiary">Defaults are the spec's (§4.2). Applied to the next extraction; kept between sessions.</p>
+        </SettingsModal>
         {notice && (
           <div className="px-3 py-1 text-xs text-app-text-secondary bg-app-surface-variant border-b border-app-border-light flex justify-between">
             <span>{notice}</span>

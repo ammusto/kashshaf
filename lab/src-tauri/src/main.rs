@@ -71,6 +71,8 @@ fn main() {
             commands::stats::stats_sections,
             commands::stats::stats_freq_status,
             commands::stats::stats_build_freq_tables,
+            commands::stats::lab_setting_get,
+            commands::stats::lab_setting_set,
             commands::stats::get_stopwords,
             commands::stats::set_stopwords,
             commands::stats::reset_stopwords,

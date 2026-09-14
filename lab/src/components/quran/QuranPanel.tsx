@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
 import { labApi, type Page, type PageRef } from '../../api/lab';
-import { DEFAULT_QURAN_PARAMS, fmtDuration, quranApi, type QuranMatchRow, type QuranParams, type QuranProgress, type QuranRunSummary, type QuranStatus } from '../../api/reuse';
+import { pageLabel } from '../../api/isnad';
+import { DEFAULT_QURAN_PARAMS, fmtDuration, quranApi, type AyaContext, type QuranMatchRow, type QuranParams, type QuranProgress, type QuranRunSummary, type QuranStatus } from '../../api/reuse';
 import { Reader } from '../Reader';
-import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
+import { GearButton, SettingsModal } from '../SettingsModal';
+import { VirtualTable, type Column } from '../stats/VirtualTable';
 
 /**
- * The Qurʾān panel (spec §7.6): "Detect quotations" over the current book
- * with progress and cancel; the results as a table by sūra:āya with the
- * page, the matched text, the āya text, agreement and cue; the current
- * page's quotations as a reader layer; confirm/reject per row; export.
+ * The Qurʾān panel (spec §7.6, amended 1.4): "Detect quotations" over the
+ * current book with progress and cancel, its parameters behind a gear
+ * (persisted in `lab_setting`); the results as a virtualised table by
+ * Qurʾān reference — page, the text as quoted, the āya — with an ⓘ per row
+ * that opens a detail view in the right pane (tokens, agreement, cue, the
+ * ambiguous readings, the āya with one āya of context in imlāʾī or
+ * Uthmani); the current page's quotations as a reader layer; confirm and
+ * reject; export.
  */
+
+const SETTING_KEY = 'quran.params';
 
 interface Props {
   book: BookMetadata | null;
@@ -20,14 +28,18 @@ export function QuranPanel({ book }: Props) {
   const bookId = book?.id ?? null;
   const [status, setStatus] = useState<QuranStatus | null>(null);
   const [params, setParams] = useState<QuranParams>(DEFAULT_QURAN_PARAMS);
+  const [draft, setDraft] = useState<QuranParams>(DEFAULT_QURAN_PARAMS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [rows, setRows] = useState<QuranMatchRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<QuranProgress | null>(null);
-  const [summary, setSummary] = useState<QuranRunSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'cued' | 'uncued' | 'confirmed' | 'open'>('all');
+  const [filter, setFilter] = useState<'all' | 'cued' | 'uncued' | 'confirmed' | 'open' | 'ambiguous'>('all');
   const [selected, setSelected] = useState<number | null>(null);
+  const [detail, setDetail] = useState<QuranMatchRow | null>(null);
+  const [context, setContext] = useState<AyaContext | null>(null);
+  const [uthmani, setUthmani] = useState(false);
 
   const [refs, setRefs] = useState<PageRef[]>([]);
   const [index, setIndex] = useState(0);
@@ -37,6 +49,19 @@ export function QuranPanel({ book }: Props) {
 
   useEffect(() => {
     quranApi.status().then(setStatus).catch((e) => setError(String(e)));
+    labApi
+      .getSetting(SETTING_KEY)
+      .then((v) => {
+        if (!v) return;
+        try {
+          const p = { ...DEFAULT_QURAN_PARAMS, ...(JSON.parse(v) as Partial<QuranParams>) };
+          setParams(p);
+          setDraft(p);
+        } catch {
+          /* a bad setting is ignored */
+        }
+      })
+      .catch(() => {});
     let un: (() => void) | undefined;
     quranApi.onProgress((p) => setProgress(p)).then((u) => (un = u)).catch(() => {});
     return () => un?.();
@@ -53,8 +78,8 @@ export function QuranPanel({ book }: Props) {
 
   useEffect(() => {
     setRows([]);
-    setSummary(null);
     setSelected(null);
+    setDetail(null);
     setRefs([]);
     setPage(null);
     setIndex(0);
@@ -85,6 +110,22 @@ export function QuranPanel({ book }: Props) {
     if (refs.length && !page) void goTo(0);
   }, [refs, page, goTo]);
 
+  // The detail view's context, fetched when a row is opened.
+  useEffect(() => {
+    if (!detail) {
+      setContext(null);
+      return;
+    }
+    let alive = true;
+    quranApi
+      .context(detail.sura, detail.aya_start, detail.aya_end)
+      .then((c) => alive && setContext(c))
+      .catch((e) => alive && setError(String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [detail]);
+
   const run = async () => {
     if (bookId == null) return;
     setBusy(true);
@@ -92,8 +133,7 @@ export function QuranPanel({ book }: Props) {
     setMessage(null);
     setProgress(null);
     try {
-      const s = await quranApi.run(bookId, params);
-      setSummary(s);
+      const s: QuranRunSummary = await quranApi.run(bookId, params);
       setMessage(`${s.pages_done}/${s.pages} pages · ${s.hits} quotations found · ${s.kept_judged} judged rows kept · ${fmtDuration(s.elapsed_ms)}${s.cancelled ? ' · cancelled, completed pages kept' : ''}`);
       await reload();
     } catch (e) {
@@ -103,10 +143,30 @@ export function QuranPanel({ book }: Props) {
     }
   };
 
+  const applySettings = async () => {
+    const clean: QuranParams = {
+      ...draft,
+      min_tokens: Math.max(2, Math.round(draft.min_tokens) || DEFAULT_QURAN_PARAMS.min_tokens),
+      cued_min_tokens: Math.max(2, Math.round(draft.cued_min_tokens) || DEFAULT_QURAN_PARAMS.cued_min_tokens),
+      min_lemma_agree: Math.min(1, Math.max(0.5, Number(draft.min_lemma_agree) || DEFAULT_QURAN_PARAMS.min_lemma_agree)),
+    };
+    setParams(clean);
+    setDraft(clean);
+    setSettingsOpen(false);
+    try {
+      await labApi.setSetting(SETTING_KEY, JSON.stringify(clean));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const resetSettings = () => setDraft(DEFAULT_QURAN_PARAMS);
+
   const verdict = async (r: QuranMatchRow, v: 'confirmed' | 'rejected') => {
     try {
       const row = await quranApi.verdict(r.id, v === r.user_verdict ? null : v);
       setRows((rs) => rs.map((x) => (x.id === row.id ? row : x)));
+      if (detail?.id === row.id) setDetail(row);
     } catch (e) {
       setError(String(e));
     }
@@ -133,6 +193,8 @@ export function QuranPanel({ book }: Props) {
             return r.user_verdict === 'confirmed';
           case 'open':
             return r.user_verdict == null;
+          case 'ambiguous':
+            return r.also.length > 0;
           default:
             return true;
         }
@@ -166,30 +228,56 @@ export function QuranPanel({ book }: Props) {
     if (i >= 0) void goTo(i, [r.tok_start, r.tok_end]);
   };
 
+  const refOf = (r: { sura: number; aya_start: number; aya_end: number }) => `${r.sura}:${r.aya_start}${r.aya_end !== r.aya_start ? `–${r.aya_end}` : ''}`;
+  const parts = book?.parts;
+
   const columns: Column<QuranMatchRow>[] = [
-    { key: 'ref', label: 'Sūra:āya', sortValue: (r) => r.sura * 1000 + r.aya_start, width: '120px', defaultSort: 'asc', render: (r) => <span className={r.id === selected ? 'font-semibold' : ''}>{r.sura}:{r.aya_start}{r.aya_end !== r.aya_start ? `–${r.aya_end}` : ''} <span className="font-arabic">{r.sura_name}</span></span> },
-    { key: 'page', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => `${r.part_index}:${r.page_id}` },
+    {
+      key: 'ref',
+      label: 'Qurʾān',
+      sortValue: (r) => r.sura * 1000 + r.aya_start,
+      width: '150px',
+      defaultSort: 'asc',
+      render: (r) => (
+        <span className={r.id === selected ? 'font-semibold' : ''}>
+          {refOf(r)} <span className="font-arabic">{r.sura_name}</span>
+          {r.also.length > 0 && (
+            <span className="ml-1 text-[10px] px-1 rounded bg-app-surface-variant text-app-text-secondary" title={`Aligns equally to ${r.also.length + 1} āyāt`}>
+              ambiguous: {r.also.length + 1} āyāt
+            </span>
+          )}
+        </span>
+      ),
+    },
+    { key: 'page', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => pageLabel(r.part_index, r.page_id, parts) },
     { key: 'text', label: 'Text', sortValue: (r) => r.snapshot, rtl: true, width: 'minmax(200px, 3fr)', render: (r) => r.snapshot },
     { key: 'aya', label: 'Āya', sortValue: (r) => r.aya_text, rtl: true, width: 'minmax(200px, 3fr)', render: (r) => <span className="text-app-text-secondary">{r.aya_text}</span> },
-    { key: 'n', label: 'Tokens', sortValue: (r) => r.aligned, align: 'right', width: '60px', render: (r) => fmt(r.aligned) },
-    { key: 'lemma', label: 'Lemma', sortValue: (r) => r.lemma_agree, align: 'right', width: '60px', render: (r) => r.lemma_agree.toFixed(2) },
-    { key: 'surface', label: 'Surface', sortValue: (r) => r.surface_agree, align: 'right', width: '64px', render: (r) => <span title={r.surface_agree >= 0.9 ? 'verbatim' : 'paraphrased or inflected'}>{r.surface_agree.toFixed(2)}</span> },
-    { key: 'cue', label: 'Cue', sortValue: (r) => r.cue ?? '', width: '80px', render: (r) => r.cue ?? '—' },
+    {
+      key: 'info',
+      label: '',
+      sortValue: () => 0,
+      width: '32px',
+      render: (r) => (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setDetail(r);
+            setSelected(r.id);
+          }}
+          className="px-1 rounded border border-app-border-medium text-app-accent"
+          aria-label={`Details of quotation ${r.id}`}
+          title="Details"
+        >
+          ⓘ
+        </button>
+      ),
+    },
     {
       key: 'verdict',
       label: '',
       sortValue: (r) => r.user_verdict ?? '',
       width: '70px',
-      render: (r) => (
-        <span className="flex gap-1">
-          <button onClick={(e) => { e.stopPropagation(); void verdict(r, 'confirmed'); }} className={`px-1 rounded border ${r.user_verdict === 'confirmed' ? 'bg-green-600 text-white border-green-600' : 'border-app-border-medium'}`} aria-label={`Confirm quotation ${r.id}`}>
-            ✓
-          </button>
-          <button onClick={(e) => { e.stopPropagation(); void verdict(r, 'rejected'); }} className={`px-1 rounded border ${r.user_verdict === 'rejected' ? 'bg-red-600 text-white border-red-600' : 'border-app-border-medium'}`} aria-label={`Reject quotation ${r.id}`}>
-            ✗
-          </button>
-        </span>
-      ),
+      render: (r) => <VerdictButtons r={r} onVerdict={verdict} />,
     },
   ];
 
@@ -203,27 +291,17 @@ export function QuranPanel({ book }: Props) {
         <button onClick={run} disabled={busy || !status?.available} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40" title="Whole-book run (§4.4)">
           {busy ? 'Detecting…' : 'Detect quotations'}
         </button>
+        <GearButton onClick={() => { setDraft(params); setSettingsOpen(true); }} label="Detection settings" />
         {busy && (
           <button onClick={() => void labApi.statsCancel()} className="px-2 py-1 border border-app-border-medium rounded">
             Cancel
           </button>
         )}
-        <label className="flex items-center gap-1" title="Aligned tokens a quotation needs without a cue">
-          min tokens
-          <input type="number" min={2} max={12} value={params.min_tokens} onChange={(e) => setParams({ ...params, min_tokens: Math.max(2, Number(e.target.value) || 4) })} className="w-12 border border-app-border-medium rounded px-1" aria-label="Min tokens" />
-        </label>
-        <label className="flex items-center gap-1" title="With a ﴿ ﴾, «» or قال تعالى cue within 3 tokens">
-          cued min
-          <input type="number" min={2} max={12} value={params.cued_min_tokens} onChange={(e) => setParams({ ...params, cued_min_tokens: Math.max(2, Number(e.target.value) || 3) })} className="w-12 border border-app-border-medium rounded px-1" aria-label="Cued min tokens" />
-        </label>
-        <label className="flex items-center gap-1" title="Lemma agreement a quotation needs">
-          lemma ≥
-          <input type="number" min={0.5} max={1} step={0.05} value={params.min_lemma_agree} onChange={(e) => setParams({ ...params, min_lemma_agree: Math.min(1, Math.max(0.5, Number(e.target.value) || 0.8)) })} className="w-14 border border-app-border-medium rounded px-1" aria-label="Min lemma agreement" />
-        </label>
         <select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)} className="border border-app-border-medium rounded px-1" aria-label="Filter">
           <option value="all">all</option>
           <option value="cued">cued</option>
           <option value="uncued">uncued</option>
+          <option value="ambiguous">ambiguous</option>
           <option value="confirmed">confirmed</option>
           <option value="open">open</option>
         </select>
@@ -247,6 +325,22 @@ export function QuranPanel({ book }: Props) {
         )}
       </div>
 
+      <SettingsModal title="Qurʾān detection" open={settingsOpen} onClose={() => setSettingsOpen(false)} onApply={() => void applySettings()} onReset={resetSettings}>
+        <label className="flex items-center justify-between gap-2">
+          <span title="Aligned tokens a quotation needs without a cue (spec §4.4: 4)">Minimum tokens</span>
+          <input type="number" min={2} max={12} value={draft.min_tokens} onChange={(e) => setDraft({ ...draft, min_tokens: Number(e.target.value) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Min tokens" />
+        </label>
+        <label className="flex items-center justify-between gap-2">
+          <span title="With a ﴿ ﴾, «» or قال تعالى cue within 3 tokens (spec §4.4: 3)">Minimum tokens, cued</span>
+          <input type="number" min={2} max={12} value={draft.cued_min_tokens} onChange={(e) => setDraft({ ...draft, cued_min_tokens: Number(e.target.value) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Cued min tokens" />
+        </label>
+        <label className="flex items-center justify-between gap-2">
+          <span title="Lemma agreement a quotation needs (spec §4.4: 0.8)">Lemma agreement ≥</span>
+          <input type="number" min={0.5} max={1} step={0.05} value={draft.min_lemma_agree} onChange={(e) => setDraft({ ...draft, min_lemma_agree: Number(e.target.value) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Min lemma agreement" />
+        </label>
+        <p className="text-xs text-app-text-tertiary">Defaults are the spec's (§4.4). Applied to the next run; kept between sessions.</p>
+      </SettingsModal>
+
       {progress && busy && (
         <div className="px-3 py-1 text-xs bg-app-surface-variant border-b border-app-border-light" role="status">
           page {progress.done}/{progress.total} · {progress.found} quotations{progress.estimate_ms != null && ` · about ${fmtDuration(progress.estimate_ms)}`}
@@ -257,16 +351,100 @@ export function QuranPanel({ book }: Props) {
           {error ?? message}
         </div>
       )}
-      {summary && !message && null}
 
       <div className="flex-1 min-h-0 flex">
         <section className="flex-1 min-w-0 border-r border-app-border-light">
-          <Reader page={page} pages={refs} index={index} onNavigate={(i) => goTo(i)} highlight={highlight} layerClass={layerClass} onTokenClick={onTokenClick} loading={pageLoading} error={null} />
+          <Reader page={page} pages={refs} index={index} onNavigate={(i) => goTo(i)} highlight={highlight} layerClass={layerClass} onTokenClick={onTokenClick} onClearSelection={() => setSelected(null)} loading={pageLoading} error={null} />
         </section>
         <section className="w-[52%] min-w-[460px] min-h-0 flex flex-col">
-          <VirtualTable columns={columns} rows={shown} rowKey={(r) => r.id} onRowClick={show} height={9999} emptyText={rows.length ? 'Nothing matches the filter.' : 'No quotations yet — press "Detect quotations".'} testId="quran-table" />
+          {detail ? (
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 text-sm" data-testid="quran-detail">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="font-semibold">{refOf(detail)}</span>
+                <span className="font-arabic text-base">{detail.sura_name}</span>
+                <span className="text-app-text-tertiary text-xs">p. {pageLabel(detail.part_index, detail.page_id, parts)}</span>
+                <button onClick={() => show(detail)} className="text-xs text-app-accent underline">
+                  show in reader
+                </button>
+                <button onClick={() => setDetail(null)} className="ml-auto px-2 text-app-text-tertiary" aria-label="Close details">
+                  ×
+                </button>
+              </div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs mb-3">
+                <dt className="text-app-text-tertiary">Tokens</dt>
+                <dd>{detail.aligned}</dd>
+                <dt className="text-app-text-tertiary">Lemma</dt>
+                <dd>{detail.lemma_agree.toFixed(2)}</dd>
+                <dt className="text-app-text-tertiary">Surface</dt>
+                <dd>
+                  {detail.surface_agree.toFixed(2)} <span className="text-app-text-tertiary">({detail.surface_agree >= 0.9 ? 'verbatim' : 'paraphrased or inflected'})</span>
+                </dd>
+                <dt className="text-app-text-tertiary">Cue</dt>
+                <dd>{detail.cue ?? '—'}</dd>
+                <dt className="text-app-text-tertiary">Verdict</dt>
+                <dd>
+                  <VerdictButtons r={detail} onVerdict={verdict} />
+                </dd>
+              </dl>
+              <div className="font-arabic text-base mb-3" dir="rtl">
+                <span className="text-app-text-tertiary text-xs font-ui" dir="ltr">
+                  as quoted:{' '}
+                </span>
+                {detail.snapshot}
+              </div>
+              {detail.also.length > 0 && (
+                <div className="text-xs mb-3" data-testid="quran-ambiguous">
+                  <div className="text-app-text-tertiary mb-1">Aligns equally to {detail.also.length + 1} āyāt — every reading:</div>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="px-1 rounded bg-app-accent-light">{refOf(detail)}</span>
+                    {detail.also.map((a) => (
+                      <span key={`${a.sura}:${a.aya_start}`} className="px-1 rounded bg-app-surface-variant">
+                        {refOf(a)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex items-center gap-2 text-xs mb-1">
+                <span className="text-app-text-tertiary">Āya with context</span>
+                <label className="flex items-center gap-1">
+                  <input type="checkbox" checked={uthmani} onChange={(e) => setUthmani(e.target.checked)} /> Uthmani
+                </label>
+              </div>
+              {context ? (
+                <div className="font-arabic text-lg leading-9" dir="rtl" data-testid="quran-context">
+                  {context.before && <span className="text-app-text-tertiary">{uthmani ? context.before.text_uthmani : context.before.text} ﴿{context.before.aya}﴾ </span>}
+                  {context.ayas.map((a) => (
+                    <span key={a.aya} className="bg-app-accent-light rounded px-0.5">
+                      {uthmani ? a.text_uthmani : a.text} ﴿{a.aya}﴾{' '}
+                    </span>
+                  ))}
+                  {context.after && <span className="text-app-text-tertiary">{uthmani ? context.after.text_uthmani : context.after.text} ﴿{context.after.aya}﴾</span>}
+                </div>
+              ) : (
+                <div className="text-xs text-app-text-tertiary">loading…</div>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1 min-h-0 p-2">
+              <VirtualTable columns={columns} rows={shown} rowKey={(r) => r.id} onRowClick={show} height="fill" emptyText={rows.length ? 'Nothing matches the filter.' : 'No quotations yet — press "Detect quotations".'} testId="quran-table" />
+            </div>
+          )}
         </section>
       </div>
     </div>
+  );
+}
+
+function VerdictButtons({ r, onVerdict }: { r: QuranMatchRow; onVerdict: (r: QuranMatchRow, v: 'confirmed' | 'rejected') => void }) {
+  return (
+    <span className="flex gap-1">
+      <button onClick={(e) => { e.stopPropagation(); onVerdict(r, 'confirmed'); }} className={`px-1 rounded border ${r.user_verdict === 'confirmed' ? 'bg-green-600 text-white border-green-600' : 'border-app-border-medium'}`} aria-label={`Confirm quotation ${r.id}`}>
+        ✓
+      </button>
+      <button onClick={(e) => { e.stopPropagation(); onVerdict(r, 'rejected'); }} className={`px-1 rounded border ${r.user_verdict === 'rejected' ? 'bg-red-600 text-white border-red-600' : 'border-app-border-medium'}`} aria-label={`Reject quotation ${r.id}`}>
+        ✗
+      </button>
+    </span>
   );
 }
