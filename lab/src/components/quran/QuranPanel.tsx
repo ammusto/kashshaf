@@ -441,7 +441,7 @@ export function QuranPanel({ book, onChanged }: Props) {
                   <VerdictButtons r={detail} onVerdict={verdict} />
                 </dd>
               </dl>
-              <div className="font-arabic text-base mb-3" dir="rtl">
+              <div className="font-arabic page-body text-base mb-3" dir="rtl">
                 <span className="text-app-text-tertiary text-xs font-ui" dir="ltr">
                   as quoted:{' '}
                 </span>
@@ -467,7 +467,7 @@ export function QuranPanel({ book, onChanged }: Props) {
                 </label>
               </div>
               {context ? (
-                <div className="font-arabic text-lg leading-9" dir="rtl" data-testid="quran-context">
+                <div className="font-arabic page-body text-lg leading-9" dir="rtl" data-testid="quran-context">
                   {context.before && <span className="text-app-text-tertiary">{uthmani ? context.before.text_uthmani : context.before.text} ﴿{context.before.aya}﴾ </span>}
                   {context.ayas.map((a) => (
                     <span key={a.aya} className="bg-app-accent-light rounded px-0.5">

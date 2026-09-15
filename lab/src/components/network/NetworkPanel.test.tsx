@@ -45,8 +45,11 @@ const book: BookMetadata = { id: 527, title: 'الزهد', in_corpus: true, part
 
 // Two linked persons and one transmitter nobody has linked yet, which is a
 // node of its own keyed by its normalised form (spec 1.5 J2).
-const P = (n: number) => ({ Person: n });
-const F = (f: string) => ({ Form: f });
+// The wire shape (see network.rs): a person id is a bare number, a name
+// form a bare string. Reading these as tagged objects is what crashed the
+// panel on every unlinked transmitter.
+const P = (n: number) => n;
+const F = (f: string) => f;
 
 const graph = {
   chains: 3,
@@ -68,8 +71,8 @@ beforeEach(() => {
   api.network.graph.mockResolvedValue(graph);
   api.network.sources.mockResolvedValue([{ id: P(1), person_id: 1, linked: true, name: 'أبو داود', chains: 3 }]);
   api.network.ego.mockResolvedValue({ ...graph, nodes: graph.nodes.slice(0, 2), edges: graph.edges.slice(0, 1), dropped_nodes: 1, dropped_edges: 1 });
-  api.network.nodeRows.mockImplementation(async (_b: number, node: { Person?: number; Form?: string }) =>
-    'Person' in node && node.Person === 2 ? [rows[0]] : 'Form' in node ? [rows[2]] : [rows[1]]
+  api.network.nodeRows.mockImplementation(async (_b: number, node: number | string) =>
+    node === 2 ? [rows[0]] : typeof node === 'string' ? [rows[2]] : [rows[1]]
   );
   api.isnad.transmitters.mockResolvedValue(rows);
 });
@@ -110,7 +113,7 @@ describe('NetworkPanel', () => {
     expect(screen.getByTestId('node-p1')).toHaveAttribute('data-linked', 'true');
 
     fireEvent.click(screen.getByTestId('node-p2'));
-    await waitFor(() => expect(api.network.ego).toHaveBeenCalledWith(527, { Person: 2 }, 1));
+    await waitFor(() => expect(api.network.ego).toHaveBeenCalledWith(527, 2, 1));
     await waitFor(() => expect(screen.getByTestId('network-canvas').querySelectorAll('circle').length).toBe(2));
     await waitFor(() => expect(screen.getByTestId('network-rows')).toHaveTextContent('مالك'));
     expect(screen.getByTestId('network-rows')).not.toHaveTextContent('ابو داود');
@@ -129,6 +132,31 @@ describe('NetworkPanel', () => {
     expect(screen.queryByLabelText('Min edge weight')).toBeNull();
     expect(screen.queryByTestId('network-canvas')).toBeNull();
     expect(screen.queryByRole('button', { name: 'GraphML' })).toBeNull();
+  });
+
+  it('draws a graph of unlinked transmitters alone without crashing (A1)', async () => {
+    // The crash: every node id was a bare string, and the panel read it as
+    // `{ Form: ... }`. A book where nothing is linked yet is the common case
+    // on first use, so it is the one that broke.
+    api.network.graph.mockResolvedValue({
+      chains: 2,
+      dropped_nodes: 0,
+      dropped_edges: 0,
+      nodes: [
+        { id: F('الجنيد'), person_id: null, linked: false, name: 'الجنيد', occurrences: 2, degree: 1, as_source: 2 },
+        { id: F('مالك'), person_id: null, linked: false, name: 'مالك', occurrences: 1, degree: 1, as_source: 0 },
+      ],
+      edges: [{ from: F('الجنيد'), to: F('مالك'), weight: 1 }],
+    });
+    api.network.sources.mockResolvedValue([
+      { id: F('الجنيد'), person_id: null, linked: false, name: 'الجنيد', chains: 2 },
+    ]);
+    render(<NetworkPanel book={book} />);
+    const canvas = await screen.findByTestId('network-canvas');
+    await waitFor(() => expect(canvas.querySelectorAll('circle').length).toBe(2));
+    expect(screen.getByTestId('node-f:الجنيد')).toHaveAttribute('data-linked', 'false');
+    expect(screen.getByTestId('network-summary')).toHaveTextContent('2 transmitters (0 linked)');
+    expect(screen.queryByTestId('panel-error')).toBeNull();
   });
 
   it('redraws when the workbench says something was confirmed (spec 1.5 J1)', async () => {

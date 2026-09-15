@@ -11,13 +11,22 @@ import type { TransmitterListRow } from './isnad';
 
 /**
  * A node's identity (spec 1.5 §J2): a person when the transmitter is linked
- * to one, and otherwise the normalised name form itself. Serialised
- * untagged, so it arrives as `{ Person: 7 }` or `{ Form: "مالك" }`.
+ * to one, and otherwise the normalised name form itself.
+ *
+ * The Rust enum is `#[serde(untagged)]` over two newtype variants, which
+ * serialises to the inner value and nothing else: a **number** is a person
+ * id, a **string** is a name form. It is not a tagged object, and treating
+ * it as one is what crashed the panel on every unlinked transmitter.
+ * `lab/src-tauri/src/analysis/network.rs` asserts this shape in a test.
  */
-export type NodeId = { Person: number } | { Form: string };
+export type NodeId = number | string;
+
+export function isPersonNode(id: NodeId): id is number {
+  return typeof id === 'number';
+}
 
 export function nodeKey(id: NodeId): string {
-  return 'Person' in id ? `p${id.Person}` : `f:${id.Form}`;
+  return typeof id === 'number' ? `p${id}` : `f:${id}`;
 }
 
 export function sameNode(a: NodeId, b: NodeId): boolean {

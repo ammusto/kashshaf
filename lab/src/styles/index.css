@@ -92,6 +92,24 @@ body {
   direction: rtl;
 }
 
+/*
+ * A page body keeps the line breaks the source had (Phase 7 A2). Without
+ * this a page of verse arrives as one paragraph: the newlines are in the
+ * text, CSS was collapsing them. `pre-wrap` and not `pre` so long prose
+ * lines still wrap to the pane.
+ */
+.page-body {
+  white-space: pre-wrap;
+}
+
+/* A <title id=N parent=M> heading, drawn as one rather than run into the
+ * prose after it. The token indices underneath are unchanged. */
+.page-heading {
+  font-weight: 700;
+  font-size: 1.08em;
+  color: var(--color-app-text-primary, #1A1A1A);
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

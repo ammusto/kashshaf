@@ -1,11 +1,11 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import {
-  stripHtml,
   buildCharToTokenMap,
   getTokenCount,
   TokenPopup,
   type Token,
 } from '@kashshaf/shared';
+import { readBody, type HeadingRange } from '../api/bodyText';
 import type { Page, PageRef } from '../api/lab';
 import { Pages } from '../api/pages';
 
@@ -39,15 +39,33 @@ export interface Mark {
 interface Run {
   text: string;
   token: number | null;
+  /** The `<title>` this run sits inside, when it does (A2). */
+  heading?: number;
 }
 
-/** Split the display text into runs of constant token index. */
-export function toRuns(plain: string, charToToken: (number | null)[]): Run[] {
+/**
+ * Split the display text into runs of constant token index, and of constant
+ * heading. Passing no headings gives exactly the old behaviour.
+ */
+export function toRuns(
+  plain: string,
+  charToToken: (number | null)[],
+  headings: HeadingRange[] = []
+): Run[] {
+  // A heading id per character, so a boundary is a change like any other.
+  const headingAtChar: (number | undefined)[] = new Array(plain.length);
+  for (const h of headings) {
+    for (let i = h.start; i < h.end && i < plain.length; i++) headingAtChar[i] = h.id;
+  }
   const runs: Run[] = [];
   let start = 0;
   for (let i = 1; i <= plain.length; i++) {
-    if (i === plain.length || charToToken[i] !== charToToken[i - 1]) {
-      runs.push({ text: plain.slice(start, i), token: charToToken[start] });
+    const boundary =
+      i === plain.length ||
+      charToToken[i] !== charToToken[i - 1] ||
+      headingAtChar[i] !== headingAtChar[i - 1];
+    if (boundary) {
+      runs.push({ text: plain.slice(start, i), token: charToToken[start], heading: headingAtChar[start] });
       start = i;
     }
   }
@@ -120,11 +138,11 @@ export function Reader({
 
   const { runs, tokenByIdx, displayCount } = useMemo(() => {
     if (!page) return { runs: [] as Run[], tokenByIdx: new Map<number, Token>(), displayCount: 0 };
-    const plain = stripHtml(page.body);
+    const { plain, headings } = readBody(page.body);
     const map = buildCharToTokenMap(plain);
     const byIdx = new Map<number, Token>();
     for (const t of page.tokens) byIdx.set(t.idx, t);
-    return { runs: toRuns(plain, map), tokenByIdx: byIdx, displayCount: getTokenCount(map) };
+    return { runs: toRuns(plain, map, headings), tokenByIdx: byIdx, displayCount: getTokenCount(map) };
   }, [page]);
 
   // Changing page drops whatever was selected on the old one: a token range is
@@ -273,20 +291,24 @@ export function Reader({
         {loading && !page && <div className="text-sm text-app-text-tertiary">Loading page…</div>}
         {page && (
           <div
-            className="arabic text-2xl select-text max-w-3xl mx-auto"
+            className="arabic page-body text-2xl select-text max-w-3xl mx-auto"
             dir="rtl"
             onMouseLeave={() => { anchor.current = null; }}
             data-testid="page-body"
           >
             {runs.map((run, i) =>
               run.token === null || misaligned ? (
-                <span key={i}>{run.text}</span>
+                <span key={i} className={run.heading !== undefined ? 'page-heading' : undefined}>
+                  {run.text}
+                </span>
               ) : (
                 <span
                   key={i}
-                  className={`tok ${inSelection(run.token, selection) ? 'tok-selected' : ''} ${
-                    inSelection(run.token, highlight ?? null) ? 'tok-hit' : ''
-                  } ${layerClass?.(run.token) ?? ''} ${markByToken.get(run.token)?.className ?? ''}`}
+                  className={`tok ${run.heading !== undefined ? 'page-heading' : ''} ${
+                    inSelection(run.token, selection) ? 'tok-selected' : ''
+                  } ${inSelection(run.token, highlight ?? null) ? 'tok-hit' : ''} ${
+                    layerClass?.(run.token) ?? ''
+                  } ${markByToken.get(run.token)?.className ?? ''}`}
                   title={markByToken.get(run.token)?.title}
                   data-token={run.token}
                   onMouseDown={(e) => onTokenDown(e, run.token as number)}

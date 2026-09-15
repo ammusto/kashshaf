@@ -5,6 +5,7 @@ import { workspaceApi, type WorkspaceEntry } from './api/workspace';
 import type { At } from './api/pages';
 import { UnavailableNotice } from './components/ModeBadge';
 import { MenuBar } from './components/MenuBar';
+import { PanelBoundary } from './components/ui/PanelBoundary';
 import { WorkspaceView } from './components/workspace/WorkspaceView';
 import { ReadPanel } from './components/read/ReadPanel';
 import { SearchPanel } from './components/search/SearchPanel';
@@ -200,6 +201,7 @@ export default function App() {
   }, [loadWorkspace]);
 
   const title = current?.title ?? null;
+  const panelLabel = PANELS.find((p) => p.id === panel)?.label ?? panel;
   const showRail = view === 'text' && !settingsOpen && status?.mode !== 'unavailable';
 
   const body = useMemo(() => {
@@ -342,7 +344,10 @@ export default function App() {
             ))}
           </nav>
         )}
-        {body}
+        {/* A panel that throws costs that panel, not the window (A1). */}
+        <PanelBoundary name={settingsOpen ? 'Settings' : view === 'workspace' ? 'Workspace' : panelLabel}>
+          {body}
+        </PanelBoundary>
       </div>
     </div>
   );

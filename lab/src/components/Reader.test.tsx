@@ -106,6 +106,49 @@ describe('Reader', () => {
     expect(screen.getByTestId('page-locator')).toHaveTextContent('1:12');
   });
 
+  it('keeps the line breaks the page had, for verse and for prose (A2)', () => {
+    // A page of verse: every hemistich on its own line. Collapsed, this is
+    // the wall of text the reader was showing.
+    const verse = 'ألا يا اسلمي يا دارمي على البلى\nولا زال منهلا بجرعائك القطر';
+    const { container, unmount } = render(
+      <Reader page={page({ body: verse, tokens: verse.split(/\s+/).map((w, i) => token(i, w)) })}
+        pages={refs} index={0} onNavigate={noop} loading={false} error={null} />
+    );
+    const body = screen.getByTestId('page-body');
+    expect(body.className).toContain('page-body');
+    expect(body.textContent).toContain('\n');
+    unmount();
+    void container;
+
+    // And prose separated by newlines keeps them too.
+    const prose = 'السطر الأول\nالسطر الثاني';
+    render(
+      <Reader page={page({ body: prose, tokens: prose.split(/\s+/).map((w, i) => token(i, w)) })}
+        pages={refs} index={0} onNavigate={noop} loading={false} error={null} />
+    );
+    expect(screen.getByTestId('page-body').textContent).toBe(prose);
+  });
+
+  it('draws a <title> as a heading without moving any token index (A2)', () => {
+    const body = '<title id=3 parent=0>باب الزهد</title>\nقال رسول الله';
+    const { container } = render(
+      <Reader
+        page={page({ body, tokens: [token(0, 'باب'), token(1, 'الزهد'), token(2, 'قال'), token(3, 'رسول'), token(4, 'الله')] })}
+        pages={refs} index={0} onNavigate={noop} loading={false} error={null}
+      />
+    );
+    // The tag itself is gone, its words are headings, and the prose is not.
+    expect(screen.getByTestId('page-body').textContent).not.toContain('<title');
+    const heads = container.querySelectorAll('.page-heading');
+    expect([...heads].map((h) => h.textContent).join(' ')).toContain('باب');
+    // Token indices are untouched: the overlay still spans 0..4 in order.
+    const spans = container.querySelectorAll('[data-token]');
+    expect([...spans].map((s) => s.getAttribute('data-token'))).toEqual(['0', '1', '2', '3', '4']);
+    // and the heading words carry both classes
+    expect(container.querySelector('[data-token="0"]')!.className).toContain('page-heading');
+    expect(container.querySelector('[data-token="2"]')!.className).not.toContain('page-heading');
+  });
+
   it('opens the token popup for the token that was clicked', () => {
     const { container } = render(
       <Reader page={page()} pages={refs} index={0} onNavigate={noop} loading={false} error={null} />

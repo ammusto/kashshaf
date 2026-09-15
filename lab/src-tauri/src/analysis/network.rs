@@ -297,6 +297,43 @@ pub fn graphml(g: &Graph) -> String {
 mod tests {
     use super::*;
 
+    /// The wire shape the frontend parses. `#[serde(untagged)]` over two
+    /// newtype variants serialises to the inner value, so a person is a bare
+    /// number and a form is a bare string, not `{"Person": 7}`. The panel
+    /// assumed the tagged shape and crashed on the first unlinked
+    /// transmitter it drew, so the contract is pinned here.
+    #[test]
+    fn a_node_id_is_a_bare_number_or_a_bare_string() {
+        assert_eq!(serde_json::to_string(&NodeId::Person(7)).unwrap(), "7");
+        assert_eq!(
+            serde_json::to_string(&NodeId::Form("الجنيد".to_string())).unwrap(),
+            "\"الجنيد\""
+        );
+        // and back, so the id in an ego request round-trips
+        assert_eq!(serde_json::from_str::<NodeId>("7").unwrap(), NodeId::Person(7));
+        assert_eq!(
+            serde_json::from_str::<NodeId>("\"malik\"").unwrap(),
+            NodeId::Form("malik".into())
+        );
+    }
+
+    /// A graph with both kinds of node, as the panel receives it: neither id
+    /// is an object.
+    #[test]
+    fn a_graph_carries_both_node_kinds_on_the_wire() {
+        let links = vec![
+            Link { isnad_id: 1, position: 0, person_id: Some(1), form_norm: "abu dawud".into(), raw: "Abu Dawud".into() },
+            Link { isnad_id: 1, position: 1, person_id: None, form_norm: "junayd".into(), raw: "al-Junayd".into() },
+        ];
+        let g = build(&links, &names());
+        let json = serde_json::to_value(&g).unwrap();
+        let ids: Vec<&serde_json::Value> =
+            json["nodes"].as_array().unwrap().iter().map(|n| &n["id"]).collect();
+        assert!(ids.iter().any(|v| v.is_number()), "a linked node is a number: {ids:?}");
+        assert!(ids.iter().any(|v| v.is_string()), "an unlinked node is a string: {ids:?}");
+        assert!(ids.iter().all(|v| !v.is_object()), "no node id is an object: {ids:?}");
+    }
+
     fn names() -> HashMap<i64, String> {
         [(1, "Abu Dawud"), (2, "Malik"), (3, "Nafi"), (4, "Ibn Umar"), (5, "Shuba")]
             .into_iter()
