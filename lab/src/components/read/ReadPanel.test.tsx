@@ -376,6 +376,21 @@ describe('ReadPanel', () => {
     expect(await screen.findByTestId('cite-modal')).toHaveTextContent('No citation data');
   });
 
+  it('scrolls a hit into view when the caller sends us to one (10 G)', async () => {
+    // jsdom has no scrollIntoView, so the reader's guard skips it; here it
+    // exists and records which element it was asked to show.
+    const seen: string[] = [];
+    const spy = vi.fn(function (this: Element) {
+      seen.push(this.getAttribute('data-token') ?? '');
+    });
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: spy, writable: true, configurable: true });
+
+    render(<ReadPanel book={book} initialAt={{ part_index: 1, page_id: 1 }} highlight={[2, 4]} />);
+    await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('2:3'));
+    await waitFor(() => expect(seen).toContain('2'));
+    expect(spy).toHaveBeenCalledWith({ block: 'center' });
+  });
+
   it('hands the open page to Reuse (7 B)', async () => {
     const onFindReuse = vi.fn();
     render(<ReadPanel book={book} onFindReuse={onFindReuse} />);

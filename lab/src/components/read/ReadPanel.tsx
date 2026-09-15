@@ -278,6 +278,11 @@ export function ReadPanel({
     const key = `${page.part_index}:${page.page_id}`;
     if (restored.current === key) return;
     restored.current = key;
+    // Unless the caller sent us to a particular span: the reader has just
+    // scrolled it into view, and where the page was left is no longer what
+    // is being asked for (10 G). Child effects run first, so without this
+    // the restore undoes the scroll.
+    if (mark) return;
     el.scrollTop = mem.scrollTop;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page?.part_index, page?.page_id]);
