@@ -277,3 +277,13 @@ body {
 .lay-verse-h1 { background: #EDE9FE; border-bottom: 2px solid #7C3AED; }
 .lay-verse-h2 { background: #F5F3FF; border-bottom: 2px dashed #7C3AED; }
 
+
+/*
+ * A direct source that is also on the canvas (10 B). The list and the
+ * drawing are two views of one thing; saying which rows are in both beats
+ * annotating the ones that are not.
+ */
+.on-canvas {
+  color: #2C5F8D;
+  font-weight: 600;
+}

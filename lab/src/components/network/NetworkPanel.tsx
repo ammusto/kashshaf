@@ -384,17 +384,20 @@ export function NetworkPanel({ book, version = 0 }: Props) {
     {
       key: 'name',
       label: 'Person',
+      // 10 B: being on the canvas is a colour, not a note about absence.
       sortValue: (r) => r.name,
       rtl: true,
       width: 'minmax(160px, 3fr)',
       render: (r) => (
-        <span className={r.linked ? '' : 'text-app-text-secondary italic'} title={r.linked ? undefined : 'Not yet linked to a person'}>
+        <span
+          className={`${r.linked ? '' : 'text-app-text-secondary italic'} ${drawn.has(nodeKey(r.id)) ? 'on-canvas' : ''}`}
+          title={
+            drawn.has(nodeKey(r.id))
+              ? 'Drawn on the canvas'
+              : 'Not on the canvas: no edge survives these view settings'
+          }
+        >
           {r.name}
-          {!drawn.has(nodeKey(r.id)) && (
-            <span className="not-italic text-app-text-secondary" title="Its chain has no second transmitter, or these view settings leave it out, so it has no edge to draw.">
-              {' \u00b7 not drawn'}
-            </span>
-          )}
         </span>
       ),
     },
@@ -480,7 +483,9 @@ export function NetworkPanel({ book, version = 0 }: Props) {
           data-testid="ego-banner"
         >
           <span>
-            Showing <span className="font-arabic font-semibold">{focusName}</span> and their neighbours only:{' '}
+            <span className="font-semibold">Node Network of </span>
+            <span className="font-arabic font-semibold">{focusName}</span>
+            {': '}
             {ego.nodes.length} of {graph?.nodes.length ?? ego.nodes.length} transmitters, {ego.edges.length} of{' '}
             {graph?.edges.length ?? ego.edges.length} edges.
           </span>
@@ -616,7 +621,7 @@ export function NetworkPanel({ book, version = 0 }: Props) {
         </section>
         <aside className="w-96 border-l border-app-border-light bg-app-surface flex flex-col min-h-0">
           <div className="px-3 py-1 text-xs text-app-text-secondary border-b border-app-border-light" data-testid="sources-heading">
-            The author's direct sources (position 0) · {sources.length}
+            Direct Sources of Author · {sources.length}
           </div>
           <div className="p-2">
             <VirtualTable

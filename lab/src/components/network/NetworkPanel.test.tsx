@@ -119,7 +119,7 @@ describe('NetworkPanel', () => {
     expect(screen.getByTestId('network-rows')).not.toHaveTextContent('ابو داود');
     // The ego view says so, with the way out in it (9 A).
     const banner = screen.getByTestId('ego-banner');
-    expect(banner).toHaveTextContent('and their neighbours only');
+    expect(banner).toHaveTextContent('Node Network of');
     expect(banner).toHaveTextContent('2 of 3 transmitters');
     expect(banner).toHaveTextContent('1 of 2 edges');
     expect(within(banner).getByTestId('show-whole-text')).toBeInTheDocument();
@@ -128,19 +128,21 @@ describe('NetworkPanel', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Exported to');
   });
 
-  it('says how many sources there are, how many forms are unlinked, and which are not drawn (9 A)', async () => {
+  it('counts the sources and the unlinked forms, and marks what is on the canvas (9 A, 10 B)', async () => {
     // One source is a chain of one transmitter, so it has no edge and the
-    // drawing cannot hold it. The list still names it, and says why.
+    // drawing cannot hold it. The list names both, and the drawn one is
+    // marked rather than the missing one.
     api.network.sources.mockResolvedValue([
       { id: P(1), person_id: 1, linked: true, name: 'أبو داود', chains: 3 },
       { id: F('عطية'), person_id: null, linked: false, name: 'عطية', chains: 1 },
     ]);
     render(<NetworkPanel book={book} />);
     const list = await screen.findByTestId('network-sources');
-    expect(await screen.findByTestId('sources-heading')).toHaveTextContent('direct sources (position 0) · 2');
-    expect(list).toHaveTextContent('not drawn');
-    // And a linked one is not marked.
-    expect(within(list).getByText('أبو داود').textContent).not.toContain('not drawn');
+    expect(await screen.findByTestId('sources-heading')).toHaveTextContent('Direct Sources of Author · 2');
+    expect(list).not.toHaveTextContent('not drawn');
+    // The one the canvas holds is marked; the one it cannot is plain.
+    await waitFor(() => expect(within(list).getByText('أبو داود').className).toContain('on-canvas'));
+    expect(within(list).getByText('عطية').className).not.toContain('on-canvas');
 
     // One of the three nodes is a bare name form, which is what fragments a
     // chain before anyone is linked.
