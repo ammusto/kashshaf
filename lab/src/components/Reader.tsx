@@ -346,14 +346,22 @@ export function Reader({
                   data-token={run.token}
                   data-mark={markByToken.get(run.token)?.id}
                   onClick={
-                    onMarkClick
+                    interaction === 'text'
                       ? (e) => {
-                          const id = markByToken.get(run.token as number)?.id;
-                          // A drag through an annotation is a selection, not
-                          // a click on it.
-                          if (id == null || !(window.getSelection()?.isCollapsed ?? true)) return;
+                          // A drag through a word is a selection, not a click
+                          // on it.
+                          if (!(window.getSelection()?.isCollapsed ?? true)) return;
+                          const idx = run.token as number;
+                          const id = markByToken.get(idx)?.id;
                           e.stopPropagation();
-                          onMarkClick(id);
+                          // An annotation is the more particular thing, so it
+                          // wins; otherwise the word's own data (10 D).
+                          if (id != null && onMarkClick) {
+                            onMarkClick(id);
+                            return;
+                          }
+                          const token = tokenByIdx.get(idx);
+                          if (token) setPopup({ token, x: e.clientX, y: e.clientY });
                         }
                       : undefined
                   }

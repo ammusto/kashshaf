@@ -162,6 +162,15 @@ describe('Reader', () => {
     expect(screen.queryByText('قول')).toBeNull();
   });
 
+  it('opens the popup on a plain click when the text is read, not tagged (10 D)', () => {
+    const { container } = render(
+      <Reader page={page()} pages={refs} index={0} onNavigate={noop} interaction="text" loading={false} error={null} />
+    );
+    fireEvent.click(container.querySelector('[data-token="1"]')!);
+    expect(screen.getByText('Token Information')).toBeInTheDocument();
+    expect(screen.getByText('رسل')).toBeInTheDocument();
+  });
+
   it('reports a dragged range as a half-open token span', () => {
     const onSelectRange = vi.fn();
     const { container } = render(
