@@ -6,6 +6,7 @@
 pub mod books;
 pub mod corpus;
 pub mod debug;
+pub mod disambiguate;
 pub mod isnad;
 pub mod network;
 pub mod poetry;

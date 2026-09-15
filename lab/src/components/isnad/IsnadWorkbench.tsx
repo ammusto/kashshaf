@@ -31,6 +31,7 @@ import { GearButton, SettingsModal } from '../SettingsModal';
 import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
 import { HeavyRunModal, IDLE_RUN, RunBar, isHeavy, type RunState } from '../ui/Running';
 import { ScopePicker, WHOLE_BOOK, type Scope } from '../ui/ScopePicker';
+import { Disambiguator } from './Disambiguator';
 
 /**
  * The isnād workbench (spec §7.4): two panes.
@@ -90,6 +91,10 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
   const [selectedTransmitter, setSelectedTransmitter] = useState<number | null>(null);
   const [selectedToken, setSelectedToken] = useState<number | null>(null);
   const [retagOffer, setRetagOffer] = useState<[string, TokenClass, number] | null>(null);
+  /** The name disambiguator takes the panel over when it is open (10 A). */
+  const [disambiguating, setDisambiguating] = useState(false);
+  /** Bumped whenever the rows are re-read, so the disambiguator follows. */
+  const [stamp, setStamp] = useState(0);
   const [table, setTable] = useState<TransmitterListRow[]>([]);
   const [persons, setPersons] = useState<PersonRow[]>([]);
   const [confirmedOnly, setConfirmedOnly] = useState(false);
@@ -97,7 +102,6 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
   const [search, setSearch] = useState('');
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
   const [personMenu, setPersonMenu] = useState<number | null>(null);
-  const [pendingSuggestions, setPendingSuggestions] = useState<Op[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const { limits } = useHeavyLimits();
   const labels = usePages(bookId, book?.parts);
@@ -129,6 +133,7 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
       const [t, p] = await Promise.all([isnadApi.transmitters(bookId, confirmedOnly), isnadApi.persons()]);
       setTable(t);
       setPersons(p);
+      setStamp((v) => v + 1);
     } catch (e) {
       setError(String(e));
     }
@@ -422,6 +427,12 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
   };
   const [scrollToRow, setScrollToRow] = useState<number | null>(null);
 
+  /** Clear whatever this word was retagged as (10 A). */
+  const removeTag = async () => {
+    if (!current || selectedToken == null) return;
+    await doOp({ op: 'retag', isnad_id: current.id, tok: selectedToken, class: null });
+  };
+
   const retag = async (cls: TokenClass) => {
     if (!current || selectedToken == null) return;
     await doOp({ op: 'retag', isnad_id: current.id, tok: selectedToken, class: cls });
@@ -461,78 +472,6 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
 
   // ------------------------------------------------- transmitter table ---
 
-  const link = () => {
-    if (selectedTransmitter == null) {
-      setNotice('Select a transmitter in the text first.');
-      return;
-    }
-    const row = table.find((r) => r.id === selectedRows[0]);
-    if (!row) {
-      setNotice('Select a row on the right: a linked one to reuse its person, or an unlinked one to create a person from it.');
-      return;
-    }
-    if (row.person_id != null) {
-      void doOp({ op: 'link', transmitter_id: selectedTransmitter, person_id: row.person_id });
-    } else if (row.id === selectedTransmitter) {
-      void doOp({ op: 'link_new', transmitter_id: selectedTransmitter, canonical_name: null });
-    } else {
-      // Create a person from the row, then link both.
-      void (async () => {
-        const r = await applyTracked(stack.current, { op: 'link_new', transmitter_id: row.id, canonical_name: null });
-        const pid = r.inverse.op === 'delete_person' ? r.inverse.person_id : null;
-        if (pid != null) await applyTracked(stack.current, { op: 'link', transmitter_id: selectedTransmitter, person_id: pid });
-        await reload();
-        await reloadTable();
-      })();
-    }
-  };
-
-  const samePerson = () => {
-    const [a, b] = selectedRows.map((id) => table.find((r) => r.id === id));
-    if (!a || !b) {
-      setNotice('Select two rows to declare them the same person.');
-      return;
-    }
-    if (a.person_id != null && b.person_id != null && a.person_id !== b.person_id) {
-      const pa = persons.find((p) => p.id === a.person_id);
-      const pb = persons.find((p) => p.id === b.person_id);
-      if (window.confirm(`Merge ${pb?.canonical_name} (${pb?.forms.length} forms) into ${pa?.canonical_name} (${pa?.forms.length} forms)?`)) {
-        void doOp({ op: 'merge_persons', into: a.person_id, from: b.person_id }, { whole: true });
-      }
-    } else if (a.person_id != null) {
-      void doOp({ op: 'link', transmitter_id: b.id, person_id: a.person_id });
-    } else if (b.person_id != null) {
-      void doOp({ op: 'link', transmitter_id: a.id, person_id: b.person_id });
-    } else {
-      void (async () => {
-        const r = await applyTracked(stack.current, { op: 'link_new', transmitter_id: a.id, canonical_name: null });
-        const pid = r.inverse.op === 'delete_person' ? r.inverse.person_id : null;
-        if (pid != null) await applyTracked(stack.current, { op: 'link', transmitter_id: b.id, person_id: pid });
-        await reloadTable();
-      })();
-    }
-  };
-
-  const acceptSuggestions = async () => {
-    if (!current) return;
-    try {
-      const ops = await isnadApi.suggestionsForPage(current.book_id, current.part_index, current.page_id);
-      if (ops.length === 0) {
-        setNotice('No suggestions on this page.');
-        return;
-      }
-      setPendingSuggestions(ops);
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  const applySuggestions = () => {
-    if (!pendingSuggestions) return;
-    void doOp({ op: 'batch', ops: pendingSuggestions });
-    setPendingSuggestions(null);
-  };
-
   // --------------------------------------------------------- keyboard ---
 
   useEffect(() => {
@@ -559,18 +498,16 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
         case 'x': setStatus('rejected'); break;
         case 'j': next(); break;
         case 'k': prev(); break;
-        case 'l': link(); break;
-        case 'm': selectedRows.length === 2 ? samePerson() : mergeTransmitters(); break;
+        case 'm': mergeTransmitters(); break;
         case 'b': setMode('matn-start'); break;
         case 'e': setMode('matn-end'); break;
         case '[': nudgeBoundary(-1); break;
         case ']': nudgeBoundary(1); break;
         case 's': setMode('split'); break;
         case 'r': setMode('retag'); break;
-        case 'a': void acceptSuggestions(); break;
         case 'g': setGroupByForm((v) => !v); break;
         case '/': e.preventDefault(); searchRef.current?.focus(); break;
-        case 'Escape': setMode('none'); setPersonMenu(null); setPendingSuggestions(null); setOccurrences(null); break;
+        case 'Escape': setMode('none'); setPersonMenu(null); setOccurrences(null); break;
         default: return;
       }
     };
@@ -627,6 +564,24 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
 
   if (!book) {
     return <div className="p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
+  }
+
+  if (disambiguating) {
+    return (
+      <Disambiguator
+        book={book}
+        labels={labels}
+        version={stamp}
+        onOp={async (op) => {
+          await doOp(op, { whole: true });
+        }}
+        onOpen={(isnadId, transmitterId) => {
+          setDisambiguating(false);
+          void jumpTo({ id: transmitterId, isnad_id: isnadId } as TransmitterListRow);
+        }}
+        onClose={() => setDisambiguating(false)}
+      />
+    );
   }
 
   return (
@@ -739,6 +694,11 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
                   {(['verb', 'name', 'formula', 'other'] as TokenClass[]).map((c) => (
                     <button key={c} onClick={() => retag(c)} className="px-2 py-0.5 border border-app-border-medium rounded">{c} ({c[0]})</button>
                   ))}
+                  {/* A retag has to be undoable in place, not only through the
+                      undo stack: clearing it puts the word back as extracted. */}
+                  <button onClick={() => removeTag()} className="px-2 py-0.5 border border-app-border-medium rounded" data-testid="remove-tag">
+                    Remove tag
+                  </button>
                 </span>
               )}
               {retagOffer && (
@@ -815,9 +775,9 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
           <span className="text-app-text-secondary" data-testid="table-count">{shownTable.length.toLocaleString()} rows</span>
         </div>
         <div className="px-3 py-1.5 border-b border-app-border-light flex items-center gap-1 flex-wrap text-xs">
-          <button onClick={link} className="px-2 py-0.5 border border-app-border-medium rounded">Link (l)</button>
-          <button onClick={samePerson} disabled={selectedRows.length !== 2} className="px-2 py-0.5 border border-app-border-medium rounded disabled:opacity-40">Same person (m)</button>
-          <button onClick={acceptSuggestions} className="px-2 py-0.5 border border-app-border-medium rounded">Accept suggestions on page (a)</button>
+          <button onClick={() => setDisambiguating(true)} className="px-2 py-0.5 border border-app-border-medium rounded" data-testid="open-disambiguator">
+            Name disambiguator
+          </button>
           <button onClick={() => { const r = table.find((x) => x.id === selectedRows[0]); if (r?.person_id != null) setPersonMenu(r.person_id); else setNotice('Select a linked row.'); }} disabled={selectedRows.length !== 1} className="px-2 py-0.5 border border-app-border-medium rounded disabled:opacity-40">Person… (p)</button>
           <span className="ml-auto flex gap-1">
             <button onClick={undo} className="px-2 py-0.5 border border-app-border-medium rounded">Undo</button>
@@ -825,21 +785,6 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
             <ExportIsnads bookId={book.id} />
           </span>
         </div>
-
-        {pendingSuggestions && (
-          <div className="px-3 py-2 border-b border-app-border-light bg-app-accent-light text-xs" data-testid="suggestions-review">
-            <div className="mb-1">Accept {pendingSuggestions.length} suggestion{pendingSuggestions.length === 1 ? '' : 's'} on this page? One undo step.</div>
-            <ul className="mb-1 max-h-24 overflow-y-auto">
-              {pendingSuggestions.map((o, i) => o.op === 'link' ? (
-                <li key={i} className="font-arabic" dir="rtl">
-                  {table.find((t) => t.id === o.transmitter_id)?.raw ?? o.transmitter_id} → {persons.find((p) => p.id === o.person_id)?.canonical_name ?? o.person_id}
-                </li>
-              ) : null)}
-            </ul>
-            <button onClick={applySuggestions} className="px-2 py-0.5 bg-app-accent text-white rounded mr-2">Accept</button>
-            <button onClick={() => setPendingSuggestions(null)} className="px-2 py-0.5 border border-app-border-medium rounded">Cancel</button>
-          </div>
-        )}
 
         {personMenu != null && (
           <PersonEditor person={persons.find((p) => p.id === personMenu) ?? null} table={table} labels={labels} onClose={() => setPersonMenu(null)} onOp={(op) => doOp(op, { whole: true })} />

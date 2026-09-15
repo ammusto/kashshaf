@@ -216,6 +216,22 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE note ADD COLUMN color TEXT NOT NULL DEFAULT 'yellow';
     "#,
     },
+    Migration {
+        version: 7,
+        name: "name_distinction",
+        // "Not the same person" (10 A): a negative assertion about a pair of
+        // name forms, which the candidate ranker then never offers again.
+        // The pair is stored in one order (a <= b) so it is one row however
+        // the reader came at it.
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS name_distinction (
+            form_norm_a TEXT NOT NULL,
+            form_norm_b TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (form_norm_a, form_norm_b)
+        );
+    "#,
+    },
 ];
 
 fn migration_sql(m: &Migration) -> String {

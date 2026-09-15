@@ -115,6 +115,12 @@ fn main() {
             commands::isnad::lexicon_delete,
             commands::isnad::isnad_export,
             commands::isnad::authority_export,
+            // Name disambiguator (10 A)
+            commands::disambiguate::disambiguation_forms,
+            commands::disambiguate::disambiguation_candidates,
+            commands::disambiguate::name_distinction_add,
+            commands::disambiguate::name_distinction_remove,
+            commands::disambiguate::name_distinctions,
             // Reuse (§4.3, §7.5)
             commands::reuse::reuse_passage,
             commands::reuse::reuse_rescore,

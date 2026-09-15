@@ -561,6 +561,10 @@ pub enum Op {
     DeleteIsnad { isnad_id: i64 },
     /// Several ops as one undo step (accept-all-suggestions).
     Batch { ops: Vec<Op> },
+    /// "Same person" (10 A): every transmitter of the book carrying one of
+    /// these name forms becomes one person, created from the commonest form
+    /// if none of them is linked yet.
+    SameName { book_id: u64, forms: Vec<String>, canonical_name: Option<String> },
     /// Remove one form from a person (the inverse half of a merge).
     SplitFormOff { person_id: i64, form_norm: String },
     /// Restore rows a delete removed (the inverse of DeletePerson / DeleteIsnad).
@@ -588,6 +592,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::AddManual { .. } => "add_manual",
         Op::DeleteIsnad { .. } => "delete_isnad",
         Op::Batch { .. } => "batch",
+        Op::SameName { .. } => "same_name",
         Op::SplitFormOff { .. } => "split_form_off",
         Op::RestorePerson { .. } => "restore_person",
         Op::RestoreIsnad { .. } => "restore_isnad",
@@ -934,6 +939,55 @@ fn apply_inner(conn: &Connection, h: &Handles, op: &Op) -> Result<Op, LabError> 
             for o in ops {
                 inv.push(apply_inner(conn, h, o)?);
             }
+            inv.reverse();
+            Ok(Op::Batch { ops: inv })
+        }
+        Op::SameName { book_id, forms, canonical_name } => {
+            use crate::commands::disambiguate as dis;
+            if forms.len() < 2 {
+                return Err(LabError::Other("two forms at least are needed to be the same person".into()));
+            }
+            let rows = dis::rows_for_forms(conn, *book_id, forms)?;
+            if rows.is_empty() {
+                return Err(LabError::NotFound("none of those forms is in this text".into()));
+            }
+            let mut inv: Vec<Op> = Vec::new();
+
+            // Who they all become: whoever already holds the most of these
+            // rows, or a new person named after the commonest form.
+            let target = match dis::target_person(&rows) {
+                Some(p) => p,
+                None => {
+                    let names = dis::person_names(conn)?;
+                    let (tid, raw) = dis::naming_row(conn, *book_id, forms, &names)?
+                        .ok_or_else(|| LabError::NotFound("no transmitter carries those forms".into()))?;
+                    let name = canonical_name.clone().filter(|s| !s.trim().is_empty()).unwrap_or(raw);
+                    let undo = apply_inner(conn, h, &Op::LinkNew { transmitter_id: tid, canonical_name: Some(name) })?;
+                    // LinkNew undoes by deleting the person it made, which is
+                    // how its id gets back here.
+                    let pid = match &undo {
+                        Op::DeletePerson { person_id } => *person_id,
+                        _ => return Err(LabError::Other("link_new did not report the person it created".into())),
+                    };
+                    inv.push(undo);
+                    pid
+                }
+            };
+
+            // Anyone else these forms were linked to folds into the target.
+            for other in dis::other_persons(h, conn, *book_id, forms, target)? {
+                inv.push(apply_inner(conn, h, &Op::MergePersons { into: target, from: other })?);
+            }
+
+            // And every row that still is not linked to the target now is.
+            for tid in dis::transmitter_ids(conn, *book_id, forms)? {
+                let t = transmitter_of(conn, tid)?;
+                if t.person_id == Some(target) {
+                    continue;
+                }
+                inv.push(apply_inner(conn, h, &Op::Link { transmitter_id: tid, person_id: target })?);
+            }
+
             inv.reverse();
             Ok(Op::Batch { ops: inv })
         }
@@ -1381,6 +1435,55 @@ mod tests {
         let c = isnad::extract_page(&page.tokens, &page.body, &lex, &Params::default(), &HashMap::new());
         assert_eq!(c.len(), 1, "{:?}", c.iter().map(|x| x.links).collect::<Vec<_>>());
         insert_candidate(conn, h.source.corpus_version(), &[page], &c[0], &lex.hash, &HashMap::new()).unwrap()
+    }
+
+    #[test]
+    fn same_person_merges_every_row_of_the_named_forms_and_undoes() {
+        let (h, conn, page) = setup();
+        let id = extract_into(&h, &conn, &page);
+        let row = read_isnad(&conn, id).unwrap();
+        // Two of this chain's forms, said to be one man.
+        let a = names::form_norm(&row.transmitters[0].raw);
+        let b = names::form_norm(&row.transmitters[1].raw);
+
+        let applied = apply(&conn, &h, &Op::SameName { book_id: 1, forms: vec![a.clone(), b.clone()], canonical_name: None }).unwrap();
+        let after = read_isnad(&conn, id).unwrap();
+        let p0 = after.transmitters[0].person_id.expect("first row linked");
+        assert_eq!(after.transmitters[1].person_id, Some(p0), "both forms are one person");
+        assert_eq!(after.transmitters[2].person_id, None, "and nothing else was touched");
+        // The person carries both spellings, so the next book suggests them.
+        let person = read_person(&conn, p0).unwrap();
+        let forms: Vec<&str> = person.forms.iter().map(|f| f.form_norm.as_str()).collect();
+        assert!(forms.contains(&a.as_str()) && forms.contains(&b.as_str()), "{:?}", forms);
+
+        // And it undoes.
+        apply(&conn, &h, &applied.inverse).unwrap();
+        let back = read_isnad(&conn, id).unwrap();
+        assert_eq!(back.transmitters[0].person_id, None);
+        assert_eq!(back.transmitters[1].person_id, None);
+        assert_eq!(conn.query_row::<i64, _, _>("SELECT COUNT(*) FROM person", [], |r| r.get(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn not_the_same_is_remembered_and_keeps_the_pair_out_of_the_ranking() {
+        let (h, conn, page) = setup();
+        let id = extract_into(&h, &conn, &page);
+        let row = read_isnad(&conn, id).unwrap();
+        let a = names::form_norm(&row.transmitters[0].raw);
+        let b = names::form_norm(&row.transmitters[1].raw);
+
+        conn.execute(
+            "INSERT INTO name_distinction (form_norm_a, form_norm_b, created_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![crate::analysis::disambiguate::pair(&a, &b).0, crate::analysis::disambiguate::pair(&a, &b).1, now()],
+        )
+        .unwrap();
+
+        let links = crate::commands::disambiguate::links(&conn, 1).unwrap();
+        let mut no = std::collections::HashSet::new();
+        no.insert(crate::analysis::disambiguate::pair(&a, &b));
+        let c = crate::analysis::disambiguate::candidates(&links, &a, &no, &HashMap::new());
+        assert!(c.iter().all(|x| x.form_norm != b), "the ruled-out pair is gone");
+        let _ = h;
     }
 
     #[test]

@@ -17,6 +17,7 @@
 
 pub mod align;
 pub mod concordance;
+pub mod disambiguate;
 pub mod dispersion;
 pub mod freq;
 pub mod isnad;

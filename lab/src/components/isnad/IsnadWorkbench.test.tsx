@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { BookMetadata } from '@kashshaf/shared';
 
 /**
@@ -24,6 +24,13 @@ const api = vi.hoisted(() => {
     exportIsnads: vi.fn(),
     exportAuthority: vi.fn(),
   };
+  const dis = {
+    forms: vi.fn(async (): Promise<unknown[]> => []),
+    candidates: vi.fn(async (): Promise<unknown[]> => []),
+    notSame: vi.fn(async () => 1),
+    allowAgain: vi.fn(async () => 1),
+    distinctions: vi.fn(async (): Promise<unknown[]> => []),
+  };
   const lab = {
     getPage: vi.fn(),
     listPages: vi.fn(async (): Promise<unknown[]> => []),
@@ -35,7 +42,7 @@ const api = vi.hoisted(() => {
     statsCancel: vi.fn(),
     saveExport: vi.fn(async (name: string, _c: string) => `C:/lab/exports/${name}`),
   };
-  return { isnad, lab };
+  return { isnad, lab, dis };
 });
 
 vi.mock('../../api/lab', () => ({ labApi: api.lab }));
@@ -47,6 +54,7 @@ vi.mock('../../api/isnad', async () => {
   return {
     ...real,
     isnadApi: api.isnad,
+    disambiguationApi: api.dis,
     applyTracked: async (stack: Stack, op: unknown) => {
       const r = await api.isnad.apply(op);
       stack.undo.push(r.inverse);
@@ -298,28 +306,51 @@ describe('IsnadWorkbench', () => {
     expect(screen.getByTestId('table-count')).toHaveTextContent('1 rows');
   });
 
-  it('links the selected transmitter to the selected row’s person with l', async () => {
-    const { container } = render(<IsnadWorkbench book={book} />);
+  it('hands linking to the disambiguator, and keeps retagging (10 A)', async () => {
+    render(<IsnadWorkbench book={book} />);
     await screen.findByTestId('table-count');
-    await waitFor(() => expect(container.querySelector('[data-token="2"]')).not.toBeNull());
-    const inside = container.querySelector('[data-token="2"]')!;
-    fireEvent.mouseDown(inside);
-    fireEvent.mouseUp(inside);
-    // The linked ابو داود row on the right (page 10).
-    fireEvent.click(screen.getAllByText('أبو داود السجستاني')[0]);
+
+    // The three controls the disambiguator replaces are gone, and so are
+    // their keys.
+    expect(screen.queryByRole('button', { name: /^Link \(l\)$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Same person/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Accept suggestions/ })).not.toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'l' });
-    await waitFor(() => expect(api.isnad.apply).toHaveBeenCalledWith({ op: 'link', transmitter_id: 11, person_id: 7 }));
+    fireEvent.keyDown(window, { key: 'a' });
+    expect(api.isnad.apply).not.toHaveBeenCalled();
+
+    expect(screen.getByTestId('open-disambiguator')).toBeInTheDocument();
   });
 
-  it('reviews page suggestions before applying them as one batch', async () => {
-    api.isnad.suggestionsForPage.mockResolvedValue([{ op: 'link', transmitter_id: 22, person_id: 7 }]);
-    render(<IsnadWorkbench book={book} />);
+  it('clears a retag in place (10 A)', async () => {
+    const { container } = render(<IsnadWorkbench book={book} />);
     await screen.findByTestId('structured-chain');
-    fireEvent.keyDown(window, { key: 'a' });
-    expect(await screen.findByTestId('suggestions-review')).toHaveTextContent('Accept 1 suggestion on this page?');
-    expect(api.isnad.apply).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Accept' }));
-    await waitFor(() => expect(api.isnad.apply).toHaveBeenCalledWith({ op: 'batch', ops: [{ op: 'link', transmitter_id: 22, person_id: 7 }] }));
+    await waitFor(() => expect(container.querySelector('[data-token="2"]')).not.toBeNull());
+    const word = container.querySelector('[data-token="2"]')!;
+    fireEvent.mouseDown(word);
+    fireEvent.mouseUp(word);
+
+    fireEvent.keyDown(window, { key: 'r' });
+    fireEvent.click(await screen.findByTestId('remove-tag'));
+    await waitFor(() =>
+      expect(api.isnad.apply).toHaveBeenCalledWith(expect.objectContaining({ op: 'retag', tok: 2, class: null }))
+    );
+  });
+
+  it('opens the name disambiguator over the workbench (10 A)', async () => {
+    api.dis.forms.mockResolvedValue([
+      { form_norm: 'ابو داود', raw: 'أبو داود', count: 3, person_id: null, person_name: null, part_index: 0, page_id: 10 },
+    ]);
+    render(<IsnadWorkbench book={book} />);
+    await screen.findByTestId('table-count');
+    fireEvent.click(screen.getByTestId('open-disambiguator'));
+
+    const view = await screen.findByTestId('disambiguator');
+    expect(screen.queryByTestId('isnad-panel')).not.toBeInTheDocument();
+    await waitFor(() => expect(api.dis.forms).toHaveBeenCalledWith(527));
+
+    fireEvent.click(within(view).getByTestId('close-disambiguator'));
+    expect(await screen.findByTestId('isnad-panel')).toBeInTheDocument();
   });
 
   it('runs extraction with the chosen parameters and shows the summary', async () => {

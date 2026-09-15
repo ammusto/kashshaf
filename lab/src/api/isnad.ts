@@ -111,6 +111,40 @@ export interface PersonRow {
   linked: number;
 }
 
+/** A distinct name form in the open text (10 A). */
+export interface NameForm {
+  form_norm: string;
+  /** The commonest spelling of it. */
+  raw: string;
+  count: number;
+  person_id: number | null;
+  person_name: string | null;
+  part_index: number;
+  page_id: number;
+}
+
+/** One place a form occurs, with the transmitters on either side of it. */
+export interface NameOccurrence {
+  isnad_id: number;
+  transmitter_id: number;
+  part_index: number;
+  page_id: number;
+  /** Whom this transmitter received from. */
+  from: string | null;
+  /** Whom they gave it to. */
+  to: string | null;
+}
+
+/** A form that might be the same person as the selected one (10 A). */
+export interface NameCandidate extends NameForm {
+  score: number;
+  string_score: number;
+  neighbour_score: number;
+  shared_from: number;
+  shared_to: number;
+  occurrences: NameOccurrence[];
+}
+
 export interface IsnadFilter {
   status?: IsnadStatus | null;
   kind?: 'isnad' | 'citation' | null;
@@ -169,6 +203,7 @@ export type Op =
   | { op: 'add_manual'; book_id: number; part_index: number; page_id: number; tok_start: number; tok_end: number }
   | { op: 'delete_isnad'; isnad_id: number }
   | { op: 'batch'; ops: Op[] }
+  | { op: 'same_name'; book_id: number; forms: string[]; canonical_name: string | null }
   | { op: 'split_form_off'; person_id: number; form_norm: string }
   | { op: 'restore_person'; person: PersonRow; transmitter_ids: number[] }
   | { op: 'restore_isnad'; [k: string]: unknown }
@@ -201,6 +236,17 @@ export const isnadApi = {
   exportIsnads: (bookId: number, format: 'csv' | 'json', shape: 'flat' | 'nested', status?: IsnadStatus | null) =>
     invoke<string>('isnad_export', { bookId, format, shape, status: status ?? null }),
   exportAuthority: (format: 'csv' | 'json') => invoke<string>('authority_export', { format }),
+};
+
+/** The name disambiguator (10 A). */
+export const disambiguationApi = {
+  forms: (bookId: number) => invoke<NameForm[]>('disambiguation_forms', { bookId }),
+  candidates: (bookId: number, formNorm: string) =>
+    invoke<NameCandidate[]>('disambiguation_candidates', { bookId, formNorm }),
+  /** "Not the same": every pair in the selection is recorded. */
+  notSame: (bookId: number, forms: string[]) => invoke<number>('name_distinction_add', { bookId, forms }),
+  allowAgain: (forms: string[]) => invoke<number>('name_distinction_remove', { forms }),
+  distinctions: () => invoke<[string, string][]>('name_distinctions'),
 };
 
 /**
