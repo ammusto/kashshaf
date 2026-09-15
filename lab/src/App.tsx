@@ -63,6 +63,12 @@ export default function App() {
   const [reuseFrom, setReuseFrom] = useState<{ at: At; range: [number, number] } | null>(null);
 
   const [dirty, setDirty] = useState(false);
+  /**
+   * Bumped whenever a panel changes what the database holds, so the network
+   * follows the isnāds being confirmed rather than waiting to be reloaded
+   * (spec 1.5 §J1).
+   */
+  const [dataVersion, setDataVersion] = useState(0);
   const [saveNote, setSaveNote] = useState<string | null>(null);
 
   useEffect(() => {
@@ -260,13 +266,21 @@ export default function App() {
       case 'stats':
         return <StatsPanel book={current} onShowHit={showHit} />;
       case 'isnad':
-        return <IsnadWorkbench book={current} onChanged={() => setDirty(true)} />;
+        return (
+          <IsnadWorkbench
+            book={current}
+            onChanged={() => {
+              setDirty(true);
+              setDataVersion((v) => v + 1);
+            }}
+          />
+        );
       case 'reuse':
         return <ReusePanel book={current} local={status?.mode === 'local'} from={reuseFrom} onChanged={() => setDirty(true)} />;
       case 'quran':
         return <QuranPanel book={current} onChanged={() => setDirty(true)} />;
       case 'network':
-        return <NetworkPanel book={current} />;
+        return <NetworkPanel book={current} version={dataVersion} />;
       case 'poetry':
         return <PoetryPanel book={current} />;
     }
@@ -288,6 +302,7 @@ export default function App() {
     readMark,
     reuseFrom,
     showHit,
+    dataVersion,
   ]);
 
   return (

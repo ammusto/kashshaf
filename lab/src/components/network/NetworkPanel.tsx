@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
-import { isnadApi, type TransmitterListRow } from '../../api/isnad';
+import type { TransmitterListRow } from '../../api/isnad';
 import { usePages } from '../../api/pages';
-import { networkApi, type Graph, type NetNode, type Source } from '../../api/phase4';
+import { networkApi, nodeKey, sameNode, type Graph, type NodeId, type Source } from '../../api/phase4';
 import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
 
 /**
@@ -17,6 +17,11 @@ import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
 
 interface Props {
   book: BookMetadata | null;
+  /**
+   * Bumped by the isnad workbench when something is confirmed or linked, so
+   * the graph follows the work rather than waiting to be reloaded (spec §J1).
+   */
+  version?: number;
 }
 
 interface Pos {
@@ -29,19 +34,19 @@ interface Pos {
 const W = 900;
 const H = 620;
 
-export function NetworkPanel({ book }: Props) {
+export function NetworkPanel({ book, version = 0 }: Props) {
   const bookId = book?.id ?? null;
   const labels = usePages(bookId, book?.parts);
   const [minWeight, setMinWeight] = useState(1);
   const [nodeCap, setNodeCap] = useState(300);
   const [graph, setGraph] = useState<Graph | null>(null);
   const [ego, setEgo] = useState<Graph | null>(null);
-  const [focus, setFocus] = useState<number | null>(null);
+  const [focus, setFocus] = useState<NodeId | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
   const [rows, setRows] = useState<TransmitterListRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [positions, setPositions] = useState<Map<number, Pos>>(new Map());
+  const [positions, setPositions] = useState<Map<string, Pos>>(new Map());
   const [running, setRunning] = useState(false);
   const frame = useRef<number | null>(null);
 
@@ -65,7 +70,10 @@ export function NetworkPanel({ book }: Props) {
     setFocus(null);
     setRows([]);
     void load();
-  }, [load]);
+    // `version` is the workbench's signal that a chain was confirmed or a
+    // transmitter linked (spec §J1).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, version]);
 
   const shown = ego ?? graph;
 
@@ -74,8 +82,8 @@ export function NetworkPanel({ book }: Props) {
   // whenever the shown graph changes, and settles.
   useEffect(() => {
     if (!shown) return;
-    const ids = shown.nodes.map((n) => n.person_id);
-    const pos = new Map<number, Pos>();
+    const ids = shown.nodes.map((n) => nodeKey(n.id));
+    const pos = new Map<string, Pos>();
     ids.forEach((id, i) => {
       const prev = positions.get(id);
       const a = (i / Math.max(1, ids.length)) * Math.PI * 2;
@@ -90,7 +98,7 @@ export function NetworkPanel({ book }: Props) {
       const n = ids.length;
       const k = Math.sqrt((W * H) / Math.max(1, n));
       const temp = Math.max(0.5, 30 * (1 - iter / maxIter));
-      const disp = new Map<number, { dx: number; dy: number }>();
+      const disp = new Map<string, { dx: number; dy: number }>();
       ids.forEach((id) => disp.set(id, { dx: 0, dy: 0 }));
       for (let i = 0; i < n; i++) {
         for (let j = i + 1; j < n; j++) {
@@ -114,15 +122,17 @@ export function NetworkPanel({ book }: Props) {
         }
       }
       for (const e of edges) {
-        const a = pos.get(e.from);
-        const b = pos.get(e.to);
+        const ka = nodeKey(e.from);
+        const kb = nodeKey(e.to);
+        const a = pos.get(ka);
+        const b = pos.get(kb);
         if (!a || !b) continue;
         const dx = a.x - b.x;
         const dy = a.y - b.y;
         const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
         const f = (d * d) / k / Math.max(1, 2 / Math.sqrt(e.weight));
-        const da = disp.get(e.from)!;
-        const db = disp.get(e.to)!;
+        const da = disp.get(ka)!;
+        const db = disp.get(kb)!;
         da.dx -= (dx / d) * f;
         da.dy -= (dy / d) * f;
         db.dx += (dx / d) * f;
@@ -155,19 +165,19 @@ export function NetworkPanel({ book }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shown]);
 
-  const clickNode = async (n: NetNode) => {
+  const clickNode = async (id: NodeId) => {
     if (bookId == null) return;
     try {
-      if (focus === n.person_id) {
+      if (focus && sameNode(focus, id)) {
         setEgo(null);
         setFocus(null);
         setRows([]);
         return;
       }
-      const [e, t] = await Promise.all([networkApi.ego(bookId, n.person_id, minWeight), isnadApi.transmitters(bookId, true)]);
+      const [e, t] = await Promise.all([networkApi.ego(bookId, id, minWeight), networkApi.nodeRows(bookId, id)]);
       setEgo(e);
-      setFocus(n.person_id);
-      setRows(t.filter((r) => r.person_id === n.person_id));
+      setFocus(id);
+      setRows(t);
     } catch (err) {
       setError(String(err));
     }
@@ -183,10 +193,21 @@ export function NetworkPanel({ book }: Props) {
   };
 
   const maxWeight = useMemo(() => Math.max(1, ...(shown?.edges.map((e) => e.weight) ?? [1])), [shown]);
-  const nameOf = useMemo(() => new Map((shown?.nodes ?? []).map((n) => [n.person_id, n.name])), [shown]);
+  const nameOf = useMemo(() => new Map((shown?.nodes ?? []).map((n) => [nodeKey(n.id), n.name])), [shown]);
 
   const sourceColumns: Column<Source>[] = [
-    { key: 'name', label: 'Person', sortValue: (r) => r.name, rtl: true, width: 'minmax(160px, 3fr)', render: (r) => r.name },
+    {
+      key: 'name',
+      label: 'Person',
+      sortValue: (r) => r.name,
+      rtl: true,
+      width: 'minmax(160px, 3fr)',
+      render: (r) => (
+        <span className={r.linked ? '' : 'text-app-text-secondary italic'} title={r.linked ? undefined : 'Not yet linked to a person'}>
+          {r.name}
+        </span>
+      ),
+    },
     { key: 'chains', label: 'Chains', sortValue: (r) => r.chains, align: 'right', width: '70px', defaultSort: 'desc', render: (r) => fmt(r.chains) },
   ];
   const rowColumns: Column<TransmitterListRow>[] = [
@@ -197,11 +218,21 @@ export function NetworkPanel({ book }: Props) {
   ];
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
+    return <div className="flex-1 p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
+  }
+
+  // Spec §J3: with nothing confirmed there is no network, and a panel of
+  // controls over an empty canvas only invites fiddling with them.
+  if (graph && graph.chains === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-6" data-testid="network-empty">
+        <p className="text-sm text-app-text-tertiary">Confirm at least one isnād to build a network.</p>
+      </div>
+    );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex-1 flex h-full min-h-0 flex-col">
       <div className="px-3 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-3 flex-wrap text-xs">
         <label className="flex items-center gap-1" title="Edges lighter than this are hidden (spec §4.5)">
           min edge weight
@@ -213,13 +244,14 @@ export function NetworkPanel({ book }: Props) {
         </label>
         {graph && (
           <span className="text-app-text-tertiary" data-testid="network-summary">
-            {graph.chains} confirmed chains · {graph.nodes.length} persons · {graph.edges.length} edges
-            {(graph.dropped_nodes > 0 || graph.dropped_edges > 0) && ` (${graph.dropped_nodes} persons, ${graph.dropped_edges} edges hidden)`}
+            {graph.chains} confirmed chain{graph.chains === 1 ? '' : 's'} · {graph.nodes.length} transmitter
+            {graph.nodes.length === 1 ? '' : 's'} ({graph.nodes.filter((n) => n.linked).length} linked) · {graph.edges.length} edges
+            {(graph.dropped_nodes > 0 || graph.dropped_edges > 0) && ` (${graph.dropped_nodes} nodes, ${graph.dropped_edges} edges hidden)`}
           </span>
         )}
-        {ego && focus != null && (
+        {ego && focus && (
           <button onClick={() => { setEgo(null); setFocus(null); setRows([]); }} className="px-2 py-0.5 border border-app-border-medium rounded">
-            ← whole book
+            ← whole text
           </button>
         )}
         {running && <span className="text-app-text-tertiary">laying out…</span>}
@@ -247,30 +279,51 @@ export function NetworkPanel({ book }: Props) {
                 </marker>
               </defs>
               {shown.edges.map((e) => {
-                const a = positions.get(e.from);
-                const b = positions.get(e.to);
+                const ka = nodeKey(e.from);
+                const kb = nodeKey(e.to);
+                const a = positions.get(ka);
+                const b = positions.get(kb);
                 if (!a || !b) return null;
                 return (
-                  <line key={`${e.from}-${e.to}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#9CA3AF" strokeWidth={1 + (3 * e.weight) / maxWeight} markerEnd="url(#arrow)" opacity={0.8}>
+                  <line key={`${ka}-${kb}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#9CA3AF" strokeWidth={1 + (3 * e.weight) / maxWeight} markerEnd="url(#arrow)" opacity={0.8}>
                     <title>
-                      {nameOf.get(e.to)} ← {nameOf.get(e.from)} · {e.weight}
+                      {nameOf.get(kb)} ← {nameOf.get(ka)} · {e.weight}
                     </title>
                   </line>
                 );
               })}
               {shown.nodes.map((n) => {
-                const p = positions.get(n.person_id);
+                const key = nodeKey(n.id);
+                const p = positions.get(key);
                 if (!p) return null;
                 const r = 6 + Math.min(14, Math.sqrt(n.degree) * 2);
+                const isFocus = !!focus && sameNode(focus, n.id);
+                // Spec §J2: a transmitter nobody has linked yet is a node all
+                // the same, drawn hollow and dashed so it reads as a name and
+                // not as a person, and labelled with the form as written.
                 return (
-                  <g key={n.person_id} transform={`translate(${p.x},${p.y})`} onClick={() => void clickNode(n)} className="cursor-pointer" data-testid={`node-${n.person_id}`}>
-                    <circle r={r} fill={n.person_id === focus ? '#2C5F8D' : n.as_source > 0 ? '#E8A33D' : '#6366F1'} stroke="#fff" strokeWidth={1.5} />
-                    <text y={r + 12} textAnchor="middle" fontSize={11} className="font-arabic" fill="#1A1A1A">
+                  <g
+                    key={key}
+                    transform={`translate(${p.x},${p.y})`}
+                    onClick={() => void clickNode(n.id)}
+                    className="cursor-pointer"
+                    data-testid={`node-${key}`}
+                    data-linked={n.linked ? 'true' : 'false'}
+                  >
+                    <circle
+                      r={r}
+                      fill={n.linked ? (isFocus ? '#2C5F8D' : n.as_source > 0 ? '#E8A33D' : '#6366F1') : isFocus ? '#BFD3E6' : '#FFFFFF'}
+                      stroke={n.linked ? '#fff' : isFocus ? '#2C5F8D' : '#9CA3AF'}
+                      strokeWidth={1.5}
+                      strokeDasharray={n.linked ? undefined : '3 2'}
+                    />
+                    <text y={r + 12} textAnchor="middle" fontSize={11} className="font-arabic" fill={n.linked ? '#1A1A1A' : '#6B7280'}>
                       {n.name}
                     </text>
                     <title>
                       {n.name} · {n.occurrences} occurrences · degree {n.degree}
                       {n.as_source > 0 ? ` · direct source ×${n.as_source}` : ''}
+                      {n.linked ? '' : ' · not yet linked to a person'}
                     </title>
                   </g>
                 );
@@ -278,17 +331,27 @@ export function NetworkPanel({ book }: Props) {
             </svg>
           ) : (
             <div className="p-6 text-sm text-app-text-tertiary">
-              {graph ? 'No confirmed isnāds with linked transmitters yet: confirm chains and link their transmitters in the Isnād workbench.' : 'Loading…'}
+              {graph ? 'Every node is hidden at this minimum edge weight.' : 'Loading…'}
             </div>
           )}
         </section>
         <aside className="w-96 border-l border-app-border-light bg-app-surface flex flex-col min-h-0">
           <div className="px-3 py-1 text-xs text-app-text-tertiary border-b border-app-border-light">The author's direct sources (position 0)</div>
           <div className="p-2">
-            <VirtualTable columns={sourceColumns} rows={sources} rowKey={(r) => r.person_id} height={220} onRowClick={(r) => void clickNode({ person_id: r.person_id, name: r.name, occurrences: 0, degree: 0, as_source: r.chains })} emptyText="No confirmed chains with a linked first transmitter." testId="network-sources" />
+            <VirtualTable
+              columns={sourceColumns}
+              rows={sources}
+              rowKey={(r) => nodeKey(r.id)}
+              height={220}
+              onRowClick={(r) => void clickNode(r.id)}
+              emptyText="No confirmed chain names its first transmitter."
+              testId="network-sources"
+            />
           </div>
           <div className="px-3 py-1 text-xs text-app-text-tertiary border-b border-t border-app-border-light">
-            {focus != null ? `Transmitter rows of ${nameOf.get(focus) ?? sources.find((s) => s.person_id === focus)?.name ?? focus}` : 'Click a node for its transmitter rows'}
+            {focus
+              ? `Transmitter rows of ${nameOf.get(nodeKey(focus)) ?? sources.find((s) => sameNode(s.id, focus))?.name ?? ''}`
+              : 'Click a node for its transmitter rows'}
           </div>
           <div className="p-2 flex-1 min-h-0">
             <VirtualTable columns={rowColumns} rows={rows} rowKey={(r) => r.id} height={300} emptyText="—" testId="network-rows" />

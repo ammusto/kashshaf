@@ -546,7 +546,15 @@ pub async fn stats_dispersion(state: State<'_, ManagedLabState>, args: Dispersio
     let h = handles(&state)?;
     blocking(move || {
         let sc = scoped(&h, &args.scope)?;
-        let d = dispersion::dispersion(&sc.text, &args.key);
+        // The same normalisation the concordance applies, so a root typed as
+        // bare radicals and one copied out of a result both find the word
+        // (spec 1.5 E).
+        let key = match args.scope.layer {
+            crate::source::Layer::Root => kashshaf_engine::normalize_root_query(&args.key),
+            crate::source::Layer::Surface => kashshaf_engine::normalize_arabic(&args.key),
+            crate::source::Layer::Lemma => args.key.clone(),
+        };
+        let d = dispersion::dispersion(&sc.text, &key);
         let by_section = sc
             .book
             .sections

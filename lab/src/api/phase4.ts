@@ -5,11 +5,31 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { TransmitterListRow } from './isnad';
 
 // ------------------------------------------------------------ network ---
 
+/**
+ * A node's identity (spec 1.5 §J2): a person when the transmitter is linked
+ * to one, and otherwise the normalised name form itself. Serialised
+ * untagged, so it arrives as `{ Person: 7 }` or `{ Form: "مالك" }`.
+ */
+export type NodeId = { Person: number } | { Form: string };
+
+export function nodeKey(id: NodeId): string {
+  return 'Person' in id ? `p${id.Person}` : `f:${id.Form}`;
+}
+
+export function sameNode(a: NodeId, b: NodeId): boolean {
+  return nodeKey(a) === nodeKey(b);
+}
+
 export interface NetNode {
-  person_id: number;
+  id: NodeId;
+  /** Set when the node is a person; absent for a bare name form. */
+  person_id: number | null;
+  /** Whether a person stands behind this node (spec §J2). */
+  linked: boolean;
   name: string;
   occurrences: number;
   degree: number;
@@ -18,9 +38,9 @@ export interface NetNode {
 
 export interface NetEdge {
   /** The earlier transmitter (nearer the source). */
-  from: number;
+  from: NodeId;
   /** The later one, who transmitted from `from`. */
-  to: number;
+  to: NodeId;
   weight: number;
 }
 
@@ -33,14 +53,18 @@ export interface Graph {
 }
 
 export interface Source {
-  person_id: number;
+  id: NodeId;
+  person_id: number | null;
+  linked: boolean;
   name: string;
   chains: number;
 }
 
 export const networkApi = {
   graph: (bookId: number, minWeight: number, nodeCap: number) => invoke<Graph>('network_graph', { bookId, minWeight, nodeCap }),
-  ego: (bookId: number, personId: number, minWeight: number) => invoke<Graph>('network_ego', { bookId, personId, minWeight }),
+  ego: (bookId: number, node: NodeId, minWeight: number) => invoke<Graph>('network_ego', { bookId, node, minWeight }),
+  /** The transmitter rows behind one node, linked or not (spec §J2). */
+  nodeRows: (bookId: number, node: NodeId) => invoke<TransmitterListRow[]>('network_node_rows', { bookId, node }),
   sources: (bookId: number) => invoke<Source[]>('network_sources', { bookId }),
   export: (bookId: number, format: 'csv' | 'graphml', minWeight: number, nodeCap: number) =>
     invoke<string>('network_export', { bookId, format, minWeight, nodeCap }),

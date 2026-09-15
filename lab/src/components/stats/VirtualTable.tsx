@@ -40,6 +40,7 @@ export function VirtualTable<T>({
   onRowCtrlClick,
   scrollToKey,
   height = 480,
+  dir,
   emptyText = 'Nothing to show.',
   testId,
 }: {
@@ -53,6 +54,11 @@ export function VirtualTable<T>({
   scrollToKey?: string | number | null;
   /** Pixels, or `'fill'` to take the parent's height (the parent must have one). */
   height?: number | 'fill';
+  /**
+   * Lay the columns out right to left. A concordance reads the way its text
+   * does (spec 1.5 §E): the first column is the rightmost one.
+   */
+  dir?: 'ltr' | 'rtl';
   emptyText?: string;
   testId?: string;
 }) {
@@ -114,6 +120,7 @@ export function VirtualTable<T>({
     <div className={`border border-app-border-light rounded overflow-hidden bg-app-surface ${height === 'fill' ? 'h-full flex flex-col' : ''}`} data-testid={testId}>
       <div
         role="row"
+        dir={dir}
         className="grid text-xs font-medium text-app-text-secondary bg-app-surface-variant border-b border-app-border-light"
         style={{ gridTemplateColumns: grid }}
       >
@@ -123,6 +130,7 @@ export function VirtualTable<T>({
             role="columnheader"
             onClick={() => toggle(c.key)}
             className={`px-2 py-1.5 truncate hover:bg-app-border-light ${c.align === 'right' ? 'text-right' : 'text-left'}`}
+            dir={dir}
             title={`Sort by ${c.label}`}
           >
             {c.label}
@@ -141,6 +149,7 @@ export function VirtualTable<T>({
                 <div
                   key={rowKey(row, v.index)}
                   role="row"
+                  dir={dir}
                   onClick={onRowClick || onRowCtrlClick ? (e) => ((e.ctrlKey || e.metaKey) && onRowCtrlClick ? onRowCtrlClick(row) : onRowClick?.(row)) : undefined}
                   className={`grid items-center text-sm border-b border-app-border-light ${
                     onRowClick ? 'cursor-pointer hover:bg-app-accent-light' : ''
@@ -161,8 +170,8 @@ export function VirtualTable<T>({
                       role="cell"
                       dir={c.rtl ? 'rtl' : 'ltr'}
                       className={`px-2 truncate ${c.rtl ? 'font-arabic text-base' : ''} ${
-                        c.align === 'right' ? 'text-right tabular-nums' : ''
-                      }`}
+                        c.align === 'right' ? 'text-right' : c.align === 'left' ? 'text-left' : ''
+                      } ${c.align === 'right' && !c.rtl ? 'tabular-nums' : ''}`}
                     >
                       {c.render ? c.render(row) : String(c.sortValue(row) ?? '—')}
                     </div>

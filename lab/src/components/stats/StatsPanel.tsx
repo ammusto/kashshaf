@@ -15,11 +15,11 @@ import {
   type RefSpec,
   type Scope,
   type Section,
-  type SectionsResponse,
   type SortBy,
 } from '../../api/lab';
 import { exportTable, type ExportColumn, type ExportFormat } from '../../utils/exportTable';
 import { VirtualTable, fmt, type Column } from './VirtualTable';
+import { usePages } from '../../api/pages';
 
 /**
  * The Stats panel (spec §7.3): six tabs over the current book, each with a
@@ -38,7 +38,7 @@ export interface HitRef {
   tok_end: number;
 }
 
-type Tab = 'frequencies' | 'concordance' | 'keyness' | 'dispersion' | 'collocations' | 'sections';
+type Tab = 'frequencies' | 'concordance' | 'keyness' | 'dispersion' | 'collocations';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'frequencies', label: 'Frequencies' },
@@ -46,7 +46,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'keyness', label: 'Keyness' },
   { id: 'dispersion', label: 'Dispersion' },
   { id: 'collocations', label: 'Collocations' },
-  { id: 'sections', label: 'Sections' },
 ];
 
 /** Per-book panel state kept in memory across book switches (spec §7.1). */
@@ -146,40 +145,6 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
             </button>
           ))}
         </div>
-        <label className="text-xs text-app-text-secondary flex items-center gap-1">
-          Layer
-          <select
-            aria-label="Layer"
-            value={mem.layer}
-            onChange={(e) => update({ layer: e.target.value as Layer })}
-            className="border border-app-border-medium rounded px-1 py-0.5 text-sm"
-          >
-            <option value="surface">surface</option>
-            <option value="lemma">lemma</option>
-            <option value="root">root</option>
-          </select>
-        </label>
-        <label className="text-xs text-app-text-secondary flex items-center gap-1">
-          <input type="checkbox" checked={mem.stop} onChange={(e) => update({ stop: e.target.checked })} />
-          Stop words off
-        </label>
-        <label className="text-xs text-app-text-secondary flex items-center gap-1">
-          Section
-          <select
-            aria-label="Section"
-            value={mem.section ?? ''}
-            onChange={(e) => update({ section: e.target.value === '' ? null : Number(e.target.value) })}
-            className="border border-app-border-medium rounded px-1 py-0.5 text-sm max-w-xs"
-          >
-            <option value="">whole book</option>
-            {sections.map((s) => (
-              <option key={s.id} value={s.id}>
-                {'  '.repeat(s.depth)}
-                {s.title.slice(0, 60)}
-              </option>
-            ))}
-          </select>
-        </label>
         <span className="text-xs text-app-text-tertiary ml-auto" data-testid="stats-summary">
           {summary
             ? `${summary.tokens.toLocaleString()} tokens · ${summary.pages.toLocaleString()} pages · ${
@@ -200,7 +165,9 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-4">
+      {scope && summary && <ScopeBar mem={mem} update={update} sections={sections} />}
+
+      <div className="flex-1 min-h-0 flex flex-col p-4 gap-2 overflow-hidden">
         {scope && summary && (
           <>
             {mem.tab === 'frequencies' && <FrequenciesTab scope={scope} book={book} />}
@@ -220,7 +187,6 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
             {mem.tab === 'collocations' && (
               <CollocationsTab scope={scope} book={book} node={mem.node} onNode={(node) => update({ node })} />
             )}
-            {mem.tab === 'sections' && <SectionsTab book={book} onShowHit={onShowHit} />}
           </>
         )}
       </div>
@@ -229,6 +195,64 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
 }
 
 // ---------------------------------------------------------------- shared ---
+
+/**
+ * The layer, the stop list and the section (spec 1.5 §E).
+ *
+ * These are not properties of the panel; they qualify the statistic under
+ * them, and they belong next to it. Section is a filter here, which is why
+ * the Sections tab is gone: what a reader wanted from it was to look at one
+ * section, and now every tab does.
+ */
+function ScopeBar({
+  mem,
+  update,
+  sections,
+}: {
+  mem: Remembered;
+  update: (patch: Partial<Remembered>) => void;
+  sections: Section[];
+}) {
+  return (
+    <div className="px-4 py-1.5 border-b border-app-border-light bg-app-surface-variant flex items-center gap-4 flex-wrap text-xs text-app-text-secondary">
+      <label className="flex items-center gap-1">
+        Layer
+        <select
+          aria-label="Layer"
+          value={mem.layer}
+          onChange={(e) => update({ layer: e.target.value as Layer })}
+          className="border border-app-border-medium rounded px-1 py-0.5"
+        >
+          <option value="surface">surface</option>
+          <option value="lemma">lemma</option>
+          <option value="root">root</option>
+        </select>
+      </label>
+      <label className="flex items-center gap-1">
+        <input type="checkbox" checked={mem.stop} onChange={(e) => update({ stop: e.target.checked })} />
+        Stop words off
+      </label>
+      <label className="flex items-center gap-1">
+        Section
+        <select
+          aria-label="Section"
+          value={mem.section ?? ''}
+          onChange={(e) => update({ section: e.target.value === '' ? null : Number(e.target.value) })}
+          className="border border-app-border-medium rounded px-1 py-0.5 font-arabic text-sm max-w-md"
+          dir="rtl"
+        >
+          <option value="">whole text</option>
+          {sections.map((sec) => (
+            <option key={sec.id} value={sec.id}>
+              {'  '.repeat(sec.depth)}
+              {sec.title.slice(0, 80)}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
 
 function ProgressBar({ progress, onCancel }: { progress: Progress; onCancel: () => void }) {
   const pct = progress.total > 0 ? Math.round((100 * progress.done) / progress.total) : 0;
@@ -346,7 +370,7 @@ function FrequenciesTab({ scope, book }: { scope: Scope; book: BookMetadata }) {
           placeholder="Filter…"
           aria-label="Filter"
           dir="rtl"
-          className="px-2 py-1 text-sm border border-app-border-medium rounded font-arabic"
+          className="px-2 py-1 border border-app-border-medium rounded font-arabic text-lg"
         />
         <span className="text-xs text-app-text-tertiary" data-testid="freq-summary">
           {data ? `${data.list.distinct.toLocaleString()} distinct · ${data.list.total.toLocaleString()} tokens` : 'Computing…'}
@@ -377,6 +401,7 @@ function ConcordanceTab({
   onQuery: (q: string) => void;
   onShowHit: (hit: HitRef) => void;
 }) {
+  const pages = usePages(book.id, book.parts);
   const [clitics, setClitics] = useState(true);
   const [context, setContext] = useState(8);
   const [sort, setSort] = useState<SortBy>('position');
@@ -410,18 +435,37 @@ function ConcordanceTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, sort, context, clitics]);
 
+  // Right to left, as the text reads (spec 1.5 §E): the words before the
+  // hit sit to its right, the words after it to its left, and the hit itself
+  // takes only the width it needs so the two contexts meet at it.
   const columns: Column<ConcordanceLine>[] = [
-    { key: 'loc', label: 'Page', sortValue: (l) => l.global, render: (l) => `${l.part_label}:${l.page_number}`, width: '120px' },
-    { key: 'left', label: 'Left', sortValue: (l) => l.left.join(' '), rtl: true, render: (l) => l.left.join(' '), width: '3fr' },
+    {
+      key: 'left',
+      label: 'Preceding',
+      sortValue: (l) => l.left.join(' '),
+      rtl: true,
+      render: (l) => l.left.join(' '),
+      width: 'minmax(0, 1fr)',
+      align: 'right',
+    },
     {
       key: 'node',
       label: 'Hit',
       sortValue: (l) => l.node.join(' '),
       rtl: true,
       render: (l) => <span className="tok-selected px-1">{l.node.join(' ')}</span>,
-      width: '1fr',
+      width: 'max-content',
     },
-    { key: 'right', label: 'Right', sortValue: (l) => l.right.join(' '), rtl: true, render: (l) => l.right.join(' '), width: '3fr' },
+    {
+      key: 'right',
+      label: 'Following',
+      sortValue: (l) => l.right.join(' '),
+      rtl: true,
+      render: (l) => l.right.join(' '),
+      width: 'minmax(0, 1fr)',
+      align: 'left',
+    },
+    { key: 'loc', label: 'Page', sortValue: (l) => l.global, render: (l) => pages.label(l.part_index, l.page_id), width: '90px', align: 'right' },
   ];
   const exportCols: ExportColumn<ConcordanceLine>[] = [
     { key: 'part', label: 'Part', value: (l) => l.part_label },
@@ -434,7 +478,7 @@ function ConcordanceTab({
   ];
 
   return (
-    <div>
+    <div className="flex flex-col h-full min-h-0">
       <form
         className="flex items-center gap-3 mb-2 flex-wrap"
         onSubmit={(e) => {
@@ -448,7 +492,7 @@ function ConcordanceTab({
           placeholder={scope.layer === 'root' ? 'root, e.g. قول' : scope.layer === 'lemma' ? 'lemma or phrase' : 'word or phrase, * allowed'}
           aria-label="Query"
           dir="rtl"
-          className="px-2 py-1 text-sm border border-app-border-medium rounded font-arabic w-64"
+          className="px-2 py-1 border border-app-border-medium rounded font-arabic text-lg w-64"
         />
         <button type="submit" disabled={busy || !query.trim()} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40">
           Search
@@ -486,14 +530,18 @@ function ConcordanceTab({
         </span>
       </form>
       <ErrorLine error={error} />
-      <VirtualTable
-        columns={columns}
-        rows={lines}
-        rowKey={(l) => `${l.page}:${l.tok_start}`}
-        onRowClick={(l) => onShowHit({ part_index: l.part_index, page_id: l.page_id, tok_start: l.tok_start, tok_end: l.tok_end })}
-        emptyText={query.trim() ? (total === 0 ? 'No hits.' : 'Press Search.') : 'Type a query.'}
-        testId="conc-table"
-      />
+      <div className="flex-1 min-h-0">
+        <VirtualTable
+          columns={columns}
+          rows={lines}
+          rowKey={(l) => `${l.page}:${l.tok_start}`}
+          onRowClick={(l) => onShowHit({ part_index: l.part_index, page_id: l.page_id, tok_start: l.tok_start, tok_end: l.tok_end })}
+          height="fill"
+          dir="rtl"
+          emptyText={query.trim() ? (total === 0 ? 'No hits.' : 'Press Search.') : 'Type a query.'}
+          testId="conc-table"
+        />
+      </div>
       {total != null && lines.length < total && (
         <button onClick={() => run(lines.length)} disabled={busy} className="mt-2 px-3 py-1 text-sm border border-app-border-medium rounded">
           Load {Math.min(PAGE, total - lines.length)} more
@@ -658,7 +706,7 @@ function DispersionTab({
           void run();
         }}
       >
-        <input value={term} onChange={(e) => onTerm(e.target.value)} placeholder={`${scope.layer} to plot`} aria-label="Term" dir="rtl" className="px-2 py-1 text-sm border border-app-border-medium rounded font-arabic w-56" />
+        <input value={term} onChange={(e) => onTerm(e.target.value)} placeholder={`${scope.layer} to plot`} aria-label="Term" dir="rtl" className="px-2 py-1 border border-app-border-medium rounded font-arabic text-lg w-56" />
         <button type="submit" disabled={!term.trim()} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40">
           Plot
         </button>
@@ -785,7 +833,7 @@ function CollocationsTab({ scope, book, node, onNode }: { scope: Scope; book: Bo
         </select>
         {mode === 'collocates' ? (
           <>
-            <input value={node} onChange={(e) => onNode(e.target.value)} placeholder={`node ${scope.layer}`} aria-label="Node" dir="rtl" className="px-2 py-1 text-sm border border-app-border-medium rounded font-arabic w-48" />
+            <input value={node} onChange={(e) => onNode(e.target.value)} placeholder={`node ${scope.layer}`} aria-label="Node" dir="rtl" className="px-2 py-1 border border-app-border-medium rounded font-arabic text-lg w-48" />
             <label className="flex items-center gap-1">
               left
               <input type="number" min={0} max={50} value={left} onChange={(e) => setLeft(Math.max(0, Number(e.target.value) || 0))} className="w-12 border border-app-border-medium rounded px-1" aria-label="Left" />
@@ -838,71 +886,3 @@ function CollocationsTab({ scope, book, node, onNode }: { scope: Scope; book: Bo
     </div>
   );
 }
-
-// -------------------------------------------------------------- sections ---
-
-function SectionsTab({ book, onShowHit }: { book: BookMetadata; onShowHit: (hit: HitRef) => void }) {
-  const [data, setData] = useState<SectionsResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let alive = true;
-    labApi
-      .statsSections(book.id)
-      .then((d) => alive && setData(d))
-      .catch((e) => alive && setError(String(e)));
-    return () => {
-      alive = false;
-    };
-  }, [book.id]);
-
-  const columns: Column<Section>[] = [
-    { key: 'title', label: 'Section', sortValue: (s) => s.start, rtl: true, render: (s) => `${'— '.repeat(s.depth)}${s.title}`, width: '4fr', defaultSort: 'asc' },
-    { key: 'depth', label: 'Depth', sortValue: (s) => s.depth, align: 'right' },
-    { key: 'page', label: 'Page', sortValue: (s) => s.page, render: (s) => (data ? `${data.pages[s.page]?.part_label}:${data.pages[s.page]?.page_number}` : ''), width: '120px' },
-    { key: 'tokens', label: 'Tokens', sortValue: (s) => s.tokens, align: 'right', render: (s) => fmt(s.tokens) },
-  ];
-  const exportCols: ExportColumn<Section>[] = [
-    { key: 'id', label: 'Id', value: (s) => s.id },
-    { key: 'parent', label: 'Parent', value: (s) => s.parent },
-    { key: 'depth', label: 'Depth', value: (s) => s.depth },
-    { key: 'title', label: 'Title', value: (s) => s.title },
-    { key: 'start', label: 'Token start', value: (s) => s.start },
-    { key: 'end', label: 'Token end', value: (s) => s.end },
-    { key: 'tokens', label: 'Tokens', value: (s) => s.tokens },
-  ];
-  const longest = data?.sections.find((s) => s.id === data.longest);
-  const shortest = data?.sections.find((s) => s.id === data.shortest);
-
-  return (
-    <div>
-      <div className="flex items-center gap-3 mb-2 text-xs flex-wrap">
-        <span className="text-app-text-secondary" data-testid="sec-summary">
-          {data
-            ? `${data.sections.length} sections` +
-              (longest ? ` · longest ${longest.tokens.toLocaleString()} tokens (${longest.title.slice(0, 40)})` : '') +
-              (shortest ? ` · shortest ${shortest.tokens.toLocaleString()} (${shortest.title.slice(0, 40)})` : '')
-            : 'Loading…'}
-        </span>
-        <span className="ml-auto">
-          <ExportButton name={slug(book, 'sections')} columns={exportCols} rows={data?.sections ?? []} />
-        </span>
-      </div>
-      <ErrorLine error={error} />
-      <VirtualTable
-        columns={columns}
-        rows={data?.sections ?? []}
-        rowKey={(s) => s.id}
-        onRowClick={(s) => {
-          const p = data?.pages[s.page];
-          if (p) onShowHit({ part_index: p.part_index, page_id: p.page_id, tok_start: s.tok_start_on_page, tok_end: s.tok_start_on_page + 1 });
-        }}
-        emptyText="This book has no <title> sections."
-        testId="sec-table"
-      />
-      <p className="text-xs text-app-text-tertiary mt-2">
-        Use the Section selector above to restrict any other tab to one section.
-      </p>
-    </div>
-  );
-}
-

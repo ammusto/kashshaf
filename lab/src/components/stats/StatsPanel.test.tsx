@@ -20,6 +20,11 @@ const api = vi.hoisted(() => ({
   statsNgrams: vi.fn(),
   statsCollocations: vi.fn(),
   statsCancel: vi.fn(),
+  listPages: vi.fn(async () => [
+    { book_id: 42, part_index: 0, page_id: 1, page_number: '1', part_label: 'ج١' },
+    { book_id: 42, part_index: 0, page_id: 2, page_number: '19', part_label: 'ج١' },
+    { book_id: 42, part_index: 0, page_id: 3, page_number: '20', part_label: 'ج١' },
+  ]),
   onStatsProgress: vi.fn(async () => () => {}),
   saveExport: vi.fn(async (name: string, _contents: string) => `C:/lab/exports/${name}`),
 }));
@@ -143,6 +148,8 @@ describe('StatsPanel', () => {
       })
     );
     expect(await screen.findByTestId('conc-summary')).toHaveTextContent('1 hits');
+    // Spec 1.5 C1: the printed page number, not the page id.
+    await waitFor(() => expect(screen.getByTestId('conc-table')).toHaveTextContent('19'));
     fireEvent.click(screen.getByText('الله'));
     expect(onShowHit).toHaveBeenCalledWith({ part_index: 0, page_id: 2, tok_start: 5, tok_end: 6 });
   });
@@ -181,12 +188,12 @@ describe('StatsPanel', () => {
     expect(screen.getByTestId('strip-plot').querySelectorAll('button')).toHaveLength(2);
   });
 
-  it('lists sections with longest and shortest', async () => {
+  it('has no Sections tab: a section is a filter on the other tabs (spec 1.5 E)', async () => {
     render(<StatsPanel book={book} onShowHit={vi.fn()} />);
     await screen.findByTestId('stats-summary');
-    fireEvent.click(screen.getByRole('tab', { name: 'Sections' }));
-    expect(await screen.findByTestId('sec-summary')).toHaveTextContent('2 sections · longest 60 tokens');
-    expect(screen.getByTestId('sec-summary')).toHaveTextContent('shortest 40');
+    expect(screen.queryByRole('tab', { name: 'Sections' })).toBeNull();
+    // The filter itself sits with the layer and the stop list, above the tab.
+    expect(await screen.findByLabelText('Section')).toBeInTheDocument();
   });
 
   it('exports the current table through the bridge', async () => {

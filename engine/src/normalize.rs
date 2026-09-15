@@ -29,23 +29,28 @@ pub fn normalize_arabic(text: &str) -> String {
 
 /// Convert a root query to the indexed format: letters joined with `.`,
 /// weak letters (و ي ا ء) replaced with `#`. `قول` -> `ق.#.ل`.
+///
+/// Idempotent: a query already in the indexed form is returned as it stands,
+/// with its weak letters folded. A reader who copies a root out of a result
+/// and pastes it into the next query gets the same answer as one who types
+/// the bare radicals (spec 1.5 E).
 pub fn normalize_root_query(query: &str) -> String {
     let normalized = normalize_arabic(query);
     let weak_letters = ['و', 'ي', 'ا', 'ء'];
+    let fold = |c: char| if weak_letters.contains(&c) { "#".to_string() } else { c.to_string() };
 
     normalized
         .split_whitespace()
         .map(|word| {
-            word.chars()
-                .map(|c| {
-                    if weak_letters.contains(&c) {
-                        "#".to_string()
-                    } else {
-                        c.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(".")
+            if word.contains('.') {
+                // Already separated: fold each radical, keep the separators.
+                word.split('.')
+                    .map(|part| part.chars().map(fold).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            } else {
+                word.chars().map(fold).collect::<Vec<_>>().join(".")
+            }
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -77,6 +82,10 @@ mod tests {
         assert_eq!(normalize_root_query("علم"), "ع.ل.م");
         assert_eq!(normalize_root_query("قول"), "ق.#.ل");
         assert_eq!(normalize_root_query("قول كتب"), "ق.#.ل ك.ت.ب");
+        // Idempotent: the indexed form of a root is itself a valid query.
+        assert_eq!(normalize_root_query("ق.#.ل"), "ق.#.ل");
+        assert_eq!(normalize_root_query("ق.و.ل"), "ق.#.ل");
+        assert_eq!(normalize_root_query("ع.ل.م"), "ع.ل.م");
     }
 
     #[test]
