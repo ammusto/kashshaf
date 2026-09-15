@@ -6,6 +6,39 @@ Nothing below has been published yet.
 
 ---
 
+## [lab 0.8.0] - 2026-09-15
+
+### Panels fill the window
+
+Isnad, Qur'an, Poetry and Stats drew themselves in a narrow column with dead
+space to the right and below. All four had the same fault in their outermost
+element. Fixed once, for every panel, with a test that keeps it fixed.
+
+### Contents
+
+Entries with sections under them now carry a triangle. Click it to open the
+subtree, click the title to go to the page. Everything below the top level
+starts closed, so a long book opens as a list of chapters rather than a wall
+of headings. Paging into a section opens the way down to it.
+
+### Network
+
+The graph fills the panel instead of sitting in a fixed square. Scroll or
+pinch to zoom, drag to move, and use the buttons for a step at a time, Fit,
+or back to full size; the percentage is always on screen. The layout is no
+longer squeezed into a box, so crowded graphs spread out instead of piling
+up on the edge. Names shrink with the graph and disappear when they would be
+too small to read. A search box finds a person and centres on them.
+
+### Reuse
+
+A result now opens the other book in its own reader beside yours, in place of
+the table. Your text stays where it is with your words marked in green; the
+other text opens at the matching page with its words in red. Both read like
+the reader everywhere else: pages, contents, headings. Back to results brings
+the table back and leaves your place alone. The word by word alignment is
+still a toggle above the two texts.
+
 ## [lab 0.7.0] - 2026-09-15
 
 ### Fixed
