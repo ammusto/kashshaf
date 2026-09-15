@@ -108,10 +108,12 @@ export function TocPane({
         {!loading && !error && tree.length === 0 && (
           <p className="px-3 py-2 text-xs text-app-text-secondary">This text has no headings in the corpus.</p>
         )}
-        {shown.map((n) => (
+        {shown.map((n, i) => (
           <Entry
             key={`${n.id}-${n.part_index}-${n.page_id}`}
             node={n}
+            guides={[]}
+            last={i === shown.length - 1}
             pages={pages}
             currentId={currentId}
             onJump={onJump}
@@ -188,6 +190,8 @@ function Entry({
   open,
   toggle,
   forceOpen,
+  guides,
+  last,
 }: {
   node: TocNode;
   pages: Pages;
@@ -197,6 +201,10 @@ function Entry({
   open: ReadonlySet<number>;
   toggle: (id: number) => void;
   forceOpen: boolean;
+  /** For each ancestor, whether it still has a sibling below it (10 E). */
+  guides: boolean[];
+  /** Whether this entry is the last of its own siblings. */
+  last: boolean;
 }) {
   const isCurrent = node.id === currentId;
   const hasChildren = node.children.length > 0;
@@ -207,8 +215,18 @@ function Entry({
       <div
         dir="rtl"
         className={`flex items-baseline hover:bg-app-surface-variant ${isCurrent ? 'bg-app-accent-light text-app-accent' : ''}`}
-        style={{ paddingRight: `${0.75 + node.depth * 0.75}rem` }}
+        style={{ paddingRight: '0.75rem' }}
       >
+        {/* The tree, drawn rather than implied by margin (10 E). The glyphs
+            are the mirror of the usual ones because the pane reads right to
+            left: the branch has to point at the title, which is to the
+            left of it. */}
+        {node.depth > 0 && (
+          <span className="font-mono text-xs leading-6 whitespace-pre select-none text-app-text-secondary shrink-0" aria-hidden="true" data-testid={`guide-${node.id}`}>
+            {guides.map((more) => (more ? '\u2502  ' : '   ')).join('')}
+            {last ? '\u2518\u2500\u2500' : '\u2524\u2500\u2500'}
+          </span>
+        )}
         {hasChildren ? (
           <button
             onClick={() => toggle(node.id)}
@@ -245,10 +263,12 @@ function Entry({
       </div>
 
       {expanded &&
-        node.children.map((c) => (
+        node.children.map((c, i) => (
           <Entry
             key={`${c.id}-${c.part_index}-${c.page_id}`}
             node={c}
+            guides={[...guides, !last]}
+            last={i === node.children.length - 1}
             pages={pages}
             currentId={currentId}
             onJump={onJump}
