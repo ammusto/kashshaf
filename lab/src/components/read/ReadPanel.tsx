@@ -22,6 +22,7 @@ import { TocPane } from './TocPane';
 import { SearchForm } from './SearchForm';
 import { ResultRow } from './ResultRow';
 import { Splitter, useDragWidth } from '../ui/Splitter';
+import { CitationBlock } from '../ui/CitationBlock';
 import { LoadingOverlay, Notice } from '../ui/Running';
 
 /**
@@ -152,6 +153,7 @@ export function ReadPanel({
   const [notes, setNotes] = useState<Note[]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [editing, setEditing] = useState<{ note: Note | null; at: At; range: [number, number]; text: string; color: NoteColor } | null>(null);
+  const [citing, setCiting] = useState(false);
   /** A note to bring into view once its page has rendered (9 B1). */
   const [seekNote, setSeekNote] = useState<number | null>(null);
   const noteBox = useRef<HTMLTextAreaElement | null>(null);
@@ -553,6 +555,16 @@ export function ReadPanel({
       </span>
 
       <button
+        onClick={() => setCiting(true)}
+        disabled={!book}
+        title="Cite this text, at this page"
+        data-testid="cite"
+        className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40 hover:bg-app-surface-variant"
+      >
+        Cite
+      </button>
+
+      <button
         onClick={() =>
           selection && setEditing({ note: null, at: selection.at, range: selection.range, text: '', color: DEFAULT_NOTE_COLOR })
         }
@@ -739,6 +751,32 @@ export function ReadPanel({
           notes={notes}
           onJumpNote={jumpToNote}
         />
+      )}
+
+      {citing && book && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30" onClick={() => setCiting(false)}>
+          <div
+            role="dialog"
+            aria-label="Citation"
+            className="bg-app-surface rounded-2xl shadow-lg border border-app-border-light w-[36rem] max-w-[95vw] p-5"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="cite-modal"
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <h2 className="text-sm font-semibold flex-1">Citation</h2>
+              <button onClick={() => setCiting(false)} aria-label="Close" className="text-app-text-secondary hover:text-app-text-primary px-1">
+                ✕
+              </button>
+            </div>
+            {/* Where the reader is, which is what the citation cites. */}
+            <CitationBlock
+              book={book}
+              volume={current && pages.multiPart ? String(current.part_index + 1) : undefined}
+              page={current ? pages.printed(current.part_index, current.page_id) : undefined}
+              withPageRef={!!current}
+            />
+          </div>
+        </div>
       )}
 
       {editing && (

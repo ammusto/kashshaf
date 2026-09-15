@@ -320,6 +320,54 @@ describe('ReadPanel', () => {
     await waitFor(() => expect(api.lab.getPage).toHaveBeenCalledWith(527, 1, 1));
   });
 
+  it('cites the text at the page being read, in both styles (9 C)', async () => {
+    const cited: BookMetadata = {
+      ...book,
+      paginated: true,
+      citation_json: JSON.stringify({
+        title: 'Al-tawahhum',
+        authors: ['al-Muḥāsibī, al-Ḥārith'],
+        editors: [],
+        translators: [],
+        arrangers: [],
+        place: 'Aleppo',
+        publisher: 'Maktabat al-Turāth al-Islāmī',
+        date: null,
+        edition: null,
+        volumes: null,
+        warnings: [],
+      }),
+    };
+    render(<ReadPanel book={cited} />);
+    await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:7'));
+
+    fireEvent.click(screen.getByTestId('cite'));
+    const modal = await screen.findByTestId('cite-modal');
+    const text = within(modal).getByTestId('citation-text');
+    expect(text).toHaveTextContent('Al-tawahhum');
+    // The page being read, by the C1 rule: volume 1, printed page 7.
+    expect(text).toHaveTextContent('Vol. 1');
+    expect(text).toHaveTextContent('7');
+
+    // The other style is the shared formatter's, not a second implementation.
+    fireEvent.click(within(modal).getByRole('button', { name: 'MLA' }));
+    expect(within(modal).getByTestId('citation-text')).toHaveTextContent('Al-tawahhum');
+
+    // And it copies, plain.
+    const writeText = vi.fn(async () => {});
+    Object.assign(navigator, { clipboard: { writeText } });
+    fireEvent.click(within(modal).getByTestId('copy-citation'));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls[0][0]).not.toContain('<');
+  });
+
+  it('says so when a text has no citation data (9 C)', async () => {
+    render(<ReadPanel book={book} />);
+    await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:7'));
+    fireEvent.click(screen.getByTestId('cite'));
+    expect(await screen.findByTestId('cite-modal')).toHaveTextContent('No citation data');
+  });
+
   it('hands the open page to Reuse (7 B)', async () => {
     const onFindReuse = vi.fn();
     render(<ReadPanel book={book} onFindReuse={onFindReuse} />);
