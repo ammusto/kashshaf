@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
 import { labApi, type Page, type PageRef } from '../../api/lab';
-import { pageLabel } from '../../api/isnad';
+import { usePages } from '../../api/pages';
 import { DEFAULT_QURAN_PARAMS, fmtDuration, quranApi, type AyaContext, type QuranMatchRow, type QuranParams, type QuranProgress, type QuranRunSummary, type QuranStatus } from '../../api/reuse';
 import { Reader } from '../Reader';
 import { GearButton, SettingsModal } from '../SettingsModal';
@@ -22,10 +22,13 @@ const SETTING_KEY = 'quran.params';
 
 interface Props {
   book: BookMetadata | null;
+  /** A verdict was given: the workspace folder is behind (spec 1.5 A2). */
+  onChanged?: () => void;
 }
 
-export function QuranPanel({ book }: Props) {
+export function QuranPanel({ book, onChanged }: Props) {
   const bookId = book?.id ?? null;
+  const labels = usePages(bookId, book?.parts);
   const [status, setStatus] = useState<QuranStatus | null>(null);
   const [params, setParams] = useState<QuranParams>(DEFAULT_QURAN_PARAMS);
   const [draft, setDraft] = useState<QuranParams>(DEFAULT_QURAN_PARAMS);
@@ -167,6 +170,7 @@ export function QuranPanel({ book }: Props) {
       const row = await quranApi.verdict(r.id, v === r.user_verdict ? null : v);
       setRows((rs) => rs.map((x) => (x.id === row.id ? row : x)));
       if (detail?.id === row.id) setDetail(row);
+      onChanged?.();
     } catch (e) {
       setError(String(e));
     }
@@ -229,7 +233,6 @@ export function QuranPanel({ book }: Props) {
   };
 
   const refOf = (r: { sura: number; aya_start: number; aya_end: number }) => `${r.sura}:${r.aya_start}${r.aya_end !== r.aya_start ? `–${r.aya_end}` : ''}`;
-  const parts = book?.parts;
 
   const columns: Column<QuranMatchRow>[] = [
     {
@@ -237,7 +240,6 @@ export function QuranPanel({ book }: Props) {
       label: 'Qurʾān',
       sortValue: (r) => r.sura * 1000 + r.aya_start,
       width: '150px',
-      defaultSort: 'asc',
       render: (r) => (
         <span className={r.id === selected ? 'font-semibold' : ''}>
           {refOf(r)} <span className="font-arabic">{r.sura_name}</span>
@@ -249,7 +251,16 @@ export function QuranPanel({ book }: Props) {
         </span>
       ),
     },
-    { key: 'page', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => pageLabel(r.part_index, r.page_id, parts) },
+    // Spec 1.5 I: the list reads the way the book does, page by page, not
+    // sura by sura -- what is being read is the book, not the Qur'an.
+    {
+      key: 'page',
+      label: 'Page',
+      sortValue: (r) => r.part_index * 1_000_000 + r.page_id,
+      width: '70px',
+      defaultSort: 'asc',
+      render: (r) => labels.label(r.part_index, r.page_id),
+    },
     { key: 'text', label: 'Text', sortValue: (r) => r.snapshot, rtl: true, width: 'minmax(200px, 3fr)', render: (r) => r.snapshot },
     { key: 'aya', label: 'Āya', sortValue: (r) => r.aya_text, rtl: true, width: 'minmax(200px, 3fr)', render: (r) => <span className="text-app-text-secondary">{r.aya_text}</span> },
     {
@@ -282,7 +293,7 @@ export function QuranPanel({ book }: Props) {
   ];
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Choose a book in Books first.</div>;
+    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
   }
 
   return (
@@ -362,7 +373,7 @@ export function QuranPanel({ book }: Props) {
               <div className="flex items-center gap-2 mb-2">
                 <span className="font-semibold">{refOf(detail)}</span>
                 <span className="font-arabic text-base">{detail.sura_name}</span>
-                <span className="text-app-text-tertiary text-xs">p. {pageLabel(detail.part_index, detail.page_id, parts)}</span>
+                <span className="text-app-text-tertiary text-xs">{labels.label(detail.part_index, detail.page_id)}</span>
                 <button onClick={() => show(detail)} className="text-xs text-app-accent underline">
                   show in reader
                 </button>

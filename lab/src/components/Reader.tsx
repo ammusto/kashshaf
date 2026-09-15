@@ -7,6 +7,7 @@ import {
   type Token,
 } from '@kashshaf/shared';
 import type { Page, PageRef } from '../api/lab';
+import { Pages } from '../api/pages';
 
 /**
  * The reader (spec §7.2), shared by every panel.
@@ -21,6 +22,18 @@ import type { Page, PageRef } from '../api/lab';
  * displays, which is the alignment contract (§3.3); the backend's
  * `verify_alignment` checks the other side of it.
  */
+
+/**
+ * Something drawn over a token range that is not the reader's own selection:
+ * a note's marker (spec 1.5 §C4), a search hit. `title` is the hover text.
+ */
+export interface Mark {
+  start: number;
+  /** Exclusive. */
+  end: number;
+  className: string;
+  title?: string;
+}
 
 /** One run of characters that belongs to a single token, or to none. */
 interface Run {
@@ -54,6 +67,9 @@ export function Reader({
   onClearSelection,
   highlight,
   layerClass,
+  marks,
+  labels,
+  toolbar,
   onTokenClick,
   loading,
   error,
@@ -76,6 +92,19 @@ export function Reader({
    * (transmitters, verbs, matn, chain outline), spec §7.2/§7.4.
    */
   layerClass?: (idx: number) => string | null;
+  /** Ranges drawn over the text that are not the selection (spec §C4). */
+  marks?: Mark[];
+  /**
+   * The book's page list, which every page label is built from (spec §C1).
+   * Without it the locator falls back to the page's own printed number.
+   */
+  labels?: Pages;
+  /**
+   * Replaces the built-in prev/next header. The Read panel supplies its own
+   * (part:page inputs, the table of contents, Annotate); the panels that only
+   * show a page keep the default.
+   */
+  toolbar?: React.ReactNode;
   /**
    * When set, a click on a token calls this instead of opening the popup
    * (the workbench's set-boundary / split / retag modes).
@@ -171,6 +200,15 @@ export function Reader({
   const canPrev = index > 0;
   const canNext = index >= 0 && index < pages.length - 1;
 
+  // One mark per token, so rendering a run is a lookup rather than a scan.
+  const markByToken = useMemo(() => {
+    const m = new Map<number, Mark>();
+    for (const mk of marks ?? []) {
+      for (let i = mk.start; i < mk.end; i++) m.set(i, mk);
+    }
+    return m;
+  }, [marks]);
+
   // The whole-book contract check in miniature, on the page in front of the
   // user: if these disagree the overlay is pointing at the wrong words, and
   // the reader says so rather than highlighting confidently and wrongly.
@@ -178,6 +216,7 @@ export function Reader({
 
   return (
     <div className="flex flex-col h-full">
+      {toolbar ?? (
       <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-app-border-light bg-app-surface">
         <div className="flex items-center gap-2">
           <button
@@ -196,14 +235,7 @@ export function Reader({
           </button>
         </div>
         <div className="text-xs text-app-text-secondary" data-testid="page-locator">
-          {page
-            ? `${page.part_label || `Part ${page.part_index}`} : ${page.page_number || page.page_id}`
-            : '—'}
-          {pages.length > 0 && (
-            <span className="text-app-text-tertiary">
-              {' '}· page {index + 1} of {pages.length.toLocaleString()}
-            </span>
-          )}
+          {page ? (labels ?? Pages.empty()).label(page.part_index, page.page_id) : '—'}
         </div>
         <div className="text-xs text-app-text-tertiary" data-testid="token-count">
           {page ? `${page.tokens.length.toLocaleString()} tokens` : ''}
@@ -214,6 +246,7 @@ export function Reader({
           )}
         </div>
       </div>
+      )}
 
       {misaligned && (
         <div className="px-4 py-2 text-xs text-app-error bg-red-50 border-b border-app-border-light" role="alert">
@@ -253,7 +286,8 @@ export function Reader({
                   key={i}
                   className={`tok ${inSelection(run.token, selection) ? 'tok-selected' : ''} ${
                     inSelection(run.token, highlight ?? null) ? 'tok-hit' : ''
-                  } ${layerClass?.(run.token) ?? ''}`}
+                  } ${layerClass?.(run.token) ?? ''} ${markByToken.get(run.token)?.className ?? ''}`}
+                  title={markByToken.get(run.token)?.title}
                   data-token={run.token}
                   onMouseDown={(e) => onTokenDown(e, run.token as number)}
                   onMouseEnter={() => onTokenEnter(run.token as number)}

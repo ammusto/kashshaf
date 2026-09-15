@@ -125,7 +125,7 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
   );
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Choose a book in Books first.</div>;
+    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
   }
 
   return (

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
-import { isnadApi, pageLabel, type TransmitterListRow } from '../../api/isnad';
+import { isnadApi, type TransmitterListRow } from '../../api/isnad';
+import { usePages } from '../../api/pages';
 import { networkApi, type Graph, type NetNode, type Source } from '../../api/phase4';
 import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
 
@@ -30,6 +31,7 @@ const H = 620;
 
 export function NetworkPanel({ book }: Props) {
   const bookId = book?.id ?? null;
+  const labels = usePages(bookId, book?.parts);
   const [minWeight, setMinWeight] = useState(1);
   const [nodeCap, setNodeCap] = useState(300);
   const [graph, setGraph] = useState<Graph | null>(null);
@@ -191,11 +193,11 @@ export function NetworkPanel({ book }: Props) {
     { key: 'raw', label: 'Form', sortValue: (r) => r.raw, rtl: true, width: 'minmax(160px, 3fr)', render: (r) => r.raw },
     { key: 'verb', label: 'Verb', sortValue: (r) => r.verb_before ?? '', rtl: true, width: '70px', render: (r) => r.verb_before ?? '—' },
     { key: 'pos', label: 'Pos.', sortValue: (r) => r.position, align: 'right', width: '50px', render: (r) => String(r.position) },
-    { key: 'page', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => pageLabel(r.part_index, r.page_id, book?.parts) },
+    { key: 'page', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => labels.label(r.part_index, r.page_id) },
   ];
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Choose a book in Books first.</div>;
+    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
   }
 
   return (

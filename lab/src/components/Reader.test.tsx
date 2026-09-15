@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import type { Token } from '@kashshaf/shared';
 import { Reader, toRuns } from './Reader';
 import type { Page, PageRef } from '../api/lab';
+import { Pages } from '../api/pages';
 
 /**
  * The reader's overlay is what every later phase addresses spans through
@@ -82,13 +83,27 @@ describe('Reader', () => {
     expect([...spans].map((s) => s.textContent)).toEqual(['قال', 'رسول', 'الله']);
   });
 
-  it('shows the page locator and the token count', () => {
-    render(
-      <Reader page={page()} pages={refs} index={0} onNavigate={noop} loading={false} error={null} />
+  it('labels the page as spec 1.5 C1 requires, and counts its tokens', () => {
+    // One part: the printed number alone, no part prefix and no "of 405".
+    const single = new Pages([
+      { book_id: 7, part_index: 0, page_id: 3, page_number: '12', part_label: '' },
+      { book_id: 7, part_index: 0, page_id: 4, page_number: '13', part_label: '' },
+    ]);
+    const { unmount } = render(
+      <Reader page={page()} pages={refs} index={0} onNavigate={noop} labels={single} loading={false} error={null} />
     );
-    expect(screen.getByTestId('page-locator')).toHaveTextContent('الجزء الأول : 12');
-    expect(screen.getByTestId('page-locator')).toHaveTextContent('page 1 of 2');
+    expect(screen.getByTestId('page-locator')).toHaveTextContent('12');
+    expect(screen.getByTestId('page-locator').textContent).not.toMatch(/of|:/);
     expect(screen.getByTestId('token-count')).toHaveTextContent('3 tokens');
+    unmount();
+
+    // Two parts: part counted from one, never the zero-based index.
+    const multi = new Pages([
+      { book_id: 7, part_index: 0, page_id: 3, page_number: '12', part_label: '' },
+      { book_id: 7, part_index: 1, page_id: 1, page_number: '1', part_label: '' },
+    ]);
+    render(<Reader page={page()} pages={refs} index={0} onNavigate={noop} labels={multi} loading={false} error={null} />);
+    expect(screen.getByTestId('page-locator')).toHaveTextContent('1:12');
   });
 
   it('opens the token popup for the token that was clicked', () => {

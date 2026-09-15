@@ -10,6 +10,7 @@
 
 export * from './types/corpus';
 export * from './utils/arabicTokenizer';
+export * from './utils/arabicSearch';
 export * from './utils/sanitize';
 export * from './utils/citation';
 export { TokenPopup } from './components/TokenPopup';

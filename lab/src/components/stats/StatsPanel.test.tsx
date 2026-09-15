@@ -72,7 +72,7 @@ beforeEach(() => {
 describe('StatsPanel', () => {
   it('asks for a book first', () => {
     render(<StatsPanel book={null} onShowHit={vi.fn()} />);
-    expect(screen.getByText('Choose a book in Books first.')).toBeInTheDocument();
+    expect(screen.getByText('Open a text from the workspace first.')).toBeInTheDocument();
   });
 
   it('loads the book, shows the summary and the frequency list with its corpus note', async () => {

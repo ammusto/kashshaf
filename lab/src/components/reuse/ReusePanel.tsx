@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
-import { labApi, type Page, type PageRef } from '../../api/lab';
+import { labApi, type Page, type PageSpan } from '../../api/lab';
+import { Pages, plainPageLabel, type At } from '../../api/pages';
+import { tocApi, type TocRow } from '../../api/workspace';
 import {
   DEFAULT_REUSE_PARAMS,
   fmtDuration,
@@ -9,127 +11,77 @@ import {
   type BookAggRow,
   type BookRunSummary,
   type Estimate,
-  type LayerSpan,
   type MatchRow,
   type MatchType,
-  type PassageResult,
   type ReuseParams,
   type ReuseProgress,
   type RunRow,
-  type Zone,
 } from '../../api/reuse';
-import { Reader } from '../Reader';
+import { ReadPanel } from '../read/ReadPanel';
 import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
+import { HeavyRunModal, IDLE_RUN, LoadingOverlay, Notice, RunBar, isHeavy, type RunState } from '../ui/Running';
+import { useHeavyLimits } from '../../api/settings';
 
 /**
- * The reuse panel (spec §7.5).
+ * The reuse panel (spec §7.5, restructured by 1.5 §H).
  *
- * Left — the reader over the current book with page navigation. Select a
- * range and "Find reuse" (passage mode, both modes); or "Analyse whole book"
- * (book mode, local only) after the time estimate. Stored matches of the
- * shown run draw as a layer on the page.
+ * Left is the Read panel itself (§H1) — the whole reader, its navigation, its
+ * contents and its selection — so finding reuse is something you do while
+ * reading rather than in a second, lesser reader.
  *
- * Right — the results: grouped by target book (passage) or a ranked
- * source-book table with per-book match lists (book), each match with its
- * score, type, components, the aligned target text with matching tokens
- * emphasised, a side-by-side aligned view, and confirm/reject. The
- * threshold slider, type filter and banality slider re-score without
- * re-running (`reuse_rescore`).
+ * Right is the answer to one question: who else has this passage. Three
+ * columns, read right to left: which book, the words themselves in their
+ * context, and the page. Clicking a row opens that page; the parameters that
+ * shape the run live behind the gear, out of the way of the result.
  */
 
 const TYPES: MatchType[] = ['verbatim', 'inflected', 'paraphrase', 'weak', 'formulaic'];
+const CONTEXT = 5;
+/** Target pages fetched for context; beyond this the phrase shows alone. */
+const CONTEXT_BUDGET = 120;
 
 interface Props {
   book: BookMetadata | null;
   /** Whether the source is the local corpus (book mode needs it). */
   local: boolean;
+  /** A passage handed over by "Find reuse" in the Read panel (spec §C4, §H1). */
+  from?: { at: At; range: [number, number] } | null;
+  /** Something was confirmed or rejected: the workspace folder is behind. */
+  onChanged?: () => void;
 }
 
-export function ReusePanel({ book, local }: Props) {
+export function ReusePanel({ book, local, from, onChanged }: Props) {
   const bookId = book?.id ?? null;
 
-  // ------------------------------------------------------------ reader ---
-  const [refs, setRefs] = useState<PageRef[]>([]);
-  const [index, setIndex] = useState(0);
-  const [page, setPage] = useState<Page | null>(null);
-  const [pageLoading, setPageLoading] = useState(false);
-  const [selection, setSelection] = useState<[number, number] | null>(null);
-  const [highlight, setHighlight] = useState<[number, number] | null>(null);
-
-  useEffect(() => {
-    setRefs([]);
-    setIndex(0);
-    setPage(null);
-    setSelection(null);
-    setResult(null);
-    setBookRun(null);
-    setLayer([]);
-    if (bookId == null) return;
-    let alive = true;
-    labApi
-      .listPageRefs(bookId)
-      .then((r) => {
-        if (alive) setRefs(r);
-      })
-      .catch((e) => setError(String(e)));
-    reuseApi
-      .runs(bookId)
-      .then((r) => {
-        if (alive) setRuns(r);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [bookId]);
-
-  const goTo = useCallback(
-    async (i: number, mark?: [number, number]) => {
-      const r = refs[i];
-      if (!r) return;
-      setIndex(i);
-      setPageLoading(true);
-      setHighlight(mark ?? null);
-      try {
-        setPage(await labApi.getPage(r.book_id, r.part_index, r.page_id));
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setPageLoading(false);
-      }
-    },
-    [refs]
-  );
-
-  useEffect(() => {
-    if (refs.length && !page) void goTo(0);
-  }, [refs, page, goTo]);
-
-  const onSelectRange = useCallback((r: [number, number] | null) => setSelection(r), []);
-
-  // ------------------------------------------------------------- state ---
   const [params, setParams] = useState<ReuseParams>(DEFAULT_REUSE_PARAMS);
   const [excludeSameBook, setExcludeSameBook] = useState(false);
-  const [result, setResult] = useState<PassageResult | null>(null);
   const [bookRun, setBookRun] = useState<BookRunSummary | null>(null);
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [shownRun, setShownRun] = useState<number | null>(null);
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [busy, setBusy] = useState<'passage' | 'estimate' | 'book' | 'rescore' | null>(null);
+  const [run, setRun] = useState<RunState>(IDLE_RUN);
   const [progress, setProgress] = useState<ReuseProgress | null>(null);
-  const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [layer, setLayer] = useState<LayerSpan[]>([]);
 
-  // Display filters (§7.5): the threshold and banality sliders re-score
-  // through Rust; the type filter and "show formulaic" are local.
   const [threshold, setThreshold] = useState(DEFAULT_REUSE_PARAMS.threshold);
   const [banalityScale, setBanalityScale] = useState(DEFAULT_REUSE_PARAMS.banality_scale);
   const [typeFilter, setTypeFilter] = useState<Set<MatchType>>(new Set(['verbatim', 'inflected', 'paraphrase', 'weak']));
-  const [expanded, setExpanded] = useState<number | null>(null);
-  const [selectedBook, setSelectedBook] = useState<number | null>(null);
-  const [targetPages, setTargetPages] = useState<Map<string, Page>>(new Map());
+  const [gear, setGear] = useState(false);
+
+  const [section, setSection] = useState<TocRow | null>(null);
+  const [pending, setPending] = useState<{ what: string; span: PageSpan | null; pages: number; tokens: number; estimateMs: number | null } | null>(null);
+
+  /** The row whose target page is open on the right (spec §H2). */
+  const [open, setOpen] = useState<MatchRow | null>(null);
+  const [openPage, setOpenPage] = useState<Page | null>(null);
+  const [sideBySide, setSideBySide] = useState(false);
+  const [queryPages, setQueryPages] = useState<Map<string, Page>>(new Map());
+  const [contexts, setContexts] = useState<Map<number, Context>>(new Map());
+  const [contextBusy, setContextBusy] = useState(false);
+
+  const { limits } = useHeavyLimits();
 
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -137,101 +89,137 @@ export function ReusePanel({ book, local }: Props) {
     return () => un?.();
   }, []);
 
-  // The reader layer for the shown run on the current page.
   useEffect(() => {
-    if (shownRun == null || !page) {
-      setLayer([]);
+    setBookRun(null);
+    setMatches([]);
+    setShownRun(null);
+    setOpen(null);
+    setContexts(new Map());
+    if (bookId == null) return;
+    reuseApi.runs(bookId).then(setRuns).catch(() => setRuns([]));
+  }, [bookId]);
+
+  // ---------------------------------------------------------- the runs ---
+
+  const findReuse = useCallback(
+    async (at: At, range: [number, number]) => {
+      if (bookId == null) return;
+      setBusy('passage');
+      setRun({ running: true, paused: false, cancelledAt: null });
+      setError(null);
+      setMessage(null);
+      setProgress(null);
+      setOpen(null);
+      try {
+        const r = await reuseApi.passage({
+          book_id: bookId,
+          part_index: at.part_index,
+          page_id: at.page_id,
+          tok_start: range[0],
+          tok_end: range[1],
+          params: { ...params, threshold, banality_scale: banalityScale },
+          exclude_same_book: excludeSameBook,
+        });
+        setBookRun(null);
+        setShownRun(r.run_id);
+        setMatches(r.matches);
+        setMessage(
+          `${r.matches.length} matches over ${r.candidates.toLocaleString()} candidate pages · ${r.non_banal}/${r.tokens} non-banal words · ${r.elapsed_ms} ms`
+        );
+        setRuns(await reuseApi.runs(bookId));
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+        setRun(IDLE_RUN);
+      }
+    },
+    [bookId, params, threshold, banalityScale, excludeSameBook]
+  );
+
+  // Arriving from the Read panel's "Find reuse": run it without being asked
+  // twice (spec §H1, "pre-loaded when arriving via Find reuse").
+  const ranFor = useRef<string>('');
+  useEffect(() => {
+    if (!from || bookId == null) return;
+    const key = `${bookId}:${from.at.part_index}:${from.at.page_id}:${from.range[0]}:${from.range[1]}`;
+    if (ranFor.current === key) return;
+    ranFor.current = key;
+    void findReuse(from.at, from.range);
+    // `findReuse` changes with every parameter; the key guard is the gate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, bookId]);
+
+  /** Ask first when the run is heavy (spec §F4), then start it. */
+  const proposeRun = useCallback(
+    async (what: string, span: PageSpan | null) => {
+      if (bookId == null) return;
+      setError(null);
+      setBusy('estimate');
+      try {
+        const [size, est] = await Promise.all([
+          labApi.runSize(bookId, span),
+          reuseApi.estimate(bookId, { ...params, threshold, banality_scale: banalityScale }, span).catch(() => null as Estimate | null),
+        ]);
+        const p = { what, span, pages: size.pages, tokens: size.tokens, estimateMs: est?.estimate_ms ?? null };
+        if (isHeavy(size, limits)) setPending(p);
+        else void startBook(span, what);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bookId, params, threshold, banalityScale, limits]
+  );
+
+  /** The section the reader is in, as a page span (spec §H3). */
+  const analyseSection = useCallback(async () => {
+    if (!section || bookId == null) return;
+    const range = await tocApi.sectionRange(bookId, section.id).catch(() => null);
+    if (!range) {
+      setError('That heading has no range in the table of contents.');
       return;
     }
-    let alive = true;
-    reuseApi
-      .pageLayer(shownRun, page.part_index, page.page_id, threshold)
-      .then((l) => {
-        if (alive) setLayer(l);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [shownRun, page, threshold, matches]);
+    await proposeRun(`Analysing ${section.title}`, { start: range.start, end: range.end });
+  }, [section, bookId, proposeRun]);
 
-  // ---------------------------------------------------------- actions ---
-  const findReuse = async () => {
-    if (!page || !selection) return;
-    setBusy('passage');
-    setError(null);
-    setMessage(null);
-    setProgress(null);
-    try {
-      const r = await reuseApi.passage({
-        book_id: page.book_id,
-        part_index: page.part_index,
-        page_id: page.page_id,
-        tok_start: selection[0],
-        tok_end: selection[1],
-        params: { ...params, threshold, banality_scale: banalityScale },
-        exclude_same_book: excludeSameBook,
-      });
-      setResult(r);
-      setBookRun(null);
-      setShownRun(r.run_id);
-      setMatches(r.matches);
-      setExpanded(null);
-      setSelectedBook(null);
-      setMessage(
-        `${r.anchors.length} anchors · ${r.candidates} candidate pages · ${r.matches.length} matches (${r.matches.filter((m) => m.score >= threshold).length} at threshold) · ${r.non_banal}/${r.tokens} non-banal tokens · ${r.elapsed_ms} ms${r.cancelled ? ' · cancelled' : ''}`
-      );
-      if (bookId != null) setRuns(await reuseApi.runs(bookId));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
+  const startBook = useCallback(
+    async (span: PageSpan | null, what: string) => {
+      if (bookId == null) return;
+      setPending(null);
+      setBusy('book');
+      setRun({ running: true, paused: false, cancelledAt: null });
+      setError(null);
+      setMessage(null);
+      setProgress(null);
+      setOpen(null);
+      try {
+        const s = await reuseApi.book(bookId, { ...params, threshold, banality_scale: banalityScale }, span);
+        setBookRun(s);
+        setShownRun(s.run_id);
+        setMatches(await reuseApi.matches(s.run_id));
+        setMessage(
+          `${what}: ${s.matches.toLocaleString()} matches over ${s.pages_done.toLocaleString()} pages from ${s.aggregates.length} books · ${fmtDuration(s.elapsed_ms)}`
+        );
+        setRun(s.cancelled ? { running: false, paused: false, cancelledAt: `${s.pages_done.toLocaleString()} of ${s.pages.toLocaleString()} pages, ${s.matches.toLocaleString()} matches kept` } : IDLE_RUN);
+        setRuns(await reuseApi.runs(bookId));
+      } catch (e) {
+        setError(String(e));
+        setRun(IDLE_RUN);
+      } finally {
+        setBusy(null);
+      }
+    },
+    [bookId, params, threshold, banalityScale]
+  );
 
-  const askEstimate = async () => {
-    if (bookId == null) return;
-    setBusy('estimate');
-    setError(null);
-    setEstimate(null);
-    try {
-      setEstimate(await reuseApi.estimate(bookId, { ...params, threshold, banality_scale: banalityScale }));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
+  const pause = (paused: boolean) => {
+    setRun((r) => ({ ...r, paused }));
+    void labApi.statsPause(paused);
   };
-
-  const analyseBook = async () => {
-    if (bookId == null) return;
-    setEstimate(null);
-    setBusy('book');
-    setError(null);
-    setMessage(null);
-    setProgress(null);
-    try {
-      const s = await reuseApi.book(bookId, { ...params, threshold, banality_scale: banalityScale });
-      setBookRun(s);
-      setResult(null);
-      setShownRun(s.run_id);
-      setMatches(await reuseApi.matches(s.run_id));
-      setExpanded(null);
-      setSelectedBook(null);
-      setMessage(
-        `${s.pages_done}/${s.pages} pages · ${s.windows_done}/${s.windows} windows · ${s.matches} matches · ${s.aggregates.length} source books · ${fmtDuration(s.elapsed_ms)}${s.cancelled ? ' · cancelled, completed pages kept' : ''}`
-      );
-      setRuns(await reuseApi.runs(bookId));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const cancel = () => {
-    void labApi.statsCancel();
-  };
+  const cancel = () => void labApi.statsCancel();
 
   const openRun = async (r: RunRow) => {
     setError(null);
@@ -241,17 +229,14 @@ export function ReusePanel({ book, local }: Props) {
       setMatches(m);
       setThreshold(r.params.threshold);
       setBanalityScale(r.params.banality_scale);
-      setResult(null);
-      setBookRun(r.mode === 'book' ? { run_id: r.id, book_id: r.book_id, pages: 0, pages_done: 0, windows: 0, windows_done: 0, matches: m.length, aggregates: aggregate(m, r.params.threshold), elapsed_ms: 0, cancelled: r.status === 'cancelled', params: r.params } : null);
-      setExpanded(null);
-      setSelectedBook(null);
+        setBookRun(null);
+      setOpen(null);
       setMessage(`Run ${r.id} (${r.mode}, ${r.status}, ${r.started_at.slice(0, 16).replace('T', ' ')}): ${m.length} matches`);
     } catch (e) {
       setError(String(e));
     }
   };
 
-  // Re-score through Rust when the banality slider settles.
   const rescoreTimer = useRef<number | null>(null);
   const onBanality = (v: number) => {
     setBanalityScale(v);
@@ -260,9 +245,7 @@ export function ReusePanel({ book, local }: Props) {
     rescoreTimer.current = window.setTimeout(async () => {
       setBusy('rescore');
       try {
-        const rows = await reuseApi.rescore(shownRun, { ...params, threshold, banality_scale: v });
-        setMatches(rows);
-        if (bookRun) setBookRun({ ...bookRun, aggregates: aggregate(rows, threshold) });
+        setMatches(await reuseApi.rescore(shownRun, { ...params, threshold, banality_scale: v }));
       } catch (e) {
         setError(String(e));
       } finally {
@@ -273,9 +256,10 @@ export function ReusePanel({ book, local }: Props) {
 
   const verdict = async (m: MatchRow, v: 'confirmed' | 'rejected') => {
     try {
-      const next = v === m.user_verdict ? null : v;
-      const row = await reuseApi.verdict(m.id, next);
+      const row = await reuseApi.verdict(m.id, v === m.user_verdict ? null : v);
       setMatches((rows) => rows.map((r) => (r.id === row.id ? row : r)));
+      if (open?.id === row.id) setOpen(row);
+      onChanged?.();
     } catch (e) {
       setError(String(e));
     }
@@ -290,168 +274,485 @@ export function ReusePanel({ book, local }: Props) {
     }
   };
 
-  const targetPage = useCallback(
-    async (ref: PageRef): Promise<Page | null> => {
-      const key = `${ref.book_id}:${ref.part_index}:${ref.page_id}`;
-      const cached = targetPages.get(key);
-      if (cached) return cached;
-      const p = await labApi.getPage(ref.book_id, ref.part_index, ref.page_id);
-      if (p) setTargetPages((m) => new Map(m).set(key, p));
-      return p;
-    },
-    [targetPages]
-  );
+  // -------------------------------------------------------- the result ---
 
-  // ----------------------------------------------------------- derived ---
   const visible = useMemo(
-    () => matches.filter((m) => m.score >= threshold && typeFilter.has(m.kind)).sort((a, b) => b.score - a.score || typeRank(a.kind) - typeRank(b.kind)),
+    () =>
+      matches
+        .filter((m) => m.score >= threshold && typeFilter.has(m.kind))
+        .sort((a, b) => b.score - a.score || (a.target_title ?? '').localeCompare(b.target_title ?? '', 'ar') || typeRank(a.kind) - typeRank(b.kind)),
     [matches, threshold, typeFilter]
   );
 
-  const grouped = useMemo(() => {
-    const g = new Map<number, MatchRow[]>();
-    for (const m of visible) {
-      const list = g.get(m.target.book_id) ?? [];
-      list.push(m);
-      g.set(m.target.book_id, list);
-    }
-    return [...g.entries()].sort((a, b) => b[1][0].score - a[1][0].score);
+  // The phrase with its context needs the target pages. Fetch the distinct
+  // ones the visible rows land on, up to a budget: a run over a whole book can
+  // match thousands of pages, and no reader reads a thousand rows.
+  useEffect(() => {
+    let live = true;
+    const wanted = visible.slice(0, CONTEXT_BUDGET).filter((m) => !contexts.has(m.id));
+    if (wanted.length === 0) return;
+    setContextBusy(true);
+    (async () => {
+      const byPage = new Map<string, Page | null>();
+      const next = new Map(contexts);
+      for (const m of wanted) {
+        if (!live) return;
+        const key = `${m.target.book_id}:${m.target.part_index}:${m.target.page_id}`;
+        let p = byPage.get(key);
+        if (p === undefined) {
+          p = await labApi.getPage(m.target.book_id, m.target.part_index, m.target.page_id).catch(() => null);
+          byPage.set(key, p);
+        }
+        next.set(m.id, contextOf(p, m));
+      }
+      if (live) {
+        setContexts(next);
+        setContextBusy(false);
+      }
+    })();
+    return () => {
+      live = false;
+      setContextBusy(false);
+    };
+    // `contexts` is written by this effect; depending on it would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
+  const openTarget = async (m: MatchRow) => {
+    setOpen(m);
+    setOpenPage(null);
+    setSideBySide(false);
+    const p = await labApi.getPage(m.target.book_id, m.target.part_index, m.target.page_id).catch(() => null);
+    setOpenPage(p);
+    if (!queryPages.has(`${m.part_index}:${m.page_id}`)) {
+      const q = await labApi.getPage(m.book_id, m.part_index, m.page_id).catch(() => null);
+      if (q) setQueryPages((map) => new Map(map).set(`${m.part_index}:${m.page_id}`, q));
+    }
+  };
+
   const aggregates = useMemo(() => (bookRun ? aggregate(matches, threshold) : []), [bookRun, matches, threshold]);
-
-  const zoneOf = useMemo(() => {
-    const z = result?.zones ?? [];
-    return (idx: number): Zone | null => z[idx] ?? null;
-  }, [result]);
-
-  const layerClass = useCallback(
-    (idx: number) => {
-      const classes: string[] = [];
-      const span = layer.find((s) => idx >= s.tok_start && idx < s.tok_end);
-      if (span) classes.push(span.user_verdict === 'confirmed' ? 'lay-reuse-confirmed' : span.user_verdict === 'rejected' ? 'lay-reuse-rejected' : 'lay-reuse');
-      if (result && result.matches.length && page && page.book_id === result.matches[0]?.book_id) {
-        const z = zoneOf(idx);
-        if (z) classes.push(`lay-zone-${z}`);
-      }
-      return classes.length ? classes.join(' ') : null;
-    },
-    [layer, result, page, zoneOf]
+  const aggColumns: Column<BookAggRow>[] = useMemo(
+    () => [
+      { key: 'title', label: 'Source book', sortValue: (r) => r.title ?? String(r.book_id), rtl: true, width: 'minmax(180px, 3fr)', render: (r) => r.title ?? `book ${r.book_id}` },
+      { key: 'death', label: 'd. AH', sortValue: (r) => r.death_ah, align: 'right', width: '60px', render: (r) => (r.death_ah == null ? '—' : String(r.death_ah)) },
+      { key: 'tokens', label: 'Aligned words', sortValue: (r) => r.aligned_tokens, align: 'right', width: '110px', defaultSort: 'desc', render: (r) => fmt(r.aligned_tokens) },
+      { key: 'matches', label: 'Matches', sortValue: (r) => r.matches, align: 'right', width: '80px', render: (r) => fmt(r.matches) },
+      { key: 'best', label: 'Best', sortValue: (r) => r.best_score, align: 'right', width: '60px', render: (r) => r.best_score.toFixed(2) },
+    ],
+    []
   );
 
-  const onTokenClick = useCallback(
-    (idx: number) => {
-      const span = layer.find((s) => idx >= s.tok_start && idx < s.tok_end);
-      if (span) setExpanded(span.id);
-    },
-    [layer]
-  );
-
-  const aggColumns: Column<BookAggRow>[] = [
-    { key: 'title', label: 'Source book', sortValue: (r) => r.title ?? String(r.book_id), rtl: true, width: 'minmax(180px, 3fr)', render: (r) => r.title ?? `book ${r.book_id}` },
-    { key: 'death', label: 'd. AH', sortValue: (r) => r.death_ah, align: 'right', width: '60px', render: (r) => (r.death_ah == null ? '—' : String(r.death_ah)) },
-    { key: 'tokens', label: 'Aligned tokens', sortValue: (r) => r.aligned_tokens, align: 'right', width: '110px', defaultSort: 'desc', render: (r) => fmt(r.aligned_tokens) },
-    { key: 'matches', label: 'Matches', sortValue: (r) => r.matches, align: 'right', width: '80px', render: (r) => fmt(r.matches) },
-    { key: 'best', label: 'Best', sortValue: (r) => r.best_score, align: 'right', width: '60px', render: (r) => r.best_score.toFixed(2) },
-    { key: 'types', label: 'Type mix', sortValue: (r) => Object.keys(r.types).length, width: '2fr', render: (r) => TYPES.filter((t) => r.types[t]).map((t) => `${t} ${r.types[t]}`).join(' · ') },
-  ];
-
-  if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Choose a book in Books first.</div>;
-  }
-
-  const selectionText = selection && page ? page.tokens.slice(selection[0], selection[1]).map((t) => t.surface).join(' ') : '';
+  if (!book) return <div className="flex-1 p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
 
   return (
-    <div className="flex h-full min-h-0">
-      {/* ----------------------------------------------- left: the text --- */}
-      <section className="flex-1 min-w-0 flex flex-col border-r border-app-border-light">
-        <div className="px-3 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-2 flex-wrap text-xs">
-          <button onClick={findReuse} disabled={!!busy || !selection} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40" title="Passage mode (§4.3): the selected range against the corpus">
-            {busy === 'passage' ? 'Searching…' : 'Find reuse'}
-          </button>
-          <label className="flex items-center gap-1" title="Leave out the query's own book">
-            <input type="checkbox" checked={excludeSameBook} onChange={(e) => setExcludeSameBook(e.target.checked)} />
-            exclude this book
-          </label>
-          <span className="mx-1 text-app-border-medium">|</span>
-          <button
-            onClick={askEstimate}
-            disabled={!!busy || !local}
-            className="px-3 py-1 text-sm border border-app-accent text-app-accent rounded disabled:opacity-40"
-            title={local ? 'Book mode (§4.3): every 60-token window of the book, after a time estimate' : 'Whole-book reuse needs the local corpus (spec §4.3)'}
-          >
-            {busy === 'estimate' ? 'Estimating…' : busy === 'book' ? 'Analysing…' : 'Analyse whole book'}
-          </button>
-          {busy && (
-            <button onClick={cancel} className="px-2 py-1 border border-app-border-medium rounded">
-              Cancel
-            </button>
-          )}
-          {!local && <span className="text-app-text-tertiary">book mode: local only</span>}
-          <label className="flex items-center gap-1 ml-auto" title="Lemma rank at or below which a token is banal (§4.3). Changing it needs a re-run.">
-            banality rank
-            <input type="number" min={0} max={5000} step={50} value={params.banality_rank} onChange={(e) => setParams({ ...params, banality_rank: Math.max(0, Number(e.target.value) || 0) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Banality rank" />
-          </label>
-          <label className="flex items-center gap-1" title="Aligned pairs a match needs">
-            min aligned
-            <input type="number" min={2} max={40} value={params.min_aligned} onChange={(e) => setParams({ ...params, min_aligned: Math.max(2, Number(e.target.value) || 6) })} className="w-12 border border-app-border-medium rounded px-1" aria-label="Min aligned" />
-          </label>
-        </div>
-
-        {progress && busy && (
-          <div className="px-3 py-1 text-xs bg-app-surface-variant border-b border-app-border-light" role="status">
-            {progress.stage === 'book' ? `page ${progress.done}/${progress.total} · ${progress.found} matches` : progress.stage === 'align' ? `aligning candidate ${progress.done}` : progress.stage}
-            {progress.estimate_ms != null && progress.total > 0 && ` · about ${fmtDuration(progress.estimate_ms)}`}
-          </div>
-        )}
-
-        {estimate && (
-          <div className="px-3 py-2 text-xs bg-app-accent-light border-b border-app-border-light flex items-center gap-3 flex-wrap" role="dialog" aria-label="Estimate">
-            <span>
-              {estimate.windows.toLocaleString()} windows over {estimate.pages.toLocaleString()} pages; {estimate.sampled} sampled in {estimate.sample_ms} ms ({estimate.sample_matches} matches) → about <b>{fmtDuration(estimate.estimate_ms)}</b>.
-            </span>
-            <button onClick={analyseBook} className="px-3 py-1 bg-app-accent text-white rounded">
-              Start
-            </button>
-            <button onClick={() => setEstimate(null)} className="px-2 py-1 border border-app-border-medium rounded">
-              Not now
-            </button>
-          </div>
-        )}
-
-        {selection && page && (
-          <div className="px-3 py-1 text-xs border-b border-app-border-light flex items-center gap-2">
-            <span className="text-app-text-tertiary">
-              selected [{selection[0]}, {selection[1]}) · {selection[1] - selection[0]} tokens
-            </span>
-            <span className="font-arabic truncate" dir="rtl" title={selectionText}>
-              {selectionText.slice(0, 80)}
-            </span>
-          </div>
-        )}
-
-        <div className="flex-1 min-h-0">
-          <Reader page={page} pages={refs} index={index} onNavigate={(i) => goTo(i)} onSelectRange={onSelectRange} highlight={highlight} layerClass={layerClass} onTokenClick={onTokenClick} loading={pageLoading} error={null} />
-        </div>
+    <div className="flex-1 flex min-h-0" data-testid="reuse-panel">
+      <section className="flex-1 min-w-0 flex border-r border-app-border-light">
+        <ReadPanel
+          book={book}
+          initialAt={from?.at ?? null}
+          highlight={from?.range ?? null}
+          showToc={false}
+          onSectionChange={setSection}
+          onFindReuse={(sel) => void findReuse(sel.at, sel.range)}
+        />
       </section>
 
-      {/* ------------------------------------------------ right: results --- */}
-      <section className="w-[46%] min-w-[420px] flex flex-col min-h-0">
-        <div className="px-3 py-2 border-b border-app-border-light bg-app-surface text-xs flex items-center gap-3 flex-wrap">
-          <label className="flex items-center gap-1" title="Display threshold on score (§4.3); no re-run">
-            threshold
-            <input type="range" min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} aria-label="Threshold" />
-            <span className="w-8 tabular-nums">{threshold.toFixed(2)}</span>
-          </label>
-          <label className="flex items-center gap-1" title="banality_scale (§4.3): how fast the penalty grows with the banal share above the corpus baseline; re-scores stored matches">
-            banality
-            <input type="range" min={0.05} max={1} step={0.05} value={banalityScale} onChange={(e) => onBanality(Number(e.target.value))} aria-label="Banality scale" />
-            <span className="w-8 tabular-nums">{banalityScale.toFixed(2)}</span>
-          </label>
-          <span className="flex items-center gap-1">
+      <section className="w-[46%] min-w-[420px] flex flex-col min-h-0 relative">
+        <div className="px-3 py-1.5 border-b border-app-border-light bg-app-surface text-xs flex items-center gap-2 flex-wrap">
+          <span className="font-semibold">Reuse</span>
+          <button
+            onClick={() => void analyseSection()}
+            disabled={!local || !!busy || !section}
+            title={
+              !local
+                ? 'Whole-book and section reuse need the local corpus (spec §4.3)'
+                : section
+                  ? `Every window of ${section.title}`
+                  : 'Move the reader into a section first'
+            }
+            className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
+            data-testid="analyse-section"
+          >
+            Analyse section
+          </button>
+          <button
+            onClick={() => void proposeRun('Analysing the whole text', null)}
+            disabled={!local || !!busy}
+            title={local ? 'Every 60-word window of the text (§4.3)' : 'Whole-book reuse needs the local corpus (spec §4.3)'}
+            className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
+          >
+            Analyse whole text
+          </button>
+
+          {runs.length > 0 && (
+            <select
+              value={shownRun ?? ''}
+              onChange={(e) => {
+                const r = runs.find((x) => x.id === Number(e.target.value));
+                if (r) void openRun(r);
+              }}
+              className="border border-app-border-medium rounded px-1 py-0.5 max-w-[10rem]"
+              aria-label="Stored runs"
+            >
+              <option value="">Past runs…</option>
+              {runs.map((r) => (
+                <option key={r.id} value={r.id}>
+                  #{r.id} {r.mode} · {r.matches} · {r.started_at.slice(0, 16).replace('T', ' ')}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <span className="ltr:ml-auto flex items-center gap-1">
+            {shownRun != null && (
+              <>
+                <button onClick={() => void exportRun('csv')} className="px-2 py-0.5 border border-app-border-medium rounded">
+                  CSV
+                </button>
+                <button onClick={() => void exportRun('json')} className="px-2 py-0.5 border border-app-border-medium rounded">
+                  JSON
+                </button>
+              </>
+            )}
+            <button onClick={() => setGear(true)} title="Parameters" aria-label="Reuse parameters" className="px-2 py-0.5 border border-app-border-medium rounded" data-testid="reuse-gear">
+              ⚙
+            </button>
+          </span>
+        </div>
+
+        <RunBar
+          run={run}
+          done={progress?.done ?? 0}
+          total={progress?.total ?? 0}
+          found={progress?.found}
+          foundLabel="matches"
+          estimateMs={progress?.estimate_ms ?? null}
+          onPause={pause}
+          onCancel={cancel}
+        />
+        <Notice error={error} message={message} />
+
+        {open ? (
+          <TargetView
+            m={open}
+            page={openPage}
+            queryPage={queryPages.get(`${open.part_index}:${open.page_id}`) ?? null}
+            sideBySide={sideBySide}
+            onToggleSideBySide={() => setSideBySide((v) => !v)}
+            onBack={() => setOpen(null)}
+            onVerdict={verdict}
+          />
+        ) : (
+          <div className="flex-1 min-h-0 flex flex-col">
+            {bookRun && aggregates.length > 0 && (
+              <div className="border-b border-app-border-light">
+                <VirtualTable
+                  columns={aggColumns}
+                  rows={aggregates}
+                  rowKey={(r) => r.book_id}
+                  height={160}
+                  emptyText="No source books at this threshold."
+                  testId="reuse-aggregates"
+                />
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 px-3 py-1 text-[11px] text-app-text-tertiary border-b border-app-border-light" dir="rtl">
+              <span className="flex-1">Book</span>
+              <span className="flex-[2]">The words</span>
+              <span className="w-16 text-left">Page</span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {visible.map((m) => (
+                <ResultRow key={m.id} m={m} ctx={contexts.get(m.id)} onClick={() => void openTarget(m)} />
+              ))}
+              {visible.length === 0 && shownRun != null && <p className="p-4 text-sm text-app-text-tertiary">No matches at this threshold.</p>}
+              {shownRun == null && !busy && (
+                <p className="p-4 text-sm text-app-text-tertiary">
+                  Select a passage on the left and press Find reuse, or analyse the section the reader is in.
+                </p>
+              )}
+              {contextBusy && visible.length > 0 && <p className="p-2 text-[11px] text-app-text-tertiary">Fetching the surrounding words…</p>}
+            </div>
+          </div>
+        )}
+
+        {busy === 'passage' && <LoadingOverlay step={{ label: 'Searching the corpus for this passage…' }} onCancel={cancel} />}
+        {busy === 'estimate' && <LoadingOverlay step={{ label: 'Working out how long that would take…' }} />}
+      </section>
+
+      <HeavyRunModal
+        open={!!pending}
+        what={pending?.what ?? ''}
+        pages={pending?.pages ?? 0}
+        tokens={pending?.tokens ?? 0}
+        estimateMs={pending?.estimateMs ?? null}
+        onContinue={() => pending && void startBook(pending.span, pending.what)}
+        onCancel={() => setPending(null)}
+      />
+
+      {gear && (
+        <GearModal
+          params={params}
+          setParams={setParams}
+          threshold={threshold}
+          setThreshold={setThreshold}
+          banalityScale={banalityScale}
+          onBanality={onBanality}
+          typeFilter={typeFilter}
+          setTypeFilter={setTypeFilter}
+          excludeSameBook={excludeSameBook}
+          setExcludeSameBook={setExcludeSameBook}
+          onClose={() => setGear(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------- a result ---
+
+interface Context {
+  before: string;
+  phrase: string;
+  after: string;
+  pageNumber: string | null;
+}
+
+function contextOf(page: Page | null, m: MatchRow): Context {
+  if (!page) return { before: '', phrase: m.snapshot, after: '', pageNumber: null };
+  const words = (a: number, b: number) =>
+    page.tokens
+      .filter((t) => t.idx >= a && t.idx < b)
+      .map((t) => t.surface)
+      .join(' ');
+  return {
+    before: words(Math.max(0, m.t_start - CONTEXT), m.t_start),
+    phrase: words(m.t_start, m.t_end),
+    after: words(m.t_end, m.t_end + CONTEXT),
+    pageNumber: page.page_number,
+  };
+}
+
+/**
+ * One match, read right to left: whose book, what it says, where. The score
+ * and the kind sit under the title, small, because they qualify the row
+ * rather than being what the reader came for.
+ */
+function ResultRow({ m, ctx, onClick }: { m: MatchRow; ctx?: Context; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      dir="rtl"
+      className={`w-full flex items-start gap-2 px-3 py-2 text-right border-b border-app-border-light hover:bg-app-surface-variant ${
+        m.user_verdict === 'rejected' ? 'opacity-50' : ''
+      }`}
+      data-testid="reuse-row"
+    >
+      <span className="flex-1 min-w-0">
+        <span className="block font-arabic text-sm leading-snug truncate" title={m.target_title ?? undefined}>
+          {m.target_title ?? `book ${m.target.book_id}`}
+          {m.target_death_ah != null && <span className="text-app-text-tertiary"> (d. {m.target_death_ah})</span>}
+        </span>
+        <span className="block text-[11px] text-app-text-tertiary" dir="ltr">
+          {m.score.toFixed(2)} · {m.kind}
+          {m.user_verdict === 'confirmed' && ' · confirmed'}
+        </span>
+      </span>
+      <span className="flex-[2] min-w-0 font-arabic text-base leading-7 line-clamp-2">
+        {ctx ? (
+          <>
+            <span className="text-app-text-tertiary">{ctx.before} </span>
+            <span className="font-medium">{ctx.phrase}</span>
+            <span className="text-app-text-tertiary"> {ctx.after}</span>
+          </>
+        ) : (
+          <span className="text-app-text-tertiary">{m.snapshot}</span>
+        )}
+      </span>
+      <span className="w-16 shrink-0 text-left text-[11px] text-app-text-tertiary tabular-nums pt-0.5">
+        {plainPageLabel(m.target.part_index, m.target.page_id, m.target_parts, ctx?.pageNumber)}
+      </span>
+    </button>
+  );
+}
+
+/** The matched page in the other book, with the match marked (spec §H2). */
+function TargetView({
+  m,
+  page,
+  queryPage,
+  sideBySide,
+  onToggleSideBySide,
+  onBack,
+  onVerdict,
+}: {
+  m: MatchRow;
+  page: Page | null;
+  queryPage: Page | null;
+  sideBySide: boolean;
+  onToggleSideBySide: () => void;
+  onBack: () => void;
+  onVerdict: (m: MatchRow, v: 'confirmed' | 'rejected') => void;
+}) {
+  const pairs = useMemo(() => {
+    const q = new Map<number, number>();
+    const t = new Map<number, number>();
+    m.pairs.forEach(([a, b], i) => {
+      q.set(a, i);
+      t.set(b, i);
+    });
+    return { q, t };
+  }, [m.pairs]);
+
+  const labels = useMemo(() => (page ? new Pages([{ book_id: page.book_id, part_index: page.part_index, page_id: page.page_id, page_number: page.page_number, part_label: page.part_label }]) : Pages.empty()), [page]);
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0" data-testid="reuse-target">
+      <div className="px-3 py-1.5 border-b border-app-border-light bg-app-surface-variant flex items-center gap-2 text-xs">
+        <button onClick={onBack} className="px-2 py-1 border border-app-border-medium rounded" data-testid="back-to-results">
+          ‹ Back to results
+        </button>
+        <span className="flex-1 min-w-0 font-arabic truncate text-right" dir="rtl" title={m.target_title ?? undefined}>
+          {m.target_title ?? `book ${m.target.book_id}`}
+        </span>
+        <span className="tabular-nums text-app-text-tertiary">{page ? labels.label(page.part_index, page.page_id) : '…'}</span>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={sideBySide} onChange={onToggleSideBySide} />
+          Side by side
+        </label>
+        <button
+          onClick={() => onVerdict(m, 'confirmed')}
+          className={`px-2 py-0.5 rounded border ${m.user_verdict === 'confirmed' ? 'bg-green-600 text-white border-green-600' : 'border-app-border-medium'}`}
+          aria-label="Confirm this match"
+        >
+          ✓
+        </button>
+        <button
+          onClick={() => onVerdict(m, 'rejected')}
+          className={`px-2 py-0.5 rounded border ${m.user_verdict === 'rejected' ? 'bg-red-600 text-white border-red-600' : 'border-app-border-medium'}`}
+          aria-label="Reject this match"
+        >
+          ✗
+        </button>
+      </div>
+
+      <div className="px-3 py-1 text-[11px] text-app-text-tertiary border-b border-app-border-light">
+        score {m.score.toFixed(3)} · {m.kind} · coverage {m.components.coverage.toFixed(2)} · lemma {m.components.lemma_agree.toFixed(2)} · root{' '}
+        {m.components.root_agree.toFixed(2)} · surface {m.components.surface_agree.toFixed(2)} · banal {m.components.banal_share.toFixed(2)} →{' '}
+        {m.components.banality_factor.toFixed(2)} · {m.components.aligned} aligned
+      </div>
+
+      {sideBySide && queryPage && page ? (
+        <div className="flex-1 overflow-y-auto grid grid-cols-2 gap-3 p-4 font-arabic text-lg leading-8" dir="rtl" data-testid="side-by-side">
+          <div>
+            <div className="text-[10px] text-app-text-tertiary mb-1" dir="ltr">
+              this text
+            </div>
+            {queryPage.tokens
+              .filter((t) => t.idx >= m.tok_start && t.idx < m.tok_end)
+              .map((t) => (
+                <span key={t.idx} className={pairs.q.has(t.idx) ? `lay-pair-${pairs.q.get(t.idx)! % 8}` : 'text-app-text-tertiary'}>
+                  {t.surface}{' '}
+                </span>
+              ))}
+          </div>
+          <div>
+            <div className="text-[10px] text-app-text-tertiary mb-1" dir="ltr">
+              the other
+            </div>
+            {page.tokens
+              .filter((t) => t.idx >= m.t_start && t.idx < m.t_end)
+              .map((t) => (
+                <span key={t.idx} className={pairs.t.has(t.idx) ? `lay-pair-${pairs.t.get(t.idx)! % 8}` : 'text-app-text-tertiary'}>
+                  {t.surface}{' '}
+                </span>
+              ))}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-6 font-arabic text-xl leading-9" dir="rtl">
+          {page ? (
+            page.tokens.map((t) => (
+              <span key={t.idx} className={t.idx >= m.t_start && t.idx < m.t_end ? 'tok-hit' : ''}>
+                {t.surface}{' '}
+              </span>
+            ))
+          ) : (
+            <p className="text-sm text-app-text-tertiary">Loading the page…</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------- the gear ---
+
+function GearModal({
+  params,
+  setParams,
+  threshold,
+  setThreshold,
+  banalityScale,
+  onBanality,
+  typeFilter,
+  setTypeFilter,
+  excludeSameBook,
+  setExcludeSameBook,
+  onClose,
+}: {
+  params: ReuseParams;
+  setParams: (p: ReuseParams) => void;
+  threshold: number;
+  setThreshold: (v: number) => void;
+  banalityScale: number;
+  onBanality: (v: number) => void;
+  typeFilter: Set<MatchType>;
+  setTypeFilter: (s: Set<MatchType>) => void;
+  excludeSameBook: boolean;
+  setExcludeSameBook: (v: boolean) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-label="Reuse parameters"
+        className="bg-app-surface rounded shadow-lg border border-app-border-light w-[30rem] max-w-[95vw] p-4 text-sm space-y-4"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="reuse-gear-modal"
+      >
+        <h2 className="font-semibold">Reuse parameters</h2>
+
+        <label className="flex items-center gap-2">
+          <span className="w-28 text-xs text-app-text-tertiary">Threshold</span>
+          <input type="range" min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} className="flex-1" aria-label="Threshold" />
+          <span className="w-10 tabular-nums text-right">{threshold.toFixed(2)}</span>
+        </label>
+        <p className="text-[11px] text-app-text-tertiary -mt-2 ltr:ml-[7.5rem]">Hides rows below this score. No re-run.</p>
+
+        <label className="flex items-center gap-2">
+          <span className="w-28 text-xs text-app-text-tertiary">Banality</span>
+          <input type="range" min={0.05} max={1} step={0.05} value={banalityScale} onChange={(e) => onBanality(Number(e.target.value))} className="flex-1" aria-label="Banality scale" />
+          <span className="w-10 tabular-nums text-right">{banalityScale.toFixed(2)}</span>
+        </label>
+        <p className="text-[11px] text-app-text-tertiary -mt-2 ltr:ml-[7.5rem]">
+          How hard a passage of common words is penalised. Re-scores what is already found.
+        </p>
+
+        <div>
+          <span className="block text-xs text-app-text-tertiary mb-1">Kinds of match shown</span>
+          <div className="flex flex-wrap gap-3">
             {TYPES.map((t) => (
-              <label key={t} className={`flex items-center gap-0.5 ${t === 'formulaic' ? 'text-app-text-tertiary' : ''}`}>
+              <label key={t} className={`flex items-center gap-1 ${t === 'formulaic' ? 'text-app-text-tertiary' : ''}`}>
                 <input
                   type="checkbox"
                   checked={typeFilter.has(t)}
@@ -461,88 +762,53 @@ export function ReusePanel({ book, local }: Props) {
                     else s.delete(t);
                     setTypeFilter(s);
                   }}
-                  aria-label={`Show ${t}`}
                 />
                 {t}
               </label>
             ))}
-          </span>
-          {shownRun != null && (
-            <span className="ml-auto flex items-center gap-1">
-              <button onClick={() => exportRun('csv')} className="px-2 py-0.5 border border-app-border-medium rounded">
-                CSV
-              </button>
-              <button onClick={() => exportRun('json')} className="px-2 py-0.5 border border-app-border-medium rounded">
-                JSON
-              </button>
-            </span>
-          )}
+          </div>
         </div>
 
-        {(error || message) && (
-          <div className={`px-3 py-1 text-xs border-b border-app-border-light ${error ? 'text-app-error' : 'text-app-text-secondary'}`} role={error ? 'alert' : 'status'}>
-            {error ?? message}
-          </div>
-        )}
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={excludeSameBook} onChange={(e) => setExcludeSameBook(e.target.checked)} />
+          <span>Exclude this book</span>
+        </label>
 
-        {runs.length > 0 && (
-          <div className="px-3 py-1 text-xs border-b border-app-border-light flex items-center gap-2">
-            <span className="text-app-text-tertiary">runs:</span>
-            <select value={shownRun ?? ''} onChange={(e) => { const r = runs.find((x) => x.id === Number(e.target.value)); if (r) void openRun(r); }} className="border border-app-border-medium rounded px-1" aria-label="Stored runs">
-              <option value="">—</option>
-              {runs.map((r) => (
-                <option key={r.id} value={r.id}>
-                  #{r.id} {r.mode} {r.status} · {r.matches} · {r.started_at.slice(0, 16).replace('T', ' ')}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          {result && (
-            <div className="px-3 py-2 text-xs border-b border-app-border-light">
-              <div className="text-app-text-tertiary mb-1">
-                anchors ({result.anchors.length}):{' '}
-                {result.anchors.map((a) => (
-                  <span key={a.start} className="font-arabic mx-1" dir="rtl" title={`rank sum ${a.rank_sum}`}>
-                    {a.terms.join(' ')}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {bookRun && (
-            <div className="border-b border-app-border-light">
-              <div className="px-3 py-1 text-xs text-app-text-tertiary">Source books ranked by aligned tokens at the threshold; click one for its matches.</div>
-              <VirtualTable columns={aggColumns} rows={aggregates} rowKey={(r) => r.book_id} onRowClick={(r) => setSelectedBook(r.book_id === selectedBook ? null : r.book_id)} height={220} emptyText="No source books at this threshold." testId="reuse-aggregates" />
-            </div>
-          )}
-
-          {visible.length === 0 && shownRun != null && <div className="p-4 text-sm text-app-text-tertiary">No matches at this threshold.</div>}
-          {shownRun == null && !busy && <div className="p-4 text-sm text-app-text-tertiary">Select a passage in the reader and press "Find reuse", or analyse the whole book.</div>}
-
-          {grouped
-            .filter(([b]) => selectedBook == null || b === selectedBook)
-            .map(([b, list]) => (
-              <div key={b} className="border-b border-app-border-light">
-                <div className="px-3 py-1 text-xs bg-app-surface-variant flex items-center gap-2">
-                  <span className="font-arabic font-medium" dir="rtl">
-                    {list[0].target_title ?? `book ${b}`}
-                  </span>
-                  <span className="text-app-text-tertiary">
-                    {list[0].target_death_ah != null && `d. ${list[0].target_death_ah} · `}
-                    {list.length} match{list.length === 1 ? '' : 'es'}
-                  </span>
-                </div>
-                {list.map((m) => (
-                  <MatchCard key={m.id} m={m} expanded={expanded === m.id} onToggle={() => setExpanded(expanded === m.id ? null : m.id)} onVerdict={verdict} targetPage={targetPage} queryPage={page && page.part_index === m.part_index && page.page_id === m.page_id ? page : null} onShowQuery={() => { const i = refs.findIndex((r) => r.part_index === m.part_index && r.page_id === m.page_id); if (i >= 0) void goTo(i, [m.tok_start, m.tok_end]); }} />
-                ))}
-              </div>
-            ))}
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2">
+            <span className="text-xs text-app-text-tertiary">Banality rank</span>
+            <input
+              type="number"
+              min={0}
+              max={5000}
+              step={50}
+              value={params.banality_rank}
+              onChange={(e) => setParams({ ...params, banality_rank: Math.max(0, Number(e.target.value) || 0) })}
+              className="w-20 border border-app-border-medium rounded px-1 py-0.5"
+              aria-label="Banality rank"
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="text-xs text-app-text-tertiary">Least aligned words</span>
+            <input
+              type="number"
+              min={2}
+              max={40}
+              value={params.min_aligned}
+              onChange={(e) => setParams({ ...params, min_aligned: Math.max(2, Number(e.target.value) || 6) })}
+              className="w-16 border border-app-border-medium rounded px-1 py-0.5"
+              aria-label="Min aligned"
+            />
+          </label>
         </div>
-      </section>
+        <p className="text-[11px] text-app-text-tertiary">Both of these change what a run finds, so they take effect on the next run.</p>
+
+        <div className="text-right">
+          <button onClick={onClose} className="px-3 py-1 border border-app-border-medium rounded">
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -552,7 +818,9 @@ function aggregate(rows: MatchRow[], threshold: number): BookAggRow[] {
   const by = new Map<number, BookAggRow>();
   for (const m of rows) {
     if (m.score < threshold) continue;
-    const a = by.get(m.target.book_id) ?? { book_id: m.target.book_id, matches: 0, aligned_tokens: 0, best_score: 0, types: {}, title: m.target_title, author_id: m.target_author, death_ah: m.target_death_ah };
+    const a =
+      by.get(m.target.book_id) ??
+      ({ book_id: m.target.book_id, matches: 0, aligned_tokens: 0, best_score: 0, types: {}, title: m.target_title, author_id: m.target_author, death_ah: m.target_death_ah } as BookAggRow);
     a.matches += 1;
     a.aligned_tokens += m.components.aligned;
     a.best_score = Math.max(a.best_score, m.score);
@@ -562,130 +830,10 @@ function aggregate(rows: MatchRow[], threshold: number): BookAggRow[] {
   return [...by.values()].sort((x, y) => y.aligned_tokens - x.aligned_tokens || y.matches - x.matches);
 }
 
-function MatchCard({
-  m,
-  expanded,
-  onToggle,
-  onVerdict,
-  targetPage,
-  queryPage,
-  onShowQuery,
-}: {
-  m: MatchRow;
-  expanded: boolean;
-  onToggle: () => void;
-  onVerdict: (m: MatchRow, v: 'confirmed' | 'rejected') => void;
-  targetPage: (ref: PageRef) => Promise<Page | null>;
-  queryPage: Page | null;
-  onShowQuery: () => void;
-}) {
-  const [target, setTarget] = useState<Page | null>(null);
-  const [query, setQuery] = useState<Page | null>(queryPage);
-  useEffect(() => {
-    if (!expanded) return;
-    let alive = true;
-    targetPage(m.target).then((p) => alive && setTarget(p)).catch(() => {});
-    if (!queryPage) targetPage({ book_id: m.book_id, part_index: m.part_index, page_id: m.page_id }).then((p) => alive && setQuery(p)).catch(() => {});
-    else setQuery(queryPage);
-    return () => {
-      alive = false;
-    };
-  }, [expanded, m, targetPage, queryPage]);
-
-  const c = m.components;
-  const qPair = new Map<number, number>();
-  const tPair = new Map<number, number>();
-  m.pairs.forEach(([q, t], i) => {
-    qPair.set(q, i);
-    tPair.set(t, i);
-  });
-  const qSurface = (i: number) => query?.tokens[i]?.surface ?? '';
-
-  return (
-    <div className={`px-3 py-2 border-t border-app-border-light text-xs ${m.user_verdict === 'rejected' ? 'opacity-60' : ''}`} data-testid={`match-${m.id}`}>
-      <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={onToggle} className="font-mono text-app-accent" aria-expanded={expanded}>
-          {expanded ? '▾' : '▸'}
-        </button>
-        <span className="font-semibold tabular-nums">{m.score.toFixed(3)}</span>
-        <span className={`px-1 rounded type-${m.kind}`}>{m.kind}</span>
-        {m.zone && <span className="px-1 rounded bg-app-surface-variant" title="Zone of the query span (§4.3)">{m.zone}</span>}
-        <span className="text-app-text-tertiary" title="coverage · lemma · root · surface · banal share → factor · aligned pairs">
-          cov {c.coverage.toFixed(2)} · lem {c.lemma_agree.toFixed(2)} · root {c.root_agree.toFixed(2)} · surf {c.surface_agree.toFixed(2)} · banal {c.banal_share.toFixed(2)}→{c.banality_factor.toFixed(2)} · {c.aligned} pairs
-        </span>
-        <span className="text-app-text-tertiary">
-          {m.target.part_index}:{m.target.page_id} [{m.t_start}–{m.t_end})
-        </span>
-        <button onClick={onShowQuery} className="text-app-accent underline" title="Show the query span in the reader">
-          {m.part_index}:{m.page_id} [{m.tok_start}–{m.tok_end})
-        </button>
-        <span className="ml-auto flex items-center gap-1">
-          <button onClick={() => onVerdict(m, 'confirmed')} className={`px-2 py-0.5 rounded border ${m.user_verdict === 'confirmed' ? 'bg-green-600 text-white border-green-600' : 'border-app-border-medium'}`} aria-label={`Confirm match ${m.id}`}>
-            ✓
-          </button>
-          <button onClick={() => onVerdict(m, 'rejected')} className={`px-2 py-0.5 rounded border ${m.user_verdict === 'rejected' ? 'bg-red-600 text-white border-red-600' : 'border-app-border-medium'}`} aria-label={`Reject match ${m.id}`}>
-            ✗
-          </button>
-        </span>
-      </div>
-      <div className="font-arabic mt-1 leading-7" dir="rtl">
-        {target ? (
-          target.tokens.slice(m.t_start, m.t_end).map((t, k) => {
-            const i = m.t_start + k;
-            const pi = tPair.get(i);
-            const q = pi != null ? m.pairs[pi][0] : null;
-            const same = q != null && query && normalizeArabic(qSurface(q)) === normalizeArabic(t.surface);
-            return (
-              <span key={i} className={pi != null ? (same ? 'tok-aligned-same' : 'tok-aligned') : 'text-app-text-tertiary'}>
-                {t.surface}{' '}
-              </span>
-            );
-          })
-        ) : (
-          <span className="text-app-text-tertiary">{expanded ? 'loading…' : m.snapshot.slice(0, 120)}</span>
-        )}
-      </div>
-      {expanded && query && target && (
-        <div className="grid grid-cols-2 gap-3 mt-2 font-arabic leading-7 border-t border-app-border-light pt-2" dir="rtl" data-testid="side-by-side">
-          <div>
-            <div className="text-[10px] text-app-text-tertiary mb-1" dir="ltr">
-              query
-            </div>
-            {query.tokens.slice(m.tok_start, m.tok_end).map((t, k) => {
-              const i = m.tok_start + k;
-              const pi = qPair.get(i);
-              return (
-                <span key={i} className={pi != null ? `lay-pair-${pi % 8}` : 'text-app-text-tertiary'}>
-                  {t.surface}{' '}
-                </span>
-              );
-            })}
-          </div>
-          <div>
-            <div className="text-[10px] text-app-text-tertiary mb-1" dir="ltr">
-              target
-            </div>
-            {target.tokens.slice(m.t_start, m.t_end).map((t, k) => {
-              const i = m.t_start + k;
-              const pi = tPair.get(i);
-              return (
-                <span key={i} className={pi != null ? `lay-pair-${pi % 8}` : 'text-app-text-tertiary'}>
-                  {t.surface}{' '}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Enough of `normalize_arabic` for "same surface" emphasis: alef forms,
- *  tāʾ marbūṭa, alef maqṣūra, tashkil. */
+/** Enough of `normalize_arabic` for "same surface" emphasis. */
 export function normalizeArabic(s: string): string {
   return s
-    .replace(/[ً-ٰٟ]/g, '')
+    .replace(/[ً-ٰٟ]/g, '')
     .replace(/[أإآٱ]/g, 'ا')
     .replace(/ى/g, 'ي')
     .replace(/ة/g, 'ه');

@@ -18,6 +18,9 @@ const api = vi.hoisted(() => {
   };
   const lab = {
     listPageRefs: vi.fn(),
+    listPages: vi.fn(async (): Promise<unknown[]> => []),
+    runSize: vi.fn(async () => ({ book_id: 0, pages: 1, book_pages: 1, tokens: 10, book_tokens: 10 })),
+    statsPause: vi.fn(async () => {}),
     getPage: vi.fn(),
     statsCancel: vi.fn(),
   };
@@ -69,9 +72,9 @@ beforeEach(() => {
 });
 
 describe('PoetryPanel', () => {
-  it('asks for a book first', () => {
+  it('asks for a text first', () => {
     render(<PoetryPanel book={null} />);
-    expect(screen.getByText(/Choose a book/)).toBeInTheDocument();
+    expect(screen.getByText(/Open a text from the workspace/)).toBeInTheDocument();
   });
 
   it('scans, lists verses with meter / unknown, filters, layers the reader, and exports', async () => {

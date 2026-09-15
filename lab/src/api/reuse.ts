@@ -8,7 +8,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { PageRef } from './lab';
+import type { PageRef, PageSpan } from './lab';
 
 export type MatchType = 'verbatim' | 'inflected' | 'paraphrase' | 'formulaic' | 'weak';
 export type Zone = 'quran' | 'isnad';
@@ -96,6 +96,8 @@ export interface MatchRow {
   target_title: string | null;
   target_author: number | null;
   target_death_ah: number | null;
+  /** The target book's part count, for its page label (spec 1.5 C1). */
+  target_parts: number | null;
   t_start: number;
   t_end: number;
   /** `[query idx, target idx]`, page-absolute. */
@@ -202,8 +204,11 @@ export const reuseApi = {
   verdict: (matchId: number, verdict: Verdict | null) => invoke<MatchRow>('reuse_verdict', { matchId, verdict }),
   runs: (bookId: number) => invoke<RunRow[]>('reuse_runs', { bookId }),
   matches: (runId: number) => invoke<MatchRow[]>('reuse_matches', { runId }),
-  estimate: (bookId: number, params?: ReuseParams) => invoke<Estimate>('reuse_estimate', { bookId, params }),
-  book: (bookId: number, params?: ReuseParams) => invoke<BookRunSummary>('reuse_book', { bookId, params }),
+  /** `span` limits the run to a section or a page range (spec 1.5 H3). */
+  estimate: (bookId: number, params?: ReuseParams, span?: PageSpan | null) =>
+    invoke<Estimate>('reuse_estimate', { bookId, params, span: span ?? null }),
+  book: (bookId: number, params?: ReuseParams, span?: PageSpan | null) =>
+    invoke<BookRunSummary>('reuse_book', { bookId, params, span: span ?? null }),
   pageLayer: (runId: number, partIndex: number, pageId: number, threshold: number) =>
     invoke<LayerSpan[]>('reuse_page_layer', { runId, partIndex, pageId, threshold }),
   export: (runId: number, format: 'csv' | 'json') => invoke<string>('reuse_export', { runId, format }),

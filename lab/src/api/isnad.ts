@@ -9,6 +9,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { PageSpan } from './lab';
 
 export type TokenClass = 'formula' | 'verb' | 'connect' | 'name' | 'other' | 'boundary';
 export type IsnadStatus = 'candidate' | 'confirmed' | 'rejected' | 'orphaned';
@@ -124,15 +125,20 @@ export interface RunProgress {
   total: number;
   found: number;
   estimate_ms: number | null;
+  /** The candidates this page produced, so the list fills as the run goes. */
+  rows: IsnadRow[];
 }
 
 export interface RunSummary {
   book_id: number;
+  /** Pages actually read: fewer than the scope when the run was cancelled. */
   pages: number;
   candidates: number;
   kept_confirmed: number;
   elapsed_ms: number;
   lexicon_hash: string;
+  /** The reader stopped it; everything found up to then is kept (spec 1.5 F2). */
+  cancelled: boolean;
 }
 
 export interface LexiconEntry {
@@ -174,7 +180,9 @@ export interface Applied {
 }
 
 export const isnadApi = {
-  run: (bookId: number, params?: Params) => invoke<RunSummary>('isnad_run', { bookId, params: params ?? null }),
+  /** `span` limits the run to a section or a page range (spec 1.5 G). */
+  run: (bookId: number, params?: Params, span?: PageSpan | null) =>
+    invoke<RunSummary>('isnad_run', { bookId, params: params ?? null, span: span ?? null }),
   onRunProgress: (fn: (p: RunProgress) => void) => listen<RunProgress>('isnad-progress', (e) => fn(e.payload)),
   list: (bookId: number, filter?: IsnadFilter) => invoke<IsnadRow[]>('isnad_list', { bookId, filter: filter ?? null }),
   get: (id: number) => invoke<IsnadRow>('isnad_get', { id }),
@@ -259,11 +267,6 @@ export function layersFor(row: IsnadRow, classes: [number, TokenClass][], offset
 export function spansPages(row: IsnadRow): boolean {
   const notStart = (p: number | null, g: number | null) => p != null && g != null && (p !== row.part_index || g !== row.page_id);
   return notStart(row.end_part_index, row.end_page_id) || notStart(row.matn_end_part_index, row.matn_end_page_id);
-}
-
-/** `vol:page`, or just the page for a single-part book (fix 10b). */
-export function pageLabel(partIndex: number, pageId: number, parts: number | null | undefined): string {
-  return parts != null && parts <= 1 ? String(pageId) : `${partIndex}:${pageId}`;
 }
 
 /**

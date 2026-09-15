@@ -19,8 +19,15 @@ const api = vi.hoisted(() => {
   const isnad = {
     transmitters: vi.fn(),
   };
-  return { network, isnad };
+  const lab = {
+    listPages: vi.fn(async (): Promise<unknown[]> => []),
+    runSize: vi.fn(async () => ({ book_id: 0, pages: 1, book_pages: 1, tokens: 10, book_tokens: 10 })),
+    statsPause: vi.fn(async () => {}),
+  };
+  return { network, isnad, lab };
 });
+
+vi.mock('../../api/lab', () => ({ labApi: api.lab }));
 
 vi.mock('../../api/phase4', async () => {
   const real = await vi.importActual<typeof import('../../api/phase4')>('../../api/phase4');
@@ -62,9 +69,9 @@ beforeEach(() => {
 });
 
 describe('NetworkPanel', () => {
-  it('asks for a book first', () => {
+  it('asks for a text first', () => {
     render(<NetworkPanel book={null} />);
-    expect(screen.getByText(/Choose a book/)).toBeInTheDocument();
+    expect(screen.getByText(/Open a text from the workspace/)).toBeInTheDocument();
   });
 
   it('draws the graph with the view controls and lists the direct sources', async () => {

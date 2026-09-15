@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
 import { labApi, type Page, type PageRef } from '../../api/lab';
-import { pageLabel } from '../../api/isnad';
+import { usePages } from '../../api/pages';
 import { meterLabel, poetryApi, type PoetryProgress, type PoetryScan, type VerseRow } from '../../api/phase4';
 import { Reader } from '../Reader';
 import { VirtualTable, type Column } from '../stats/VirtualTable';
@@ -21,6 +21,7 @@ interface Props {
 
 export function PoetryPanel({ book }: Props) {
   const bookId = book?.id ?? null;
+  const labels = usePages(bookId, book?.parts);
   const [scan, setScan] = useState<PoetryScan | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<PoetryProgress | null>(null);
@@ -128,13 +129,13 @@ export function PoetryPanel({ book }: Props) {
     { key: 'meter', label: 'Meter', sortValue: (r) => meterLabel(r), rtl: true, width: '150px', render: (r) => <span className={r.meters.length === 0 ? 'text-app-text-tertiary' : ''} title={r.pattern || (r.vowelled < 0.6 ? 'not vowelled enough to scan' : 'scans as no meter')}>{meterLabel(r)}</span> },
     { key: 'h1', label: 'First hemistich', sortValue: (r) => r.h1_text, rtl: true, width: 'minmax(220px, 4fr)', render: (r) => r.h1_text },
     { key: 'h2', label: 'Second', sortValue: (r) => r.h2_text, rtl: true, width: 'minmax(180px, 3fr)', render: (r) => <span className="text-app-text-secondary">{r.h2_text}</span> },
-    { key: 'page', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', defaultSort: 'asc', render: (r) => pageLabel(r.part_index, r.page_id, book?.parts) },
+    { key: 'page', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', defaultSort: 'asc', render: (r) => labels.label(r.part_index, r.page_id) },
     { key: 'marker', label: 'Split by', sortValue: (r) => r.marker, width: '80px', render: (r) => r.marker },
     { key: 'vow', label: 'Vowelled', sortValue: (r) => r.vowelled, align: 'right', width: '80px', render: (r) => `${Math.round(r.vowelled * 100)}%` },
   ];
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Choose a book in Books first.</div>;
+    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
   }
 
   return (

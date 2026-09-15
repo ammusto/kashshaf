@@ -19,6 +19,10 @@ export interface LabStatus {
   api_base: string | null;
   /** Whether the server implements the bulk token fetch (spec §5.1). */
   bulk_tokens: boolean;
+  /** Whether this corpus has a table of contents (spec 1.5 B1). */
+  toc: boolean;
+  toc_error: string | null;
+  min_toc_corpus_version: string;
   lab_dir: string | null;
   lab_version: string;
   /** Why local mode was not used, when it was not. */
@@ -27,10 +31,41 @@ export interface LabStatus {
   api_error: string | null;
 }
 
+/** A row of `metadata.db`'s author or genre table (spec 1.5 A1). */
+export interface NamedId {
+  id: number;
+  name: string;
+}
+
 export interface PageRef {
   book_id: number;
   part_index: number;
   page_id: number;
+}
+
+/**
+ * A page of the reader's list: coordinates plus the labels the book prints
+ * on it, which every page label is built from (spec 1.5 C1).
+ */
+export interface PageEntry extends PageRef {
+  page_number: string;
+  part_label: string;
+}
+
+/** A run's scope as page coordinates, `end` exclusive (spec 1.5 G, H3). */
+export interface PageSpan {
+  start: [number, number];
+  end: [number, number] | null;
+}
+
+/** What a run is about to read (spec 1.5 F4). */
+export interface RunSize {
+  book_id: number;
+  pages: number;
+  book_pages: number;
+  /** Estimated from the book's totals, not counted. */
+  tokens: number;
+  book_tokens: number;
 }
 
 export interface Page extends PageRef {
@@ -302,8 +337,15 @@ export const labApi = {
 
   listBooks: () => invoke<BookMetadata[]>('list_books'),
   getBook: (id: number) => invoke<BookMetadata | null>('get_book', { id }),
+  /** Author and genre names, for the text browser's search and filters. */
+  listAuthors: () => invoke<NamedId[]>('list_authors'),
+  listGenres: () => invoke<NamedId[]>('list_genres'),
   openBook: (id: number) => invoke<BookOpen>('open_book', { id }),
   listPageRefs: (id: number) => invoke<PageRef[]>('list_page_refs', { id }),
+  /** The page list with printed numbers — what page labels need (spec 1.5 C1). */
+  listPages: (id: number) => invoke<PageEntry[]>('list_pages', { id }),
+  /** Pages and estimated tokens a run would read (spec 1.5 F4). */
+  runSize: (id: number, span: PageSpan | null) => invoke<RunSize>('run_size', { id, span }),
   getPage: (id: number, partIndex: number, pageId: number) =>
     invoke<Page | null>('get_page', { id, partIndex, pageId }),
 
@@ -316,6 +358,8 @@ export const labApi = {
   // --- stats ---
   statsLoadBook: (bookId: number) => invoke<LoadSummary>('stats_load_book', { bookId }),
   statsCancel: () => invoke<void>('stats_cancel'),
+  /** Pause or resume the running operation (spec 1.5 F3). */
+  statsPause: (paused: boolean) => invoke<void>('stats_pause', { paused }),
   onStatsProgress: (fn: (p: Progress) => void) =>
     listen<Progress>('stats-progress', (e) => fn(e.payload)),
   statsPageLabels: (bookId: number) => invoke<PageLabel[]>('stats_page_labels', { bookId }),

@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
-import { labApi, rustErr, rustOk, type FreqStatus, type LabStatus, type Page, type PageRef, type Progress } from './api/lab';
-import { ModeBadge, UnavailableNotice } from './components/ModeBadge';
-import { BookBrowser } from './components/BookBrowser';
-import { Reader } from './components/Reader';
+import { labApi, type LabStatus } from './api/lab';
+import { workspaceApi, type WorkspaceEntry } from './api/workspace';
+import type { At } from './api/pages';
+import { UnavailableNotice } from './components/ModeBadge';
+import { MenuBar } from './components/MenuBar';
+import { WorkspaceView } from './components/workspace/WorkspaceView';
+import { ReadPanel } from './components/read/ReadPanel';
+import { SearchPanel } from './components/search/SearchPanel';
+import { SettingsPanel } from './components/SettingsPanel';
 import { StatsPanel, type HitRef } from './components/stats/StatsPanel';
 import { IsnadWorkbench } from './components/isnad/IsnadWorkbench';
 import { ReusePanel } from './components/reuse/ReusePanel';
@@ -12,48 +17,53 @@ import { NetworkPanel } from './components/network/NetworkPanel';
 import { PoetryPanel } from './components/poetry/PoetryPanel';
 
 /**
- * The Lab shell (spec §7.1).
+ * The Lab shell (spec 1.5 §A3).
  *
- * The left rail names every panel the spec plans, with the ones their phases
- * have not delivered shown disabled and labelled — not hidden. That is ground
- * rule 5 applied to the roadmap as well as to the modes: the user can see what
- * Lab is for, and what it cannot do yet.
+ * Lab opens on the workspace, not on a panel: the unit of work is a text you
+ * have chosen to work on, and the left rail is what you can do to the one that
+ * is open. Everything about Lab itself — Settings, About, the way back to the
+ * workspace — is in the menu bar above.
  */
 
-interface Panel {
-  id: string;
-  label: string;
-  /** The phase that delivers it; undefined means it is here now. */
-  phase?: number;
-}
-
-const PANELS: Panel[] = [
-  { id: 'books', label: 'Books' },
+const PANELS = [
+  { id: 'read', label: 'Read' },
+  { id: 'search', label: 'Search' },
   { id: 'stats', label: 'Stats' },
   { id: 'isnad', label: 'Isnād' },
   { id: 'reuse', label: 'Reuse' },
   { id: 'quran', label: 'Qurʾān' },
   { id: 'network', label: 'Network' },
   { id: 'poetry', label: 'Poetry (exp.)' },
-  { id: 'settings', label: 'Settings' },
-];
+] as const;
+
+type PanelId = (typeof PANELS)[number]['id'];
 
 export default function App() {
   const [status, setStatus] = useState<LabStatus | null>(null);
   const [rechecking, setRechecking] = useState(false);
-  const [panel, setPanel] = useState('books');
 
   const [books, setBooks] = useState<BookMetadata[]>([]);
+  const [authors, setAuthors] = useState<Map<number, string>>(new Map());
+  const [genres, setGenres] = useState<Map<number, string>>(new Map());
   const [booksLoading, setBooksLoading] = useState(false);
   const [booksError, setBooksError] = useState<string | null>(null);
 
+  const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [current, setCurrent] = useState<BookMetadata | null>(null);
-  const [pages, setPages] = useState<PageRef[]>([]);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [page, setPage] = useState<Page | null>(null);
-  const [pageLoading, setPageLoading] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
-  const [highlight, setHighlight] = useState<[number, number] | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+
+  const [view, setView] = useState<'workspace' | 'text'>('workspace');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [panel, setPanel] = useState<PanelId>('read');
+
+  /** Where the Read panel should open, when another panel sends it there. */
+  const [readAt, setReadAt] = useState<At | null>(null);
+  const [readMark, setReadMark] = useState<[number, number] | null>(null);
+  /** A passage handed to Reuse by "Find reuse" (spec §C4, §H1). */
+  const [reuseFrom, setReuseFrom] = useState<{ at: At; range: [number, number] } | null>(null);
+
+  const [dirty, setDirty] = useState(false);
+  const [saveNote, setSaveNote] = useState<string | null>(null);
 
   useEffect(() => {
     labApi.status().then(setStatus).catch((e) => {
@@ -66,7 +76,10 @@ export default function App() {
     setBooksLoading(true);
     setBooksError(null);
     try {
-      setBooks(await labApi.listBooks());
+      const [bs, as, gs] = await Promise.all([labApi.listBooks(), labApi.listAuthors(), labApi.listGenres()]);
+      setBooks(bs);
+      setAuthors(new Map(as.map((a) => [a.id, a.name])));
+      setGenres(new Map(gs.map((g) => [g.id, g.name])));
     } catch (e) {
       setBooks([]);
       setBooksError(String(e));
@@ -75,9 +88,20 @@ export default function App() {
     }
   }, []);
 
+  const loadWorkspace = useCallback(async () => {
+    try {
+      setEntries(await workspaceApi.list());
+    } catch (e) {
+      console.error('workspace_list failed', e);
+    }
+  }, []);
+
   useEffect(() => {
-    if (status && status.mode !== 'unavailable') void loadBooks();
-  }, [status, loadBooks]);
+    if (status && status.mode !== 'unavailable') {
+      void loadBooks();
+      void loadWorkspace();
+    }
+  }, [status, loadBooks, loadWorkspace]);
 
   const recheck = async () => {
     setRechecking(true);
@@ -90,337 +114,225 @@ export default function App() {
     }
   };
 
-  const openBook = async (id: number) => {
-    setPageLoading(true);
-    setPageError(null);
-    setHighlight(null);
-    try {
-      const opened = await labApi.openBook(id);
-      setCurrent(opened.book);
-      setPages(opened.pages);
-      setPageIndex(0);
-      setPage(opened.first);
-    } catch (e) {
-      setCurrent(books.find((b) => b.id === id) ?? null);
-      setPages([]);
-      setPage(null);
-      setPageError(String(e));
-    } finally {
-      setPageLoading(false);
-    }
-  };
+  /** Open a workspace text: the DB and the folder agree, then the panels load it. */
+  const openText = useCallback(
+    async (bookId: number) => {
+      setOpenError(null);
+      try {
+        const opened = await workspaceApi.open(bookId);
+        const book = books.find((b) => b.id === bookId) ?? (await labApi.getBook(bookId));
+        setCurrent(book ?? null);
+        setReadAt(opened.state.last_page ? { part_index: opened.state.last_page[0], page_id: opened.state.last_page[1] } : null);
+        setReadMark(null);
+        setReuseFrom(null);
+        setView('text');
+        setSettingsOpen(false);
+        setPanel('read');
+        void loadWorkspace();
+        if (opened.imported && importedAnything(opened.imported)) {
+          setSaveNote(
+            `Read back from the folder: ${opened.imported.isnads} isnāds, ${opened.imported.reuse} reuse verdicts, ` +
+              `${opened.imported.quran} Qurʾān verdicts, ${opened.imported.notes} notes` +
+              (opened.imported.reanchored ? `, ${opened.imported.reanchored} re-anchored` : '') +
+              (opened.imported.orphaned ? `, ${opened.imported.orphaned} that no longer fit the text` : '')
+          );
+        }
+      } catch (e) {
+        setOpenError(String(e));
+      }
+    },
+    [books, loadWorkspace]
+  );
 
-  const goToPage = async (next: number, mark: [number, number] | null = null) => {
-    if (next < 0 || next >= pages.length) return;
-    const ref = pages[next];
-    setPageLoading(true);
-    setPageError(null);
+  /** Ctrl+S: write everything about the open text out to its folder (§A2). */
+  const saveAll = useCallback(async () => {
+    if (!current) return;
     try {
-      const p = await labApi.getPage(ref.book_id, ref.part_index, ref.page_id);
-      setPageIndex(next);
-      setPage(p);
-      setHighlight(mark);
+      const report = await workspaceApi.export(current.id);
+      setDirty(false);
+      setSaveNote(
+        report
+          ? `Saved to ${report.dir}: ${report.confirmed_isnads} isnāds, ${report.transmitters} transmitters, ` +
+              `${report.reuse_verdicts} reuse verdicts, ${report.quran_verdicts} Qurʾān verdicts, ${report.notes} notes.`
+          : 'This text is not in the workspace, so there is no folder to save into.'
+      );
     } catch (e) {
-      setPageError(String(e));
-    } finally {
-      setPageLoading(false);
+      setSaveNote(String(e));
     }
-  };
+  }, [current]);
 
-  /** A concordance row or section heading: open the reader there, marked. */
-  const showHit = (hit: HitRef) => {
-    const idx = pages.findIndex((p) => p.part_index === hit.part_index && p.page_id === hit.page_id);
-    if (idx < 0) return;
-    setPanel('books');
-    void goToPage(idx, [hit.tok_start, hit.tok_end]);
-  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void saveAll();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [saveAll]);
+
+  useEffect(() => {
+    if (!saveNote) return;
+    const t = setTimeout(() => setSaveNote(null), 8000);
+    return () => clearTimeout(t);
+  }, [saveNote]);
+
+  /** A concordance row, a section heading, a search hit: read it there. */
+  const showHit = useCallback((hit: HitRef) => {
+    setReadAt({ part_index: hit.part_index, page_id: hit.page_id });
+    setReadMark([hit.tok_start, hit.tok_end]);
+    setPanel('read');
+    setSettingsOpen(false);
+    setView('text');
+  }, []);
+
+  const toWorkspace = useCallback(() => {
+    setView('workspace');
+    setSettingsOpen(false);
+    void loadWorkspace();
+  }, [loadWorkspace]);
+
+  const title = current?.title ?? null;
+  const showRail = view === 'text' && !settingsOpen && status?.mode !== 'unavailable';
+
+  const body = useMemo(() => {
+    if (status?.mode === 'unavailable') {
+      return (
+        <main className="flex-1 overflow-y-auto">
+          <UnavailableNotice status={status} />
+        </main>
+      );
+    }
+    if (settingsOpen) {
+      return (
+        <main className="flex-1 overflow-y-auto p-6">
+          <SettingsPanel status={status} />
+        </main>
+      );
+    }
+    if (view === 'workspace') {
+      return (
+        <WorkspaceView
+          entries={entries}
+          currentId={current?.id ?? null}
+          books={books}
+          authors={authors}
+          genres={genres}
+          booksLoading={booksLoading}
+          booksError={booksError}
+          onOpen={(id) => void openText(id)}
+          onChanged={() => void loadWorkspace()}
+        />
+      );
+    }
+    switch (panel) {
+      case 'read':
+        return (
+          <ReadPanel
+            book={current}
+            initialAt={readAt}
+            highlight={readMark}
+            onFindReuse={(sel) => {
+              setReuseFrom({ at: sel.at, range: sel.range });
+              setPanel('reuse');
+            }}
+            onPageChange={(at) => {
+              if (current) void workspaceApi.saveState(current.id, { last_page: [at.part_index, at.page_id], panels: {} }).catch(() => {});
+            }}
+            onNotesChanged={() => {
+              setDirty(true);
+              void loadWorkspace();
+            }}
+          />
+        );
+      case 'search':
+        return (
+          <SearchPanel
+            book={current}
+            onShowHit={(at, matched) => {
+              setReadAt(at);
+              setReadMark(matched.length > 0 ? [Math.min(...matched), Math.max(...matched) + 1] : null);
+              setPanel('read');
+            }}
+          />
+        );
+      case 'stats':
+        return <StatsPanel book={current} onShowHit={showHit} />;
+      case 'isnad':
+        return <IsnadWorkbench book={current} onChanged={() => setDirty(true)} />;
+      case 'reuse':
+        return <ReusePanel book={current} local={status?.mode === 'local'} from={reuseFrom} onChanged={() => setDirty(true)} />;
+      case 'quran':
+        return <QuranPanel book={current} onChanged={() => setDirty(true)} />;
+      case 'network':
+        return <NetworkPanel book={current} />;
+      case 'poetry':
+        return <PoetryPanel book={current} />;
+    }
+  }, [
+    status,
+    settingsOpen,
+    view,
+    entries,
+    current,
+    books,
+    authors,
+    genres,
+    booksLoading,
+    booksError,
+    openText,
+    loadWorkspace,
+    panel,
+    readAt,
+    readMark,
+    reuseFrom,
+    showHit,
+  ]);
 
   return (
     <div className="h-screen flex flex-col bg-app-bg text-app-text-primary">
-      <header className="flex items-center justify-between px-4 py-2 border-b border-app-border-light bg-app-surface">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-base font-semibold">Kashshaf Lab</h1>
-          {status && (
-            <span className="text-xs text-app-text-tertiary">{status.lab_version}</span>
-          )}
+      <MenuBar
+        status={status}
+        onRecheck={recheck}
+        rechecking={rechecking}
+        onWorkspace={toWorkspace}
+        onSettings={() => setSettingsOpen((v) => !v)}
+        inWorkspaceView={view === 'workspace' && !settingsOpen}
+        settingsOpen={settingsOpen}
+        currentTitle={title}
+        dirty={dirty}
+        onSave={() => void saveAll()}
+      />
+
+      {(saveNote || openError) && (
+        <div className={`px-4 py-1 text-xs border-b border-app-border-light ${openError ? 'text-app-error' : 'text-app-text-secondary'}`} role="status">
+          {openError ?? saveNote}
         </div>
-        <div className="flex items-center gap-4">
-          {current && (
-            <span className="font-arabic text-sm text-app-text-secondary truncate max-w-md" dir="rtl">
-              {current.title}
-            </span>
-          )}
-          <ModeBadge status={status} onRetry={recheck} busy={rechecking} />
-        </div>
-      </header>
+      )}
 
       <div className="flex-1 flex min-h-0">
-        <nav className="w-40 border-r border-app-border-light bg-app-surface flex flex-col py-2">
-          {PANELS.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => !p.phase && setPanel(p.id)}
-              disabled={!!p.phase}
-              title={p.phase ? `Arrives in Phase ${p.phase}` : undefined}
-              className={`text-left px-4 py-2 text-sm ${
-                p.phase
-                  ? 'text-app-text-tertiary cursor-not-allowed'
-                  : panel === p.id
-                    ? 'bg-app-accent-light text-app-accent font-medium'
-                    : 'hover:bg-app-surface-variant'
-              }`}
-            >
-              {p.label}
-              {p.phase && <span className="block text-[10px]">Phase {p.phase}</span>}
-            </button>
-          ))}
-        </nav>
-
-        {status?.mode === 'unavailable' ? (
-          <main className="flex-1 overflow-y-auto">
-            <UnavailableNotice status={status} />
-          </main>
-        ) : panel === 'settings' ? (
-          <main className="flex-1 overflow-y-auto p-6">
-            <SettingsPanel status={status} />
-          </main>
-        ) : panel === 'stats' ? (
-          <main className="flex-1 min-h-0">
-            <StatsPanel book={current} onShowHit={showHit} />
-          </main>
-        ) : panel === 'isnad' ? (
-          <main className="flex-1 min-h-0">
-            <IsnadWorkbench book={current} />
-          </main>
-        ) : panel === 'reuse' ? (
-          <main className="flex-1 min-h-0">
-            <ReusePanel book={current} local={status?.mode === 'local'} />
-          </main>
-        ) : panel === 'quran' ? (
-          <main className="flex-1 min-h-0">
-            <QuranPanel book={current} />
-          </main>
-        ) : panel === 'network' ? (
-          <main className="flex-1 min-h-0">
-            <NetworkPanel book={current} />
-          </main>
-        ) : panel === 'poetry' ? (
-          <main className="flex-1 min-h-0">
-            <PoetryPanel book={current} />
-          </main>
-        ) : (
-          <main className="flex-1 flex min-h-0">
-            <aside className="w-80 border-r border-app-border-light bg-app-surface">
-              <BookBrowser
-                books={books}
-                currentId={current?.id ?? null}
-                onSelect={openBook}
-                loading={booksLoading}
-                error={booksError}
-              />
-            </aside>
-            <section className="flex-1 min-w-0">
-              <Reader
-                page={page}
-                pages={pages}
-                index={pageIndex}
-                onNavigate={(i) => goToPage(i)}
-                highlight={highlight}
-                loading={pageLoading}
-                error={pageError}
-              />
-            </section>
-          </main>
+        {showRail && (
+          <nav className="w-36 shrink-0 border-r border-app-border-light bg-app-surface flex flex-col py-2" aria-label="Panels">
+            {PANELS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setPanel(p.id)}
+                className={`text-left px-4 py-2 text-sm ${
+                  panel === p.id ? 'bg-app-accent-light text-app-accent font-medium' : 'hover:bg-app-surface-variant'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </nav>
         )}
+        {body}
       </div>
     </div>
   );
 }
 
-/** Mode, corpus, Lab's directory, stop words and the frequency snapshot (spec §7.8). */
-function SettingsPanel({ status }: { status: LabStatus | null }) {
-  const [dirs, setDirs] = useState<Awaited<ReturnType<typeof labApi.dirs>> | null>(null);
-  useEffect(() => {
-    labApi.dirs().then(setDirs).catch(() => setDirs(null));
-  }, []);
-  if (!status) return <p className="text-sm text-app-text-tertiary">Loading…</p>;
-
-  const rows: [string, string][] = [
-    ['Mode', status.mode],
-    ['Corpus version', status.corpus_version ?? '—'],
-    ['Corpus directory', status.corpus_dir ?? '—'],
-    ['API', status.api_base ?? '—'],
-    ['Bulk token fetch (§5.1)', status.bulk_tokens ? 'available' : 'not available'],
-    ['Lab directory', status.lab_dir ?? '—'],
-    ['analysis.db', dirs?.analysis_db ?? '—'],
-    ['analysis.db schema', dirs?.schema_version != null ? String(dirs.schema_version) : '—'],
-    ['Lab version', status.lab_version],
-  ];
-
-  return (
-    <div className="max-w-3xl space-y-8">
-      <section>
-        <h2 className="text-lg font-semibold mb-4">Settings</h2>
-        <dl className="text-sm border border-app-border-light rounded overflow-hidden">
-          {rows.map(([k, v]) => (
-            <div key={k} className="flex border-b border-app-border-light last:border-b-0">
-              <dt className="w-56 px-3 py-2 bg-app-surface-variant text-app-text-secondary">{k}</dt>
-              <dd className="flex-1 px-3 py-2 break-all">{v}</dd>
-            </div>
-          ))}
-        </dl>
-        <button
-          onClick={() => labApi.openLabDirectory()}
-          className="mt-4 px-3 py-1.5 text-sm border border-app-border-medium rounded hover:bg-app-surface-variant"
-        >
-          Open Lab folder
-        </button>
-      </section>
-
-      <FreqSnapshotSettings local={status.mode === 'local'} />
-      <StopwordSettings />
-
-      <p className="text-xs text-app-text-tertiary">
-        The lexicon editor, algorithm defaults, export directory and “Export
-        everything” arrive with the phases that produce something to export.
-      </p>
-    </div>
-  );
-}
-
-/** Corpus frequencies (spec §3.4): present, or why not, and the local build. */
-function FreqSnapshotSettings({ local }: { local: boolean }) {
-  const [status, setStatus] = useState<FreqStatus | null>(null);
-  const [progress, setProgress] = useState<Progress | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(() => {
-    labApi.statsFreqStatus().then(setStatus).catch((e) => setError(String(e)));
-  }, []);
-  useEffect(refresh, [refresh]);
-  useEffect(() => {
-    let un: (() => void) | undefined;
-    labApi.onStatsProgress((p) => p.stage === 'freq' && setProgress(p)).then((u) => (un = u)).catch(() => {});
-    return () => un?.();
-  }, []);
-
-  const build = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      setStatus(await labApi.statsBuildFreqTables());
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-      setProgress(null);
-    }
-  };
-
-  const line = (label: string, r: FreqStatus[keyof FreqStatus] | undefined) =>
-    r === undefined ? '…' : rustOk(r) != null ? `${label}: ${rustOk(r)!.toLocaleString()} entries` : `${label}: ${rustErr(r)}`;
-
-  return (
-    <section>
-      <h3 className="text-base font-semibold mb-2">Corpus frequencies</h3>
-      <p className="text-xs text-app-text-secondary mb-2">
-        Keyness compares the book with the whole corpus using a frequency snapshot shipped with the
-        corpus (spec §3.4). If the corpus you have does not include it, local mode can build it
-        here — one scan of the corpus, several minutes on the full 4.1.0.
-      </p>
-      <div className="text-sm space-y-1" data-testid="freq-status">
-        <div>{line('Lemmas', status?.lemma)}</div>
-        <div>{line('Roots', status?.root)}</div>
-      </div>
-      {progress && (
-        <div className="text-xs text-app-text-secondary mt-2" role="status">
-          Scanning: {progress.done.toLocaleString()} / {progress.total.toLocaleString()} books
-          {progress.estimate_ms != null && ` · about ${Math.ceil(progress.estimate_ms / 1000)} s in all`}
-          <button onClick={() => labApi.statsCancel()} className="ml-3 px-2 py-0.5 border border-app-border-medium rounded">
-            Cancel
-          </button>
-        </div>
-      )}
-      {error && (
-        <div className="text-sm text-app-error mt-2" role="alert">
-          {error}
-        </div>
-      )}
-      <button
-        onClick={build}
-        disabled={!local || busy}
-        title={local ? undefined : 'Building the snapshot needs a local corpus'}
-        className="mt-3 px-3 py-1.5 text-sm border border-app-border-medium rounded hover:bg-app-surface-variant disabled:opacity-40"
-      >
-        {busy ? 'Building…' : 'Build frequency snapshot'}
-      </button>
-    </section>
-  );
-}
-
-/** The stop list (spec §4.1): shipped default, editable, resettable. */
-function StopwordSettings() {
-  const [text, setText] = useState('');
-  const [count, setCount] = useState<number | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const w = await labApi.getStopwords();
-      setText(w.join('\n'));
-      setCount(w.length);
-    } catch (e) {
-      setMsg(String(e));
-    }
-  }, []);
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const save = async () => {
-    try {
-      const n = await labApi.setStopwords(text.split(/\r?\n/));
-      setCount(n);
-      setMsg(`Saved ${n} stop words. They apply to the next statistic you run.`);
-    } catch (e) {
-      setMsg(String(e));
-    }
-  };
-  const reset = async () => {
-    try {
-      const w = await labApi.resetStopwords();
-      setText(w.join('\n'));
-      setCount(w.length);
-      setMsg('Reset to the shipped list.');
-    } catch (e) {
-      setMsg(String(e));
-    }
-  };
-
-  return (
-    <section>
-      <h3 className="text-base font-semibold mb-2">Stop words</h3>
-      <p className="text-xs text-app-text-secondary mb-2">
-        One lemma per line, as the pipeline writes it (no tashkil). Applied on every layer when the
-        Stats toggle is on. {count != null && `${count} entries.`}
-      </p>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        dir="rtl"
-        aria-label="Stop words"
-        className="w-full h-48 font-arabic text-base border border-app-border-medium rounded p-2"
-      />
-      <div className="flex items-center gap-2 mt-2 text-sm">
-        <button onClick={save} className="px-3 py-1 bg-app-accent text-white rounded">
-          Save
-        </button>
-        <button onClick={reset} className="px-3 py-1 border border-app-border-medium rounded">
-          Reset to default
-        </button>
-        {msg && <span className="text-xs text-app-text-tertiary">{msg}</span>}
-      </div>
-    </section>
-  );
+function importedAnything(r: { isnads: number; reuse: number; quran: number; notes: number; transmitters: number }): boolean {
+  return r.isnads + r.reuse + r.quran + r.notes + r.transmitters > 0;
 }

@@ -26,6 +26,9 @@ const api = vi.hoisted(() => {
   };
   const lab = {
     getPage: vi.fn(),
+    listPages: vi.fn(async (): Promise<unknown[]> => []),
+    runSize: vi.fn(async () => ({ book_id: 0, pages: 1, book_pages: 1, tokens: 10, book_tokens: 10 })),
+    statsPause: vi.fn(async () => {}),
     listPageRefs: vi.fn(async () => [{ book_id: 527, part_index: 0, page_id: 9 }]),
     getSetting: vi.fn(async () => null),
     setSetting: vi.fn(async () => {}),
@@ -191,7 +194,7 @@ describe('IsnadWorkbench', () => {
 
   it('asks for a book first', () => {
     render(<IsnadWorkbench book={null} />);
-    expect(screen.getByText('Choose a book in Books first.')).toBeInTheDocument();
+    expect(screen.getByText('Open a text from the workspace first.')).toBeInTheDocument();
   });
 
   it('shows the current candidate as a structured chain with its confidence components', async () => {
@@ -320,7 +323,7 @@ describe('IsnadWorkbench', () => {
   });
 
   it('runs extraction with the chosen parameters and shows the summary', async () => {
-    api.isnad.run.mockResolvedValue({ book_id: 527, pages: 553, candidates: 412, kept_confirmed: 3, elapsed_ms: 1800, lexicon_hash: 'h' });
+    api.isnad.run.mockResolvedValue({ book_id: 527, pages: 553, candidates: 412, kept_confirmed: 3, elapsed_ms: 1800, lexicon_hash: 'h', cancelled: false });
     render(<IsnadWorkbench book={book} />);
     await screen.findByTestId('structured-chain');
     // The parameters sit behind the gear (fix 9): open, change, apply — persisted.
@@ -329,7 +332,8 @@ describe('IsnadWorkbench', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(api.lab.setSetting).toHaveBeenCalledWith('isnad.params', expect.stringContaining('"min_links":3')));
     fireEvent.click(screen.getByRole('button', { name: 'Extract isnāds' }));
-    await waitFor(() => expect(api.isnad.run).toHaveBeenCalledWith(527, expect.objectContaining({ min_links: 3, lookahead: 3 })));
+    // The third argument is the scope (spec 1.5 G): null for the whole text.
+    await waitFor(() => expect(api.isnad.run).toHaveBeenCalledWith(527, expect.objectContaining({ min_links: 3, lookahead: 3 }), null));
     expect(await screen.findByTestId('run-summary')).toHaveTextContent('412 candidates on 553 pages in 1.8 s · 3 decided rows kept');
   });
 

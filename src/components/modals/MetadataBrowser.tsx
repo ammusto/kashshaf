@@ -5,6 +5,7 @@ import { useBooks } from '../../contexts/BooksContext';
 import { exportBooks, exportAuthors, type ExportFormat } from '../../utils/exportData';
 import { CitationBlock } from '../shared/CitationBlock';
 import { InfoTooltip } from '../ui';
+import { normalizeArabicForSearch } from '@kashshaf/shared';
 
 interface MetadataBrowserProps {
   onClose: () => void;
@@ -21,21 +22,6 @@ interface AuthorInfo {
   bookCount: number;
   totalPages: number;
   genres: Set<string>;
-}
-
-// Normalize Arabic text for search matching
-function normalizeArabicForSearch(text: string): string {
-  return text
-    .replace(/[\u064B-\u065F\u0670\u0671]/g, '')
-    .replace(/[أإآ]/g, 'ا')
-    .replace(/ؤ/g, 'و')
-    .replace(/ئ/g, 'ي')
-    .replace(/ى/g, 'ي')
-    .replace(/ک/g, 'ك')
-    .replace(/[یے]/g, 'ي')
-    .replace(/[ۀە]/g, 'ه')
-    .replace(/ۃ/g, 'ة')
-    .toLowerCase();
 }
 
 const ROW_HEIGHT = 64;

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
-import { labApi, type Page, type PageRef } from '../../api/lab';
+import { labApi, type Page, type PageRef, type PageSpan } from '../../api/lab';
+import { useHeavyLimits } from '../../api/settings';
+import { usePages } from '../../api/pages';
 import {
   applyTracked,
   DEFAULT_PARAMS,
   emptyStack,
   isnadApi,
   layersFor,
-  pageLabel,
   redoTracked,
   spansPages,
   undoTracked,
@@ -28,6 +29,8 @@ import {
 import { Reader } from '../Reader';
 import { GearButton, SettingsModal } from '../SettingsModal';
 import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
+import { HeavyRunModal, IDLE_RUN, RunBar, isHeavy, type RunState } from '../ui/Running';
+import { ScopePicker, WHOLE_BOOK, type Scope } from '../ui/ScopePicker';
 
 /**
  * The isnād workbench (spec §7.4): two panes.
@@ -58,7 +61,7 @@ type Mode = 'none' | 'matn-start' | 'matn-end' | 'split' | 'retag';
 const CLASS_KEYS: Record<string, TokenClass> = { v: 'verb', n: 'name', f: 'formula', o: 'other' };
 const ISNAD_SETTING_KEY = 'isnad.params';
 
-export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
+export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null; onChanged?: () => void }) {
   const bookId = book?.id ?? null;
   const [rows, setRows] = useState<IsnadRow[]>([]);
   const [index, setIndex] = useState(0);
@@ -77,6 +80,9 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
   const [draft, setDraft] = useState<Params>(DEFAULT_PARAMS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [progress, setProgress] = useState<RunProgress | null>(null);
+  const [run$, setRun$] = useState<RunState>(IDLE_RUN);
+  const [scope, setScope] = useState<Scope>(WHOLE_BOOK);
+  const [pending, setPending] = useState<{ label: string; span: PageSpan | null; pages: number; tokens: number } | null>(null);
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +99,8 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
   const [personMenu, setPersonMenu] = useState<number | null>(null);
   const [pendingSuggestions, setPendingSuggestions] = useState<Op[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const { limits } = useHeavyLimits();
+  const labels = usePages(bookId, book?.parts);
   const stack = useRef<OpStack>(emptyStack());
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -194,7 +202,15 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
 
   useEffect(() => {
     let un: (() => void) | undefined;
-    isnadApi.onRunProgress((p) => setProgress(p)).then((u) => (un = u)).catch(() => {});
+    isnadApi
+      .onRunProgress((p) => {
+        setProgress(p);
+        // Rows as their pages finish (spec 1.5 G): the list fills while the
+        // run goes, so confirming can start before it ends.
+        if (p.rows?.length) setRows((rs) => [...rs, ...p.rows]);
+      })
+      .then((u) => (un = u))
+      .catch(() => {});
     // The extraction parameters persist in lab_setting (spec 1.4, fix 9).
     labApi
       .getSetting(ISNAD_SETTING_KEY)
@@ -231,21 +247,54 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
 
   // ------------------------------------------------------------- run ---
 
-  const run = async () => {
+  /** Ask before a run over the Settings thresholds (spec 1.5 F4). */
+  const propose = async () => {
     if (bookId == null) return;
-    setBusy(true);
     setError(null);
     try {
-      const s = await isnadApi.run(bookId, params);
+      const size = await labApi.runSize(bookId, scope.span);
+      if (isHeavy(size, limits)) {
+        setPending({ label: scope.label, span: scope.span, pages: size.pages, tokens: size.tokens });
+        return;
+      }
+    } catch (e) {
+      // A size we cannot work out is not a reason to refuse the run.
+      console.error('run_size failed', e);
+    }
+    void start(scope.span);
+  };
+
+  const start = async (span: PageSpan | null) => {
+    if (bookId == null) return;
+    setPending(null);
+    setBusy(true);
+    setRun$({ running: true, paused: false, cancelledAt: null });
+    setError(null);
+    setRows([]);
+    setPinned(null);
+    try {
+      const s = await isnadApi.run(bookId, params, span);
       setSummary(s);
       await reload();
       await reloadTable();
+      setRun$(
+        s.cancelled
+          ? { running: false, paused: false, cancelledAt: `${s.pages.toLocaleString()} pages read, ${s.candidates.toLocaleString()} candidates kept` }
+          : IDLE_RUN
+      );
+      onChanged?.();
     } catch (e) {
       setError(String(e));
+      setRun$(IDLE_RUN);
     } finally {
       setBusy(false);
       setProgress(null);
     }
+  };
+
+  const pause = (paused: boolean) => {
+    setRun$((r) => ({ ...r, paused }));
+    void labApi.statsPause(paused);
   };
 
   // ------------------------------------------------------------- ops ---
@@ -263,10 +312,12 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
         }
         await reloadTable();
         setError(null);
+        onChanged?.();
       } catch (e) {
         setError(String(e));
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [current, reload, reloadTable]
   );
 
@@ -569,13 +620,13 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
     { key: 'parts', label: 'Parsed', sortValue: (r) => [r.kunya, r.ism, r.nasab, r.nisba].filter(Boolean).join(' · '), rtl: true, width: '3fr', render: (r) => [r.kunya && `ك:${r.kunya}`, r.ism && `ا:${r.ism}`, r.nasab, r.nisba && `ن:${r.nisba}`, r.laqab && `ل:${r.laqab}`].filter(Boolean).join(' · ') },
     { key: 'count', label: '#', sortValue: (r) => r.form_count, align: 'right', width: '48px', render: (r) => fmt(r.form_count) },
     { key: 'person', label: 'Person', sortValue: (r) => r.person_name ?? r.suggested_person_name ?? '', rtl: true, width: '2fr', render: (r) => r.person_name ? <span>{r.person_name}</span> : r.suggested_person_name ? <span className="border border-dashed border-app-accent text-app-accent px-1 rounded" title="Suggested from a matching form; not linked">{r.suggested_person_name}?</span> : <span className="text-app-text-tertiary">—</span> },
-    { key: 'where', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => pageLabel(r.part_index, r.page_id, book?.parts) },
+    { key: 'where', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => labels.label(r.part_index, r.page_id) },
   ];
 
   const conf: Confidence | null = current ? safeConf(current.confidence_json) : null;
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Choose a book in Books first.</div>;
+    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
   }
 
   return (
@@ -583,9 +634,10 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
       {/* ------------------------------------------------ left: the text --- */}
       <section className="flex-1 min-w-0 flex flex-col border-r border-app-border-light">
         <div className="px-3 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-2 flex-wrap text-xs">
-          <button onClick={run} disabled={busy} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40">
+          <button onClick={() => void propose()} disabled={busy} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40">
             {busy ? 'Extracting…' : 'Extract isnāds'}
           </button>
+          <ScopePicker bookId={bookId} onChange={setScope} disabled={busy} />
           <GearButton onClick={() => { setDraft(params); setSettingsOpen(true); }} label="Extraction settings" />
           {summary && (
             <span className="text-app-text-tertiary" data-testid="run-summary">
@@ -593,13 +645,18 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
               {summary.kept_confirmed > 0 && ` · ${summary.kept_confirmed} decided rows kept`}
             </span>
           )}
-          {progress && (
-            <span className="text-app-text-secondary" role="status">
-              page {progress.done.toLocaleString()} / {progress.total.toLocaleString()} · {progress.found.toLocaleString()} found
-              <button onClick={() => labApi.statsCancel()} className="ml-2 px-2 border border-app-border-medium rounded">Cancel</button>
-            </span>
-          )}
         </div>
+
+        <RunBar
+          run={run$}
+          done={progress?.done ?? 0}
+          total={progress?.total ?? 0}
+          found={progress?.found}
+          foundLabel="found"
+          estimateMs={progress?.estimate_ms ?? null}
+          onPause={pause}
+          onCancel={() => labApi.statsCancel()}
+        />
 
         <div className="px-3 py-1.5 border-b border-app-border-light bg-app-surface-variant flex items-center gap-2 flex-wrap text-xs" data-testid="filter-bar">
           <select aria-label="Status" value={filter.status ?? ''} onChange={(e) => setFilter({ ...filter, status: (e.target.value || null) as IsnadFilter['status'] })} className="border border-app-border-medium rounded px-1">
@@ -637,8 +694,8 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`px-1.5 rounded text-xs ${current.status === 'confirmed' ? 'bg-app-highlight-lemma' : current.status === 'rejected' ? 'bg-red-100' : 'bg-app-surface-variant'}`}>{current.status}</span>
               <span className="text-xs text-app-text-tertiary">
-                {current.kind} · {current.links} links · p. {pageLabel(current.part_index, current.page_id, book.parts)}
-                {multiPage && current.end_page_id != null && ` → ${pageLabel(current.end_part_index ?? current.part_index, current.end_page_id, book.parts)}`}
+                {current.kind} · {current.links} links · {labels.label(current.part_index, current.page_id)}
+                {multiPage && current.end_page_id != null && ` → ${labels.label(current.end_part_index ?? current.part_index, current.end_page_id)}`}
                 {pinned && ' · opened from the table'}
               </span>
               <span className="text-xs" title={conf ? `links ${conf.links.toFixed(2)} · noun_prop ${conf.noun_prop.toFixed(2)} · terminal ${conf.terminal.toFixed(0)} · clean ${conf.clean.toFixed(2)}` : ''} data-testid="confidence">
@@ -716,6 +773,15 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
           </div>
           <p className="text-xs text-app-text-tertiary">Defaults are the spec's (§4.2). Applied to the next extraction; kept between sessions.</p>
         </SettingsModal>
+
+        <HeavyRunModal
+          open={!!pending}
+          what={`Extract isnāds from ${pending?.label ?? ''}`}
+          pages={pending?.pages ?? 0}
+          tokens={pending?.tokens ?? 0}
+          onContinue={() => pending && void start(pending.span)}
+          onCancel={() => setPending(null)}
+        />
         {notice && (
           <div className="px-3 py-1 text-xs text-app-text-secondary bg-app-surface-variant border-b border-app-border-light flex justify-between">
             <span>{notice}</span>
@@ -728,7 +794,7 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
 
         {multiPage && spanPages.length > 1 && (
           <div className="px-3 py-1 text-xs bg-app-accent-light border-b border-app-border-light flex items-center gap-2" data-testid="span-pages">
-            <span>This isnād runs over {spanPages.length} pages — showing page {spanOffset + 1} of {spanPages.length} ({pageLabel(page?.part_index ?? 0, page?.page_id ?? 0, book.parts)}).</span>
+            <span>This isnād runs over {spanPages.length} pages — showing page {spanOffset + 1} of {spanPages.length} ({page ? labels.label(page.part_index, page.page_id) : '—'}).</span>
             <button onClick={() => setSpanOffset((k) => Math.max(0, k - 1))} disabled={spanOffset === 0} className="px-2 border border-app-border-medium rounded disabled:opacity-40">‹ previous page</button>
             <button onClick={() => setSpanOffset((k) => Math.min(spanPages.length - 1, k + 1))} disabled={spanOffset >= spanPages.length - 1} className="px-2 border border-app-border-medium rounded disabled:opacity-40">next page ›</button>
             {spanOffset < spanPages.length - 1 && <span className="text-app-text-tertiary">⤵ continues on the next page</span>}
@@ -790,7 +856,7 @@ export function IsnadWorkbench({ book }: { book: BookMetadata | null }) {
               {occurrences.map((o) => (
                 <li key={o.id}>
                   <button onClick={() => void jumpTo(o)} className="text-app-accent underline">
-                    p. {pageLabel(o.part_index, o.page_id, book.parts)} · [{o.tok_start}–{o.tok_end}) · {o.isnad_status}
+                    {labels.label(o.part_index, o.page_id)} · [{o.tok_start}–{o.tok_end}) · {o.isnad_status}
                   </button>
                 </li>
               ))}
