@@ -6,6 +6,61 @@ Nothing below has been published yet.
 
 ---
 
+## [lab 0.10.0] - 2026-09-15
+
+### Name disambiguator
+
+One man is written a dozen ways across a book. The isnād panel has a Name
+disambiguator: every name in the text with its count on the left, and on the
+right the names that might be the same person.
+
+They are ranked on two things. How the names are spelled, by their parts
+rather than by letters, so a fuller name is not read as a different one. And
+how often the two keep the same company in a chain, which counts for more: a
+name that receives from the same teacher and passes to the same student is
+usually one man. Both numbers are shown, with the transmitters on either
+side and a page that opens in the reader, so you can decide without reading
+five chains first.
+
+Same person merges every occurrence of the chosen names and can be undone.
+Not the same is remembered, and that pair is never suggested again.
+
+Link, Same person and Accept all suggestions have left the isnād table. Use
+the disambiguator. Retagging stays, and Remove tag is next to it.
+
+### Reader
+
+Click a word for its lemma, root and part of speech, as in Kashshaf.
+
+Clicking a result from Stats, Search, Qurʾān, Poetry, the annotations list
+or the isnād list now scrolls to the highlighted words. They used to be
+marked somewhere below the fold.
+
+The contents are drawn as a tree, with lines showing what sits under what.
+
+### Annotations
+
+The note is shown once in the box you type it into, the contents list shows
+the note rather than the Arabic it sits on, and the strip across the foot of
+the reader is gone. The highlight in the text is how you reach an
+annotation.
+
+### Concordance
+
+The words before and after the hit now sit against it instead of drifting to
+the edges of the table. Headings are centred.
+
+### Reuse
+
+Find in selection, Find in section, Find in whole text. Opening a result
+shows the two texts aligned word by word straight away.
+
+### Network
+
+Direct Sources of Author, with its count, and the single-person view is
+headed Node Network of that person. Sources drawn on the canvas are coloured
+in the list.
+
 ## [lab 0.9.0] - 2026-09-15
 
 ### Annotations
