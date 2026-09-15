@@ -234,12 +234,13 @@ describe('ReusePanel', () => {
     expect(within(target).getByTestId('back-to-results')).toBeInTheDocument();
     await waitFor(() => expect(api.lab.getPage).toHaveBeenCalledWith(5563, 0, 6260));
 
-    // The alignment is a toggle on that page, not a card that expands (§H2).
-    fireEvent.click(within(target).getByLabelText('Side by side'));
+    // The alignment is on from the start (10 H), and is still a toggle.
     const side = await screen.findByTestId('side-by-side');
     expect(side).toHaveTextContent('this text');
     expect(side).toHaveTextContent('the other');
     expect(side.querySelectorAll('.lay-pair-7').length).toBe(2);
+    fireEvent.click(within(target).getByLabelText('Side by side'));
+    await waitFor(() => expect(screen.queryByTestId('side-by-side')).not.toBeInTheDocument());
 
     fireEvent.click(within(target).getByLabelText('Confirm this match'));
     await waitFor(() => expect(api.reuse.verdict).toHaveBeenCalledWith(1, 'confirmed'));
@@ -283,9 +284,10 @@ describe('ReusePanel', () => {
     expect(target).toHaveTextContent('القسطلاني');
     expect(within(target).getByTestId('target-page')).toHaveTextContent('6260');
 
-    // The alignment is still a toggle within this state.
-    fireEvent.click(within(target).getByLabelText('Side by side'));
+    // The alignment is already on, and is still a toggle (10 H).
     expect(await screen.findByTestId('side-by-side')).toBeInTheDocument();
+    fireEvent.click(within(target).getByLabelText('Side by side'));
+    await waitFor(() => expect(screen.queryByTestId('side-by-side')).not.toBeInTheDocument());
 
     // A keystroke belongs to the reader the pointer is over, not to both.
     // React synthesises mouseenter from mouseover, so that is what to fire.
@@ -338,7 +340,7 @@ describe('ReusePanel', () => {
     api.reuse.matches.mockResolvedValue([match(7, 0.74, 'verbatim')]);
 
     const { unmount } = render(<ReusePanel book={book} local />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Analyse whole text' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Find in whole text' }));
 
     // Over the Settings thresholds, so it asks first (spec 1.5 F4).
     const modal = await screen.findByTestId('heavy-run-modal');
@@ -352,6 +354,6 @@ describe('ReusePanel', () => {
     unmount();
 
     render(<ReusePanel book={book} local={false} />);
-    expect(await screen.findByRole('button', { name: 'Analyse whole text' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Find in whole text' })).toBeDisabled();
   });
 });

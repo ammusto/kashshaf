@@ -80,7 +80,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   const [section, setSection] = useState<TocRow | null>(null);
   const [pending, setPending] = useState<{ what: string; span: PageSpan | null; pages: number; tokens: number; estimateMs: number | null } | null>(null);
 
-  /** What the reader has selected, for "Analyse selected" (7 C1). */
+  /** What the reader has selected, for "Find in selection" (7 C1). */
   const [selection, setSelection] = useState<{ at: At; range: [number, number]; text: string } | null>(null);
   /** Where the left reader sits, and the span it marks green (8 D). */
   const [queryAt, setQueryAt] = useState<At | null>(from ?? null);
@@ -330,7 +330,8 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   const openTarget = async (m: MatchRow) => {
     setOpen(m);
     setOpenPage(null);
-    setSideBySide(false);
+    // The alignment is the point of opening a match, so it starts on (10 H).
+    setSideBySide(true);
     // The left reader goes to this match's own page and marks its words; the
     // right one is about to open the other book at the other page.
     setQueryAt({ part_index: m.part_index, page_id: m.page_id });
@@ -393,11 +394,11 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
           <button
             onClick={() => selection && void findReuse(selection.at, selection.range)}
             disabled={!selection || !!busy}
-            title={selection ? `Analyse the ${selection.range[1] - selection.range[0]} selected words` : 'Select some words in the text first'}
+            title={selection ? `Look for the ${selection.range[1] - selection.range[0]} selected words elsewhere` : 'Select some words in the text first'}
             className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
             data-testid="analyse-selected"
           >
-            Analyse selected
+            Find in selection
           </button>
           <button
             onClick={() => void analyseSection()}
@@ -412,7 +413,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
             className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
             data-testid="analyse-section"
           >
-            Analyse section
+            Find in section
           </button>
           <button
             onClick={() => void proposeRun('Analysing the whole text', null)}
@@ -420,7 +421,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
             title={local ? 'Every 60-word window of the text (§4.3)' : 'Whole-book reuse needs the local corpus (spec §4.3)'}
             className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
           >
-            Analyse whole text
+            Find in whole text
           </button>
 
           {runs.length > 0 && (
@@ -527,8 +528,8 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
               {visible.length === 0 && shownRun != null && <p className="p-4 text-sm text-app-text-secondary">No matches at this threshold.</p>}
               {shownRun == null && !busy && (
                 <p className="p-4 text-sm text-app-text-secondary">
-                  Select words in the text and press Analyse selected, or analyse the section the reader is in, or the
-                  whole text.
+                  Select words in the text and press Find in selection, or look through the section the reader is in,
+                  or the whole text.
                 </p>
               )}
               {contextBusy && visible.length > 0 && (
