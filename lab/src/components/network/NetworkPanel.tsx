@@ -367,8 +367,18 @@ export function NetworkPanel({ book, version = 0 }: Props) {
     });
   };
 
+  /** Which nodes the drawing actually holds, so the tables can agree with it. */
+  const drawn = useMemo(() => new Set((shown?.nodes ?? []).map((n) => nodeKey(n.id))), [shown]);
+  const unlinkedForms = useMemo(() => (shown?.nodes ?? []).filter((n) => !n.linked).length, [shown]);
+
   const maxWeight = useMemo(() => Math.max(1, ...(shown?.edges.map((e) => e.weight) ?? [1])), [shown]);
   const nameOf = useMemo(() => new Map((shown?.nodes ?? []).map((n) => [nodeKey(n.id), n.name])), [shown]);
+  /** Names from the whole text, which the ego view still needs to title itself. */
+  const nameOfAll = useMemo(
+    () => new Map([...(graph?.nodes ?? []), ...(ego?.nodes ?? [])].map((n) => [nodeKey(n.id), n.name])),
+    [graph, ego]
+  );
+  const focusName = focus ? (nameOfAll.get(nodeKey(focus)) ?? '') : '';
 
   const sourceColumns: Column<Source>[] = [
     {
@@ -380,6 +390,11 @@ export function NetworkPanel({ book, version = 0 }: Props) {
       render: (r) => (
         <span className={r.linked ? '' : 'text-app-text-secondary italic'} title={r.linked ? undefined : 'Not yet linked to a person'}>
           {r.name}
+          {!drawn.has(nodeKey(r.id)) && (
+            <span className="not-italic text-app-text-secondary" title="Its chain has no second transmitter, or these view settings leave it out, so it has no edge to draw.">
+              {' \u00b7 not drawn'}
+            </span>
+          )}
         </span>
       ),
     },
@@ -440,12 +455,16 @@ export function NetworkPanel({ book, version = 0 }: Props) {
             {(graph.dropped_nodes > 0 || graph.dropped_edges > 0) && ` (${graph.dropped_nodes} nodes, ${graph.dropped_edges} edges hidden)`}
           </span>
         )}
-        {ego && focus && (
-          <button onClick={() => { setEgo(null); setFocus(null); setRows([]); }} className="px-2 py-0.5 border border-app-border-medium rounded">
-            ← whole text
-          </button>
+        {unlinkedForms > 0 && (
+          <span
+            className="text-app-text-secondary"
+            title="Every transmitter nobody has linked is a node of its own, so one person written two ways is two nodes. Linking them to a person merges them."
+            data-testid="unlinked-count"
+          >
+            {unlinkedForms} unlinked name form{unlinkedForms === 1 ? '' : 's'}
+          </span>
         )}
-        {running && <span className="text-app-text-secondary">laying out…</span>}
+        {running && <span className="text-app-text-secondary">laying out\u2026</span>}
         <span className="ml-auto flex items-center gap-1">
           <button onClick={() => exportGraph('csv')} className="px-2 py-0.5 border border-app-border-medium rounded">
             CSV edges
@@ -455,6 +474,29 @@ export function NetworkPanel({ book, version = 0 }: Props) {
           </button>
         </span>
       </div>
+      {ego && focus && (
+        <div
+          className="px-3 py-1.5 border-b border-app-border-light bg-app-accent-light text-xs flex items-center gap-2 flex-wrap"
+          data-testid="ego-banner"
+        >
+          <span>
+            Showing <span className="font-arabic font-semibold">{focusName}</span> and their neighbours only:{' '}
+            {ego.nodes.length} of {graph?.nodes.length ?? ego.nodes.length} transmitters, {ego.edges.length} of{' '}
+            {graph?.edges.length ?? ego.edges.length} edges.
+          </span>
+          <button
+            onClick={() => {
+              setEgo(null);
+              setFocus(null);
+              setRows([]);
+            }}
+            className="px-2 py-0.5 border border-app-border-medium rounded bg-app-surface"
+            data-testid="show-whole-text"
+          >
+            Show the whole text
+          </button>
+        </div>
+      )}
       {(error || message) && (
         <div className={`px-3 py-1 text-xs border-b border-app-border-light ${error ? 'text-app-error' : 'text-app-text-secondary'}`} role={error ? 'alert' : 'status'}>
           {error ?? message}
@@ -573,7 +615,9 @@ export function NetworkPanel({ book, version = 0 }: Props) {
           )}
         </section>
         <aside className="w-96 border-l border-app-border-light bg-app-surface flex flex-col min-h-0">
-          <div className="px-3 py-1 text-xs text-app-text-secondary border-b border-app-border-light">The author's direct sources (position 0)</div>
+          <div className="px-3 py-1 text-xs text-app-text-secondary border-b border-app-border-light" data-testid="sources-heading">
+            The author's direct sources (position 0) · {sources.length}
+          </div>
           <div className="p-2">
             <VirtualTable
               columns={sourceColumns}

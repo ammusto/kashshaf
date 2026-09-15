@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import type { BookMetadata } from '@kashshaf/shared';
 
 /**
@@ -117,10 +117,34 @@ describe('NetworkPanel', () => {
     await waitFor(() => expect(screen.getByTestId('network-canvas').querySelectorAll('circle').length).toBe(2));
     await waitFor(() => expect(screen.getByTestId('network-rows')).toHaveTextContent('مالك'));
     expect(screen.getByTestId('network-rows')).not.toHaveTextContent('ابو داود');
-    expect(screen.getByRole('button', { name: '← whole text' })).toBeInTheDocument();
+    // The ego view says so, with the way out in it (9 A).
+    const banner = screen.getByTestId('ego-banner');
+    expect(banner).toHaveTextContent('and their neighbours only');
+    expect(banner).toHaveTextContent('2 of 3 transmitters');
+    expect(banner).toHaveTextContent('1 of 2 edges');
+    expect(within(banner).getByTestId('show-whole-text')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'GraphML' }));
     await waitFor(() => expect(api.network.export).toHaveBeenCalledWith(527, 'graphml', 1, 300));
     expect(await screen.findByRole('status')).toHaveTextContent('Exported to');
+  });
+
+  it('says how many sources there are, how many forms are unlinked, and which are not drawn (9 A)', async () => {
+    // One source is a chain of one transmitter, so it has no edge and the
+    // drawing cannot hold it. The list still names it, and says why.
+    api.network.sources.mockResolvedValue([
+      { id: P(1), person_id: 1, linked: true, name: 'أبو داود', chains: 3 },
+      { id: F('عطية'), person_id: null, linked: false, name: 'عطية', chains: 1 },
+    ]);
+    render(<NetworkPanel book={book} />);
+    const list = await screen.findByTestId('network-sources');
+    expect(await screen.findByTestId('sources-heading')).toHaveTextContent('direct sources (position 0) · 2');
+    expect(list).toHaveTextContent('not drawn');
+    // And a linked one is not marked.
+    expect(within(list).getByText('أبو داود').textContent).not.toContain('not drawn');
+
+    // One of the three nodes is a bare name form, which is what fragments a
+    // chain before anyone is linked.
+    expect(screen.getByTestId('unlinked-count')).toHaveTextContent('1 unlinked name form');
   });
 
   it('shows one sentence and nothing else when nothing is confirmed (spec 1.5 J3)', async () => {
