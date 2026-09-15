@@ -165,8 +165,8 @@ export function TextBrowser({
             onChange={(e) => setF({ ...f, query: e.target.value })}
             placeholder="Search titles and authors…"
             aria-label="Search titles and authors"
-            dir="rtl"
-            className="flex-1 px-3 py-2 font-arabic text-lg border border-app-border-medium rounded focus:outline-none focus:border-app-border-focus"
+            dir="auto"
+            className="input-bilingual flex-1 px-3 py-2 font-arabic text-lg border border-app-border-medium rounded-lg focus:outline-none focus:border-app-border-focus"
           />
           {active && (
             <button onClick={() => setF(NO_FILTERS)} className="px-2 py-1 text-xs border border-app-border-medium rounded">
@@ -175,7 +175,7 @@ export function TextBrowser({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-3 text-sm">
           <label className="flex items-center gap-1">
             Died between
             <input
@@ -183,7 +183,7 @@ export function TextBrowser({
               onChange={(e) => setF({ ...f, deathMin: e.target.value })}
               inputMode="numeric"
               aria-label="Death year, from"
-              className="w-16 px-1.5 py-1 border border-app-border-medium rounded tabular-nums"
+              className="w-16 px-2 py-1.5 border border-app-border-medium rounded-lg tabular-nums"
             />
             and
             <input
@@ -191,7 +191,7 @@ export function TextBrowser({
               onChange={(e) => setF({ ...f, deathMax: e.target.value })}
               inputMode="numeric"
               aria-label="Death year, to"
-              className="w-16 px-1.5 py-1 border border-app-border-medium rounded tabular-nums"
+              className="w-16 px-2 py-1.5 border border-app-border-medium rounded-lg tabular-nums"
             />
             AH
           </label>
@@ -199,22 +199,22 @@ export function TextBrowser({
           <div className="relative">
             <button
               onClick={() => setGenresOpen((v) => !v)}
-              className="px-2 py-1 border border-app-border-medium rounded"
+              className="px-3 py-1.5 border border-app-border-medium rounded-lg hover:bg-app-surface-variant"
               aria-expanded={genresOpen}
             >
               Genre{f.genreIds.size > 0 ? ` (${f.genreIds.size})` : ''} ▾
             </button>
             {genresOpen && (
-              <div className="absolute z-20 mt-1 w-72 max-h-72 overflow-y-auto bg-app-surface border border-app-border-medium rounded shadow-lg p-1">
+              <div className="absolute z-20 mt-1 w-80 max-h-72 overflow-y-auto bg-app-surface border border-app-border-medium rounded-xl shadow-lg p-1">
                 {usedGenres.map((g) => (
                   <label key={g.id} className="flex items-center gap-2 px-2 py-1 hover:bg-app-surface-variant cursor-pointer">
                     <input type="checkbox" checked={f.genreIds.has(g.id)} onChange={() => toggleGenre(g.id)} />
-                    <span className="font-arabic" dir="rtl">
+                    <span className="font-arabic text-base" dir="rtl">
                       {g.name}
                     </span>
                   </label>
                 ))}
-                {usedGenres.length === 0 && <div className="px-2 py-1 text-app-text-tertiary">No genres in this corpus.</div>}
+                {usedGenres.length === 0 && <div className="px-2 py-1 text-app-text-secondary">No genres in this corpus.</div>}
               </div>
             )}
           </div>
@@ -224,15 +224,15 @@ export function TextBrowser({
               <button
                 key={c}
                 onClick={() => toggleCorpus(c)}
-                className={`px-2 py-1 border rounded ${
-                  f.corpora.has(c) ? 'bg-app-accent-light border-app-accent text-app-accent' : 'border-app-border-medium'
+                className={`px-3 py-1.5 border rounded-lg ${
+                  f.corpora.has(c) ? 'bg-app-accent-light border-app-accent text-app-accent' : 'border-app-border-medium hover:bg-app-surface-variant'
                 }`}
               >
                 {c}
               </button>
             ))}
 
-          <span className="text-app-text-tertiary ltr:ml-auto" data-testid="browser-count">
+          <span className="text-app-text-secondary ltr:ml-auto" data-testid="browser-count">
             {loading
               ? 'Loading texts…'
               : error

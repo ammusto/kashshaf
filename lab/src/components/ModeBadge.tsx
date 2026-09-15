@@ -13,7 +13,7 @@ export function ModeBadge({ status, onRetry, busy }: {
   busy?: boolean;
 }) {
   if (!status) {
-    return <span className="text-xs text-app-text-tertiary">Checking…</span>;
+    return <span className="text-xs text-app-text-secondary">Checking…</span>;
   }
 
   const tone =
@@ -75,7 +75,7 @@ export function UnavailableNotice({ status }: { status: LabStatus }) {
           <dd className="text-app-text-secondary">
             {status.local_error ?? 'not checked'}
             {status.corpus_dir && (
-              <div className="text-xs text-app-text-tertiary mt-0.5">
+              <div className="text-xs text-app-text-secondary mt-0.5">
                 Looked in {status.corpus_dir}
               </div>
             )}
@@ -86,12 +86,12 @@ export function UnavailableNotice({ status }: { status: LabStatus }) {
           <dd className="text-app-text-secondary">
             {status.api_error ?? 'not checked'}
             {status.api_base && (
-              <div className="text-xs text-app-text-tertiary mt-0.5">{status.api_base}</div>
+              <div className="text-xs text-app-text-secondary mt-0.5">{status.api_base}</div>
             )}
           </dd>
         </div>
       </dl>
-      <p className="text-xs text-app-text-tertiary mt-5">
+      <p className="text-xs text-app-text-secondary mt-5">
         Downloading the corpus in Kashshaf makes it available here too: both apps
         read the same directory. Lab picks it up when you press Recheck.
       </p>

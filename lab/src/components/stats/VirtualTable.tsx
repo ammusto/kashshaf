@@ -117,7 +117,14 @@ export function VirtualTable<T>({
   const grid = columns.map((c) => c.width ?? 'minmax(80px, 1fr)').join(' ');
 
   return (
-    <div className={`border border-app-border-light rounded overflow-hidden bg-app-surface ${height === 'fill' ? 'h-full flex flex-col' : ''}`} data-testid={testId}>
+    // A table that fills its pane draws no border of its own: the pane has
+    // one, and two of them read as a double rule (Phase 7 D).
+    <div
+      className={`overflow-hidden bg-app-surface ${
+        height === 'fill' ? 'h-full flex flex-col' : 'border border-app-border-light rounded-lg'
+      }`}
+      data-testid={testId}
+    >
       <div
         role="row"
         dir={dir}
@@ -140,7 +147,7 @@ export function VirtualTable<T>({
       </div>
       <div ref={parentRef} className={height === 'fill' ? 'flex-1 min-h-0' : ''} style={{ height: height === 'fill' ? undefined : height, overflow: 'auto' }}>
         {sorted.length === 0 ? (
-          <div className="p-4 text-sm text-app-text-tertiary">{emptyText}</div>
+          <div className="p-4 text-sm text-app-text-secondary">{emptyText}</div>
         ) : (
           <div style={{ height: totalSize, position: 'relative' }}>
             {items.map((v) => {

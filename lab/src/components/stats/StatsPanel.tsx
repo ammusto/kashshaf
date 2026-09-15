@@ -124,7 +124,7 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
   );
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
+    return <div className="p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
   }
 
   return (
@@ -145,7 +145,7 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
             </button>
           ))}
         </div>
-        <span className="text-xs text-app-text-tertiary ml-auto" data-testid="stats-summary">
+        <span className="text-xs text-app-text-secondary ml-auto" data-testid="stats-summary">
           {summary
             ? `${summary.tokens.toLocaleString()} tokens · ${summary.pages.toLocaleString()} pages · ${
                 summary.sections
@@ -167,7 +167,7 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
 
       {scope && summary && <ScopeBar mem={mem} update={update} sections={sections} />}
 
-      <div className="flex-1 min-h-0 flex flex-col p-4 gap-2 overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col px-4 pt-3 gap-2 overflow-hidden">
         {scope && summary && (
           <>
             {mem.tab === 'frequencies' && <FrequenciesTab scope={scope} book={book} />}
@@ -214,31 +214,37 @@ function ScopeBar({
   sections: Section[];
 }) {
   return (
-    <div className="px-4 py-1.5 border-b border-app-border-light bg-app-surface-variant flex items-center gap-4 flex-wrap text-xs text-app-text-secondary">
-      <label className="flex items-center gap-1">
-        Layer
-        <select
-          aria-label="Layer"
-          value={mem.layer}
-          onChange={(e) => update({ layer: e.target.value as Layer })}
-          className="border border-app-border-medium rounded px-1 py-0.5"
-        >
-          <option value="surface">surface</option>
-          <option value="lemma">lemma</option>
-          <option value="root">root</option>
-        </select>
+    <div
+      className="px-4 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-2 flex-wrap text-sm"
+      role="group"
+      aria-label="Layer"
+    >
+      <span className="text-xs font-semibold uppercase tracking-wide text-app-text-secondary">Layer</span>
+      <div className="inline-flex rounded-lg border border-app-border-medium overflow-hidden">
+        {(['surface', 'lemma', 'root'] as Layer[]).map((l) => (
+          <button
+            key={l}
+            onClick={() => update({ layer: l })}
+            aria-pressed={mem.layer === l}
+            className={`px-3 py-1.5 text-sm transition-colors ${
+              mem.layer === l ? 'bg-app-accent text-white' : 'bg-app-surface text-app-text-primary hover:bg-app-surface-variant'
+            }`}
+          >
+            {l.charAt(0).toUpperCase() + l.slice(1)}
+          </button>
+        ))}
+      </div>
+      <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-app-border-medium cursor-pointer">
+        <input type="checkbox" checked={mem.stop} onChange={(e) => update({ stop: e.target.checked })} className="accent-app-accent" />
+        <span className="text-app-text-primary">Stop words off</span>
       </label>
-      <label className="flex items-center gap-1">
-        <input type="checkbox" checked={mem.stop} onChange={(e) => update({ stop: e.target.checked })} />
-        Stop words off
-      </label>
-      <label className="flex items-center gap-1">
-        Section
+      <label className="flex items-center gap-2 ltr:ml-auto">
+        <span className="text-xs font-semibold uppercase tracking-wide text-app-text-secondary">Section</span>
         <select
           aria-label="Section"
           value={mem.section ?? ''}
           onChange={(e) => update({ section: e.target.value === '' ? null : Number(e.target.value) })}
-          className="border border-app-border-medium rounded px-1 py-0.5 font-arabic text-sm max-w-md"
+          className="border border-app-border-medium rounded-lg px-2 py-1.5 font-arabic text-base max-w-md bg-app-surface"
           dir="rtl"
         >
           <option value="">whole text</option>
@@ -301,7 +307,7 @@ function ExportButton<T>({ name, columns, rows }: { name: string; columns: Expor
       >
         JSON
       </button>
-      {msg && <span className="text-app-text-tertiary truncate max-w-md">{msg}</span>}
+      {msg && <span className="text-app-text-secondary truncate max-w-md">{msg}</span>}
     </span>
   );
 }
@@ -369,10 +375,10 @@ function FrequenciesTab({ scope, book }: { scope: Scope; book: BookMetadata }) {
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter…"
           aria-label="Filter"
-          dir="rtl"
-          className="px-2 py-1 border border-app-border-medium rounded font-arabic text-lg"
+          dir="auto"
+          className="input-bilingual px-2 py-1 border border-app-border-medium rounded-lg font-arabic text-lg"
         />
-        <span className="text-xs text-app-text-tertiary" data-testid="freq-summary">
+        <span className="text-xs text-app-text-secondary" data-testid="freq-summary">
           {data ? `${data.list.distinct.toLocaleString()} distinct · ${data.list.total.toLocaleString()} tokens` : 'Computing…'}
         </span>
         <span className="ml-auto">
@@ -522,7 +528,7 @@ function ConcordanceTab({
             <option value="right">right context</option>
           </select>
         </label>
-        <span className="text-xs text-app-text-tertiary" data-testid="conc-summary">
+        <span className="text-xs text-app-text-secondary" data-testid="conc-summary">
           {total != null && `${total.toLocaleString()} hits`}
         </span>
         <span className="ml-auto">
@@ -636,7 +642,7 @@ function KeynessTab({ scope, book }: { scope: Scope; book: BookMetadata }) {
         <button onClick={run} disabled={busy} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40">
           Compute
         </button>
-        <span className="text-app-text-tertiary" data-testid="key-summary">
+        <span className="text-app-text-secondary" data-testid="key-summary">
           {data && `${rows.length.toLocaleString()} key items · book ${data.book_total.toLocaleString()} vs reference ${data.ref_total.toLocaleString()} tokens${data.ref_books ? ` (${data.ref_books} books)` : ''}`}
         </span>
         <span className="ml-auto">
@@ -770,7 +776,7 @@ function StripPlot({ data, pages, onShowHit }: { data: DispersionResponse; pages
           );
         })}
       </div>
-      <div className="relative h-5 text-[10px] text-app-text-tertiary">
+      <div className="relative h-5 text-[10px] text-app-text-secondary">
         {partTicks.map((t, i) => (
           <span key={i} className="absolute" style={{ left: `${t.x}%` }} dir="rtl">
             |{t.label}
@@ -868,7 +874,7 @@ function CollocationsTab({ scope, book, node, onNode }: { scope: Scope; book: Bo
         <button onClick={run} disabled={busy || (mode === 'collocates' && !node.trim())} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40">
           Compute
         </button>
-        <span className="text-app-text-tertiary" data-testid="coll-summary">
+        <span className="text-app-text-secondary" data-testid="coll-summary">
           {mode === 'collocates' && coll && `node ${coll.node_freq.toLocaleString()}× · ${coll.rows.length.toLocaleString()} collocates`}
           {mode === 'ngrams' && grams && `${grams.length.toLocaleString()} ${n}-grams`}
         </span>

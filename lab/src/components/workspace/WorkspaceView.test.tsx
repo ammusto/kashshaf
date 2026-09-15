@@ -57,7 +57,7 @@ const entries: WorkspaceEntry[] = [
 function view(over: Partial<React.ComponentProps<typeof WorkspaceView>> = {}) {
   const onOpen = vi.fn();
   const onChanged = vi.fn();
-  render(
+  const r = render(
     <WorkspaceView
       entries={entries}
       currentId={null}
@@ -71,7 +71,7 @@ function view(over: Partial<React.ComponentProps<typeof WorkspaceView>> = {}) {
       {...over}
     />
   );
-  return { onOpen, onChanged };
+  return { onOpen, onChanged, unmount: r.unmount };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -88,6 +88,24 @@ describe('WorkspaceView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Name/ }));
     expect(titles()[0]).toContain('الزهد');
+  });
+
+  it('has a pane whose width is dragged and remembered (7 D)', () => {
+    localStorage.removeItem('lab.workspace.pane');
+    const { unmount } = view();
+    const pane = screen.getByTestId('workspace-pane');
+    expect(pane).toHaveStyle({ width: '320px' });
+
+    // Drag the right border.
+    fireEvent.mouseDown(within(pane).getByTestId('width-handle'));
+    fireEvent.mouseMove(document, { clientX: 420 });
+    fireEvent.mouseUp(document);
+    expect(screen.getByTestId('workspace-pane')).toHaveStyle({ width: '420px' });
+    unmount();
+
+    // And it is still that wide next time.
+    view();
+    expect(screen.getByTestId('workspace-pane')).toHaveStyle({ width: '420px' });
   });
 
   it('opens a workspace text on a click', () => {

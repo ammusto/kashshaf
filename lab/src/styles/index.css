@@ -102,6 +102,22 @@ body {
   white-space: pre-wrap;
 }
 
+/*
+ * A box that holds Arabic but is labelled in English (Phase 7 D).
+ *
+ * `dir="auto"` takes the direction from the content, so an empty box follows
+ * its placeholder and English reads left to right; it flips the moment an
+ * Arabic letter is typed. The placeholder itself gets the UI face at a
+ * readable size, because the Arabic face renders Latin small and thin.
+ */
+.input-bilingual::placeholder {
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  text-align: center;
+  color: var(--color-app-text-secondary);
+  opacity: 1;
+}
+
 /* A <title id=N parent=M> heading, drawn as one rather than run into the
  * prose after it. The token indices underneath are unchanged. */
 .page-heading {

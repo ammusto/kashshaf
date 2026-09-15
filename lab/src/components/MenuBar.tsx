@@ -79,7 +79,7 @@ export function MenuBar({
           onClick={onSave}
           title="Write everything out to the workspace folder (Ctrl+S)"
           className={`px-2 py-1 text-xs border rounded ${
-            dirty ? 'border-app-accent text-app-accent' : 'border-app-border-medium text-app-text-tertiary'
+            dirty ? 'border-app-accent text-app-accent' : 'border-app-border-medium text-app-text-secondary'
           }`}
           data-testid="save-workspace"
         >
@@ -93,12 +93,12 @@ export function MenuBar({
           <div
             role="dialog"
             aria-label="About Kashshaf Lab"
-            className="bg-app-surface rounded shadow-lg border border-app-border-light w-[30rem] max-w-[95vw] p-5 text-sm"
+            className="bg-app-surface rounded-2xl shadow-lg border border-app-border-light w-[30rem] max-w-[95vw] p-5 text-sm"
             onClick={(e) => e.stopPropagation()}
             data-testid="about-dialog"
           >
             <h2 className="text-base font-semibold mb-1">Kashshaf Lab</h2>
-            <p className="text-app-text-tertiary text-xs mb-4">Version {status?.lab_version ?? '—'}</p>
+            <p className="text-app-text-secondary text-xs mb-4">Version {status?.lab_version ?? '—'}</p>
             <p className="text-app-text-secondary leading-relaxed">
               A workbench for reading one text closely: its statistics, the chains of transmission in
               it, what it shares with the rest of the corpus, and what it quotes from the Qurʾān.
@@ -106,11 +106,11 @@ export function MenuBar({
               database and in the workspace folder.
             </p>
             <dl className="mt-4 grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 text-xs">
-              <dt className="text-app-text-tertiary">Mode</dt>
+              <dt className="text-app-text-secondary">Mode</dt>
               <dd>{status?.mode ?? '—'}</dd>
-              <dt className="text-app-text-tertiary">Corpus</dt>
+              <dt className="text-app-text-secondary">Corpus</dt>
               <dd>{status?.corpus_version ?? '—'}</dd>
-              <dt className="text-app-text-tertiary">Table of contents</dt>
+              <dt className="text-app-text-secondary">Table of contents</dt>
               <dd>{status?.toc ? 'present' : `needs corpus ${status?.min_toc_corpus_version ?? '—'}`}</dd>
             </dl>
             <div className="mt-5 text-right">

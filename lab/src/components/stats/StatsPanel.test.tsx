@@ -95,7 +95,8 @@ describe('StatsPanel', () => {
   it('sends the layer, stop toggle and section the controls show', async () => {
     render(<StatsPanel book={book} onShowHit={vi.fn()} />);
     await screen.findByTestId('freq-summary');
-    fireEvent.change(screen.getByLabelText('Layer'), { target: { value: 'root' } });
+    // The layer is a button group now, not a select (Phase 7 D).
+    fireEvent.click(screen.getByRole('button', { name: 'Root' }));
     await waitFor(() =>
       expect(api.statsFrequencies).toHaveBeenLastCalledWith({ book_id: 42, layer: 'root', stop: true, section: null })
     );

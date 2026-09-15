@@ -19,7 +19,7 @@ export function SettingsPanel({ status }: { status: LabStatus | null }) {
   useEffect(() => {
     labApi.dirs().then(setDirs).catch(() => setDirs(null));
   }, []);
-  if (!status) return <p className="text-sm text-app-text-tertiary">Loading…</p>;
+  if (!status) return <p className="text-sm text-app-text-secondary">Loading…</p>;
 
   const rows: [string, string][] = [
     ['Mode', status.mode],
@@ -60,7 +60,7 @@ export function SettingsPanel({ status }: { status: LabStatus | null }) {
           >
             Open workspace folder
           </button>
-          {folder && <span className="text-xs text-app-text-tertiary break-all">{folder}</span>}
+          {folder && <span className="text-xs text-app-text-secondary break-all">{folder}</span>}
         </div>
       </section>
 
@@ -68,7 +68,7 @@ export function SettingsPanel({ status }: { status: LabStatus | null }) {
       <FreqSnapshotSettings local={status.mode === 'local'} />
       <StopwordSettings />
 
-      <p className="text-xs text-app-text-tertiary">
+      <p className="text-xs text-app-text-secondary">
         The lexicon editor, algorithm defaults and the export directory arrive with the phases that
         produce something to export.
       </p>
@@ -103,7 +103,7 @@ function HeavyRunSettings() {
       </p>
       <div className="flex flex-wrap items-end gap-4 text-sm">
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-app-text-tertiary">Tokens</span>
+          <span className="text-xs text-app-text-secondary">Tokens</span>
           <input
             value={tokens}
             onChange={(e) => setTokens(e.target.value)}
@@ -112,7 +112,7 @@ function HeavyRunSettings() {
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-app-text-tertiary">Pages</span>
+          <span className="text-xs text-app-text-secondary">Pages</span>
           <input
             value={pages}
             onChange={(e) => setPages(e.target.value)}
@@ -132,7 +132,7 @@ function HeavyRunSettings() {
         >
           Reset to default
         </button>
-        {msg && <span className="text-xs text-app-text-tertiary">{msg}</span>}
+        {msg && <span className="text-xs text-app-text-secondary">{msg}</span>}
       </div>
     </section>
   );
@@ -269,7 +269,7 @@ function StopwordSettings() {
         <button onClick={reset} className="px-3 py-1 border border-app-border-medium rounded">
           Reset to default
         </button>
-        {msg && <span className="text-xs text-app-text-tertiary">{msg}</span>}
+        {msg && <span className="text-xs text-app-text-secondary">{msg}</span>}
       </div>
     </section>
   );

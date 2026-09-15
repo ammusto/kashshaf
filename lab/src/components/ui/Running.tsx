@@ -38,7 +38,7 @@ export function LoadingOverlay({ step, onCancel }: { step: Step | null; onCancel
       <div className="flex flex-col items-center gap-3 px-8 py-6 rounded-lg bg-app-surface border border-app-border-light shadow-lg min-w-[16rem]">
         <Spinner />
         {step.total != null && step.total > 1 && (
-          <div className="text-xs text-app-text-tertiary tabular-nums">
+          <div className="text-xs text-app-text-secondary tabular-nums">
             {step.index ?? 1} / {step.total}
           </div>
         )}
@@ -48,7 +48,7 @@ export function LoadingOverlay({ step, onCancel }: { step: Step | null; onCancel
             <div className="h-1.5 bg-app-surface-variant rounded overflow-hidden">
               <div className="h-full bg-app-accent transition-[width] duration-200" style={{ width: `${pct}%` }} />
             </div>
-            <div className="mt-1 text-[11px] text-app-text-tertiary tabular-nums text-center">
+            <div className="mt-1 text-[11px] text-app-text-secondary tabular-nums text-center">
               {step.done?.toLocaleString()} / {step.of?.toLocaleString()}
             </div>
           </div>
@@ -129,7 +129,7 @@ export function RunBar({
         {done.toLocaleString()} / {total.toLocaleString()}
         {found != null && ` · ${found.toLocaleString()} ${foundLabel}`}
       </span>
-      {run.paused ? <span className="text-app-text-tertiary">paused</span> : estimateMs != null && <span className="text-app-text-tertiary">about {fmtDuration(estimateMs)}</span>}
+      {run.paused ? <span className="text-app-text-secondary">paused</span> : estimateMs != null && <span className="text-app-text-secondary">about {fmtDuration(estimateMs)}</span>}
       <button onClick={() => onPause(!run.paused)} className="px-2 py-0.5 border border-app-border-medium rounded">
         {run.paused ? 'Resume' : 'Pause'}
       </button>
@@ -199,25 +199,30 @@ export function HeavyRunModal({
       <div
         role="dialog"
         aria-label={`${what} — confirm`}
-        className="bg-app-surface rounded shadow-lg border border-app-border-light w-[26rem] max-w-[95vw] p-4 text-sm"
+        className="bg-app-surface rounded-2xl shadow-lg border border-app-border-light w-[26rem] max-w-[95vw] p-5 text-sm"
         onClick={(e) => e.stopPropagation()}
         data-testid="heavy-run-modal"
       >
         <h2 className="font-semibold mb-2">{what}</h2>
-        <p className="text-app-text-secondary">
+        <p className="text-app-text-primary">
           This reads about <b>{pages.toLocaleString()} pages</b> and <b>{tokens.toLocaleString()} tokens</b>
           {estimateMs != null && (
             <>
-              , about <b>{fmtDuration(estimateMs)}</b>
+              , roughly <b>{fmtDuration(estimateMs)}</b>
             </>
           )}
           . You can pause or cancel once it starts, and what it has done is kept.
         </p>
+        {estimateMs != null && (
+          <p className="text-xs text-app-text-secondary mt-1">
+            The time is approximate: it comes from timing twenty windows and scaling up.
+          </p>
+        )}
         <div className="flex items-center gap-2 mt-4">
-          <button onClick={onContinue} className="px-3 py-1 bg-app-accent text-white rounded">
+          <button onClick={onContinue} className="px-3 py-1.5 bg-app-accent text-white rounded-lg">
             Continue
           </button>
-          <button onClick={onCancel} className="px-3 py-1 border border-app-border-medium rounded">
+          <button onClick={onCancel} className="px-3 py-1.5 border border-app-border-medium rounded-lg">
             Cancel
           </button>
         </div>

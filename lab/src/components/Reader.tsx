@@ -271,7 +271,7 @@ export function Reader({
         <div className="text-xs text-app-text-secondary" data-testid="page-locator">
           {page ? (labels ?? Pages.empty()).label(page.part_index, page.page_id) : '—'}
         </div>
-        <div className="text-xs text-app-text-tertiary" data-testid="token-count">
+        <div className="text-xs text-app-text-secondary" data-testid="token-count">
           {page ? `${page.tokens.length.toLocaleString()} tokens` : ''}
           {selection && (
             <span className="text-app-accent">
@@ -308,7 +308,7 @@ export function Reader({
           if (e.target === e.currentTarget) clearAll();
         }}
       >
-        {loading && !page && <div className="text-sm text-app-text-tertiary">Loading page…</div>}
+        {loading && !page && <div className="text-sm text-app-text-secondary">Loading page…</div>}
         {page && (
           <div
             className="arabic page-body text-2xl select-text max-w-3xl mx-auto break-words"
@@ -344,7 +344,7 @@ export function Reader({
           </div>
         )}
         {!page && !loading && !error && (
-          <div className="text-sm text-app-text-tertiary">Choose a book to read.</div>
+          <div className="text-sm text-app-text-secondary">Choose a book to read.</div>
         )}
       </div>
 

@@ -622,7 +622,14 @@ pub async fn reuse_estimate(
         let started = std::time::Instant::now();
         let mut found = 0usize;
         let mut zone_cache: HashMap<usize, Vec<Option<Zone>>> = HashMap::new();
+        // The estimate itself is cancellable (Phase 7 C1): loading the book
+        // is the slow part and a reader who changes their mind should not
+        // have to wait for twenty windows to finish.
+        h.cancel.store(false, Ordering::SeqCst);
         for (pi, w) in &sample {
+            if h.should_stop() {
+                break;
+            }
             let page = &book.pages[*pi];
             let zones = match zone_cache.get(pi) {
                 Some(z) => z.clone(),

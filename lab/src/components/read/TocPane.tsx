@@ -48,7 +48,7 @@ export function TocPane({
     <aside className="w-72 shrink-0 border-l border-app-border-light bg-app-surface flex flex-col min-h-0" data-testid="toc-pane">
       <div className="px-3 py-2 border-b border-app-border-light flex items-center gap-2">
         <h2 className="text-sm font-semibold flex-1">Contents</h2>
-        <button onClick={onClose} title="Hide the contents (Ctrl+T)" className="text-app-text-tertiary hover:text-app-text-primary px-1">
+        <button onClick={onClose} title="Hide the contents (Ctrl+T)" className="text-app-text-secondary hover:text-app-text-primary px-1">
           ✕
         </button>
       </div>
@@ -67,14 +67,14 @@ export function TocPane({
       )}
 
       <div className="flex-1 overflow-y-auto py-1">
-        {loading && <p className="px-3 py-2 text-xs text-app-text-tertiary">Loading the contents…</p>}
+        {loading && <p className="px-3 py-2 text-xs text-app-text-secondary">Loading the contents…</p>}
         {error && (
           <p className="px-3 py-2 text-xs text-app-error" role="alert">
             {error}
           </p>
         )}
         {!loading && !error && tree.length === 0 && (
-          <p className="px-3 py-2 text-xs text-app-text-tertiary">This text has no headings in the corpus.</p>
+          <p className="px-3 py-2 text-xs text-app-text-secondary">This text has no headings in the corpus.</p>
         )}
         {shown.map((n) => (
           <Entry key={`${n.id}-${n.part_index}-${n.page_id}`} node={n} pages={pages} currentId={currentId} onJump={onJump} currentRef={currentRef} />
@@ -114,7 +114,7 @@ function Entry({
         <span className="flex-1 min-w-0 font-arabic text-sm leading-snug truncate" dir="rtl" title={node.title}>
           {node.title}
         </span>
-        <span className="text-[11px] text-app-text-tertiary tabular-nums shrink-0">{pages.label(node.part_index, node.page_id)}</span>
+        <span className="text-[11px] text-app-text-secondary tabular-nums shrink-0">{pages.label(node.part_index, node.page_id)}</span>
       </button>
       {node.children.map((c) => (
         <Entry key={`${c.id}-${c.part_index}-${c.page_id}`} node={c} pages={pages} currentId={currentId} onJump={onJump} currentRef={currentRef} />

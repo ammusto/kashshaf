@@ -619,14 +619,14 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
     { key: 'raw', label: 'Form', sortValue: (r) => r.raw, rtl: true, width: 'minmax(160px, 3fr)', render: (r) => <span className={selectedRows.includes(r.id) ? 'font-semibold' : ''}>{r.raw}</span> },
     { key: 'parts', label: 'Parsed', sortValue: (r) => [r.kunya, r.ism, r.nasab, r.nisba].filter(Boolean).join(' · '), rtl: true, width: '3fr', render: (r) => [r.kunya && `ك:${r.kunya}`, r.ism && `ا:${r.ism}`, r.nasab, r.nisba && `ن:${r.nisba}`, r.laqab && `ل:${r.laqab}`].filter(Boolean).join(' · ') },
     { key: 'count', label: '#', sortValue: (r) => r.form_count, align: 'right', width: '48px', render: (r) => fmt(r.form_count) },
-    { key: 'person', label: 'Person', sortValue: (r) => r.person_name ?? r.suggested_person_name ?? '', rtl: true, width: '2fr', render: (r) => r.person_name ? <span>{r.person_name}</span> : r.suggested_person_name ? <span className="border border-dashed border-app-accent text-app-accent px-1 rounded" title="Suggested from a matching form; not linked">{r.suggested_person_name}?</span> : <span className="text-app-text-tertiary">—</span> },
+    { key: 'person', label: 'Person', sortValue: (r) => r.person_name ?? r.suggested_person_name ?? '', rtl: true, width: '2fr', render: (r) => r.person_name ? <span>{r.person_name}</span> : r.suggested_person_name ? <span className="border border-dashed border-app-accent text-app-accent px-1 rounded" title="Suggested from a matching form; not linked">{r.suggested_person_name}?</span> : <span className="text-app-text-secondary">—</span> },
     { key: 'where', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', render: (r) => labels.label(r.part_index, r.page_id) },
   ];
 
   const conf: Confidence | null = current ? safeConf(current.confidence_json) : null;
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
+    return <div className="p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
   }
 
   return (
@@ -640,7 +640,7 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
           <ScopePicker bookId={bookId} onChange={setScope} disabled={busy} />
           <GearButton onClick={() => { setDraft(params); setSettingsOpen(true); }} label="Extraction settings" />
           {summary && (
-            <span className="text-app-text-tertiary" data-testid="run-summary">
+            <span className="text-app-text-secondary" data-testid="run-summary">
               {summary.candidates.toLocaleString()} candidates on {summary.pages.toLocaleString()} pages in {(summary.elapsed_ms / 1000).toFixed(1)} s
               {summary.kept_confirmed > 0 && ` · ${summary.kept_confirmed} decided rows kept`}
             </span>
@@ -684,7 +684,7 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
             <input type="number" min={0} placeholder="from" value={filter.page_from ?? ''} onChange={(e) => setFilter({ ...filter, page_from: e.target.value === '' ? null : Number(e.target.value) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Page from" />
             <input type="number" min={0} placeholder="to" value={filter.page_to ?? ''} onChange={(e) => setFilter({ ...filter, page_to: e.target.value === '' ? null : Number(e.target.value) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Page to" />
           </label>
-          <span className="text-app-text-tertiary ml-auto" data-testid="candidate-count">
+          <span className="text-app-text-secondary ml-auto" data-testid="candidate-count">
             {rows.length ? `${index + 1} / ${rows.length}` : 'no candidates'}
           </span>
         </div>
@@ -693,25 +693,25 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
           <div className="px-3 py-2 border-b border-app-border-light bg-app-surface text-sm" data-testid="chain-view">
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`px-1.5 rounded text-xs ${current.status === 'confirmed' ? 'bg-app-highlight-lemma' : current.status === 'rejected' ? 'bg-red-100' : 'bg-app-surface-variant'}`}>{current.status}</span>
-              <span className="text-xs text-app-text-tertiary">
+              <span className="text-xs text-app-text-secondary">
                 {current.kind} · {current.links} links · {labels.label(current.part_index, current.page_id)}
                 {multiPage && current.end_page_id != null && ` → ${labels.label(current.end_part_index ?? current.part_index, current.end_page_id)}`}
                 {pinned && ' · opened from the table'}
               </span>
               <span className="text-xs" title={conf ? `links ${conf.links.toFixed(2)} · noun_prop ${conf.noun_prop.toFixed(2)} · terminal ${conf.terminal.toFixed(0)} · clean ${conf.clean.toFixed(2)}` : ''} data-testid="confidence">
                 confidence {current.confidence.toFixed(2)}
-                {conf && <span className="text-app-text-tertiary"> (why: links {conf.links.toFixed(2)}, noun_prop {conf.noun_prop.toFixed(2)}, terminal {conf.terminal.toFixed(0)}, clean {conf.clean.toFixed(2)})</span>}
+                {conf && <span className="text-app-text-secondary"> (why: links {conf.links.toFixed(2)}, noun_prop {conf.noun_prop.toFixed(2)}, terminal {conf.terminal.toFixed(0)}, clean {conf.clean.toFixed(2)})</span>}
               </span>
             </div>
             <div className="font-arabic text-lg mt-1 flex flex-wrap gap-x-2 items-baseline" dir="rtl" data-testid="structured-chain">
               {current.transmitters.map((t, i) => (
                 <span key={t.id} className="flex items-baseline gap-1">
-                  <span className="text-xs text-app-text-tertiary font-ui" dir="ltr">[{t.verb_before ?? '—'}]</span>
+                  <span className="text-xs text-app-text-secondary font-ui" dir="ltr">[{t.verb_before ?? '—'}]</span>
                   <button onClick={() => setSelectedTransmitter(t.id)} className={`lay-t${i % 6} px-1 rounded ${t.id === selectedTransmitter ? 'lay-t-selected' : ''}`} title={[t.kunya, t.ism, t.nasab, t.nisba, t.laqab, t.place && `place: ${t.place}`].filter(Boolean).join(' · ')}>
                     {t.raw}
-                    {t.place && <span className="text-xs text-app-text-tertiary"> ({t.place})</span>}
+                    {t.place && <span className="text-xs text-app-text-secondary"> ({t.place})</span>}
                   </button>
-                  {i < current.transmitters.length - 1 && <span className="text-app-text-tertiary">←</span>}
+                  {i < current.transmitters.length - 1 && <span className="text-app-text-secondary">←</span>}
                 </span>
               ))}
               {current.matn_tok_start != null && spanPages.length > 0 && (
@@ -771,7 +771,7 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
               ))}
             </span>
           </div>
-          <p className="text-xs text-app-text-tertiary">Defaults are the spec's (§4.2). Applied to the next extraction; kept between sessions.</p>
+          <p className="text-xs text-app-text-secondary">Defaults are the spec's (§4.2). Applied to the next extraction; kept between sessions.</p>
         </SettingsModal>
 
         <HeavyRunModal
@@ -797,8 +797,8 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
             <span>This isnād runs over {spanPages.length} pages — showing page {spanOffset + 1} of {spanPages.length} ({page ? labels.label(page.part_index, page.page_id) : '—'}).</span>
             <button onClick={() => setSpanOffset((k) => Math.max(0, k - 1))} disabled={spanOffset === 0} className="px-2 border border-app-border-medium rounded disabled:opacity-40">‹ previous page</button>
             <button onClick={() => setSpanOffset((k) => Math.min(spanPages.length - 1, k + 1))} disabled={spanOffset >= spanPages.length - 1} className="px-2 border border-app-border-medium rounded disabled:opacity-40">next page ›</button>
-            {spanOffset < spanPages.length - 1 && <span className="text-app-text-tertiary">⤵ continues on the next page</span>}
-            {spanOffset > 0 && <span className="text-app-text-tertiary">⤴ continued from the previous page</span>}
+            {spanOffset < spanPages.length - 1 && <span className="text-app-text-secondary">⤵ continues on the next page</span>}
+            {spanOffset > 0 && <span className="text-app-text-secondary">⤴ continued from the previous page</span>}
           </div>
         )}
         <div className="flex-1 min-h-0">
@@ -809,10 +809,10 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
       {/* -------------------------------------------- right: transmitters --- */}
       <aside className="w-[38rem] flex flex-col min-h-0 bg-app-surface">
         <div className="px-3 py-2 border-b border-app-border-light flex items-center gap-2 flex-wrap text-xs">
-          <input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search names… (/)" aria-label="Search transmitters" dir="rtl" className="px-2 py-1 border border-app-border-medium rounded font-arabic w-48" />
+          <input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search names… (/)" aria-label="Search transmitters" dir="auto" className="input-bilingual px-2 py-1 border border-app-border-medium rounded-lg font-arabic text-lg w-48" />
           <label className="flex items-center gap-1"><input type="checkbox" checked={confirmedOnly} onChange={(e) => setConfirmedOnly(e.target.checked)} /> confirmed only</label>
           <label className="flex items-center gap-1"><input type="checkbox" checked={groupByForm} onChange={(e) => setGroupByForm(e.target.checked)} /> group by form (g)</label>
-          <span className="text-app-text-tertiary" data-testid="table-count">{shownTable.length.toLocaleString()} rows</span>
+          <span className="text-app-text-secondary" data-testid="table-count">{shownTable.length.toLocaleString()} rows</span>
         </div>
         <div className="px-3 py-1.5 border-b border-app-border-light flex items-center gap-1 flex-wrap text-xs">
           <button onClick={link} className="px-2 py-0.5 border border-app-border-medium rounded">Link (l)</button>
@@ -849,7 +849,7 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
           <div className="px-3 py-2 border-b border-app-border-light bg-app-accent-light text-xs" data-testid="occurrences">
             <div className="mb-1 flex items-center">
               <span className="font-arabic" dir="rtl">{occurrences[0].raw}</span>
-              <span className="ml-2 text-app-text-tertiary">{occurrences.length} occurrences — choose one</span>
+              <span className="ml-2 text-app-text-secondary">{occurrences.length} occurrences — choose one</span>
               <button onClick={() => setOccurrences(null)} className="ml-auto">×</button>
             </div>
             <ul className="max-h-32 overflow-y-auto">
@@ -902,7 +902,7 @@ function PersonEditor({ person, table, labels, onClose, onOp }: { person: Person
     <div className="px-3 py-2 border-b border-app-border-light bg-app-surface-variant text-xs space-y-2" data-testid="person-editor">
       <div className="flex items-center gap-2">
         <strong className="font-arabic text-base" dir="rtl">{person.canonical_name}</strong>
-        <span className="text-app-text-tertiary">{person.linked} linked · {person.forms.length} forms</span>
+        <span className="text-app-text-secondary">{person.linked} linked · {person.forms.length} forms</span>
         <button onClick={onClose} className="ml-auto">×</button>
       </div>
       <div className="flex items-center gap-2 flex-wrap">
@@ -922,7 +922,7 @@ function PersonEditor({ person, table, labels, onClose, onOp }: { person: Person
           {mine.map((t) => (
             <label key={t.id} className="font-arabic flex items-center gap-1" dir="rtl">
               <input type="checkbox" checked={splitIds.includes(t.id)} onChange={(e) => setSplitIds(e.target.checked ? [...splitIds, t.id] : splitIds.filter((x) => x !== t.id))} />
-              {t.raw} <span className="text-app-text-tertiary font-ui" dir="ltr">{labels.label(t.part_index, t.page_id)}</span>
+              {t.raw} <span className="text-app-text-secondary font-ui" dir="ltr">{labels.label(t.part_index, t.page_id)}</span>
             </label>
           ))}
         </div>
@@ -965,7 +965,7 @@ function ExportIsnads({ bookId }: { bookId: number }) {
         <option value="authority-csv">authority file (CSV)</option>
         <option value="authority-json">authority file (JSON)</option>
       </select>
-      {msg && <span className="text-app-text-tertiary truncate max-w-[12rem]" title={msg}>{msg}</span>}
+      {msg && <span className="text-app-text-secondary truncate max-w-[12rem]" title={msg}>{msg}</span>}
     </span>
   );
 }

@@ -48,7 +48,7 @@ export function BookDetail({
         <div className="flex-1" />
         {inWorkspace ? (
           <>
-            <span className="text-xs text-app-text-tertiary">In the workspace</span>
+            <span className="text-xs text-app-text-secondary">In the workspace</span>
             <button onClick={onOpen} className="px-3 py-1 text-sm bg-app-accent text-white rounded-lg">
               View Text
             </button>
@@ -67,7 +67,7 @@ export function BookDetail({
           </h1>
           <div className="text-xl text-app-text-secondary font-arabic" dir="rtl">
             {authorName || 'Unknown author'}
-            {book.death_ah != null && book.death_ah !== 0 && <span className="text-app-text-tertiary"> (ت {book.death_ah})</span>}
+            {book.death_ah != null && book.death_ah !== 0 && <span className="text-app-text-secondary"> (ت {book.death_ah})</span>}
           </div>
 
           {tags.length > 0 && (
@@ -114,7 +114,7 @@ export function BookDetail({
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs text-app-text-tertiary">{label}</div>
+      <div className="text-xs text-app-text-secondary">{label}</div>
       <div className="text-app-text-primary break-words">{value}</div>
     </div>
   );
@@ -176,7 +176,7 @@ function MetadataJsonView({ meta }: { meta: ParsedMetadata }) {
       <dl className="grid grid-cols-[minmax(8rem,auto)_1fr] gap-x-4 gap-y-2 text-sm">
         {groups.map(([label, values]) => (
           <div key={label} className="contents">
-            <dt className="text-xs text-app-text-tertiary pt-0.5">{label}</dt>
+            <dt className="text-xs text-app-text-secondary pt-0.5">{label}</dt>
             <dd className="font-arabic" dir="rtl">
               {values.join(' · ')}
             </dd>

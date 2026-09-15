@@ -126,7 +126,7 @@ export function PoetryPanel({ book }: Props) {
   };
 
   const columns: Column<VerseRow>[] = [
-    { key: 'meter', label: 'Meter', sortValue: (r) => meterLabel(r), rtl: true, width: '150px', render: (r) => <span className={r.meters.length === 0 ? 'text-app-text-tertiary' : ''} title={r.pattern || (r.vowelled < 0.6 ? 'not vowelled enough to scan' : 'scans as no meter')}>{meterLabel(r)}</span> },
+    { key: 'meter', label: 'Meter', sortValue: (r) => meterLabel(r), rtl: true, width: '150px', render: (r) => <span className={r.meters.length === 0 ? 'text-app-text-secondary' : ''} title={r.pattern || (r.vowelled < 0.6 ? 'not vowelled enough to scan' : 'scans as no meter')}>{meterLabel(r)}</span> },
     { key: 'h1', label: 'First hemistich', sortValue: (r) => r.h1_text, rtl: true, width: 'minmax(220px, 4fr)', render: (r) => r.h1_text },
     { key: 'h2', label: 'Second', sortValue: (r) => r.h2_text, rtl: true, width: 'minmax(180px, 3fr)', render: (r) => <span className="text-app-text-secondary">{r.h2_text}</span> },
     { key: 'page', label: 'Page', sortValue: (r) => r.part_index * 1_000_000 + r.page_id, width: '70px', defaultSort: 'asc', render: (r) => labels.label(r.part_index, r.page_id) },
@@ -135,7 +135,7 @@ export function PoetryPanel({ book }: Props) {
   ];
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
+    return <div className="p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
   }
 
   return (
@@ -158,7 +158,7 @@ export function PoetryPanel({ book }: Props) {
           <option value="unknown">meter unknown</option>
         </select>
         {scan && (
-          <span className="text-app-text-tertiary">
+          <span className="text-app-text-secondary">
             {shown.length}/{scan.verses.length} verses
           </span>
         )}

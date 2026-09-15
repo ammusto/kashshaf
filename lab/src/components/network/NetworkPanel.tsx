@@ -218,7 +218,7 @@ export function NetworkPanel({ book, version = 0 }: Props) {
   ];
 
   if (!book) {
-    return <div className="flex-1 p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
+    return <div className="flex-1 p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
   }
 
   // Spec §J3: with nothing confirmed there is no network, and a panel of
@@ -226,7 +226,7 @@ export function NetworkPanel({ book, version = 0 }: Props) {
   if (graph && graph.chains === 0) {
     return (
       <div className="flex-1 flex items-center justify-center p-6" data-testid="network-empty">
-        <p className="text-sm text-app-text-tertiary">Confirm at least one isnād to build a network.</p>
+        <p className="text-sm text-app-text-secondary">Confirm at least one isnād to build a network.</p>
       </div>
     );
   }
@@ -243,7 +243,7 @@ export function NetworkPanel({ book, version = 0 }: Props) {
           <input type="number" min={5} max={2000} value={nodeCap} onChange={(e) => setNodeCap(Math.max(5, Number(e.target.value) || 300))} className="w-16 border border-app-border-medium rounded px-1" aria-label="Node cap" />
         </label>
         {graph && (
-          <span className="text-app-text-tertiary" data-testid="network-summary">
+          <span className="text-app-text-secondary" data-testid="network-summary">
             {graph.chains} confirmed chain{graph.chains === 1 ? '' : 's'} · {graph.nodes.length} transmitter
             {graph.nodes.length === 1 ? '' : 's'} ({graph.nodes.filter((n) => n.linked).length} linked) · {graph.edges.length} edges
             {(graph.dropped_nodes > 0 || graph.dropped_edges > 0) && ` (${graph.dropped_nodes} nodes, ${graph.dropped_edges} edges hidden)`}
@@ -254,7 +254,7 @@ export function NetworkPanel({ book, version = 0 }: Props) {
             ← whole text
           </button>
         )}
-        {running && <span className="text-app-text-tertiary">laying out…</span>}
+        {running && <span className="text-app-text-secondary">laying out…</span>}
         <span className="ml-auto flex items-center gap-1">
           <button onClick={() => exportGraph('csv')} className="px-2 py-0.5 border border-app-border-medium rounded">
             CSV edges
@@ -330,13 +330,13 @@ export function NetworkPanel({ book, version = 0 }: Props) {
               })}
             </svg>
           ) : (
-            <div className="p-6 text-sm text-app-text-tertiary">
+            <div className="p-6 text-sm text-app-text-secondary">
               {graph ? 'Every node is hidden at this minimum edge weight.' : 'Loading…'}
             </div>
           )}
         </section>
         <aside className="w-96 border-l border-app-border-light bg-app-surface flex flex-col min-h-0">
-          <div className="px-3 py-1 text-xs text-app-text-tertiary border-b border-app-border-light">The author's direct sources (position 0)</div>
+          <div className="px-3 py-1 text-xs text-app-text-secondary border-b border-app-border-light">The author's direct sources (position 0)</div>
           <div className="p-2">
             <VirtualTable
               columns={sourceColumns}
@@ -348,7 +348,7 @@ export function NetworkPanel({ book, version = 0 }: Props) {
               testId="network-sources"
             />
           </div>
-          <div className="px-3 py-1 text-xs text-app-text-tertiary border-b border-t border-app-border-light">
+          <div className="px-3 py-1 text-xs text-app-text-secondary border-b border-t border-app-border-light">
             {focus
               ? `Transmitter rows of ${nameOf.get(nodeKey(focus)) ?? sources.find((s) => sameNode(s.id, focus))?.name ?? ''}`
               : 'Click a node for its transmitter rows'}

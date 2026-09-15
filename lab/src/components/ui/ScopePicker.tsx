@@ -142,13 +142,13 @@ export function ScopePicker({
           {pages.multiPart && (
             <input value={fromPart} onChange={(e) => setFromPart(e.target.value)} aria-label="From part" className="w-8 px-1 py-0.5 text-center border border-app-border-medium rounded tabular-nums" />
           )}
-          {pages.multiPart && <span className="text-app-text-tertiary">:</span>}
+          {pages.multiPart && <span className="text-app-text-secondary">:</span>}
           <input value={fromPage} onChange={(e) => setFromPage(e.target.value)} aria-label="From page" placeholder="from" className="w-14 px-1 py-0.5 text-center border border-app-border-medium rounded tabular-nums" />
-          <span className="text-app-text-tertiary">to</span>
+          <span className="text-app-text-secondary">to</span>
           {pages.multiPart && (
             <input value={toPart} onChange={(e) => setToPart(e.target.value)} aria-label="To part" className="w-8 px-1 py-0.5 text-center border border-app-border-medium rounded tabular-nums" />
           )}
-          {pages.multiPart && <span className="text-app-text-tertiary">:</span>}
+          {pages.multiPart && <span className="text-app-text-secondary">:</span>}
           <input value={toPage} onChange={(e) => setToPage(e.target.value)} aria-label="To page" placeholder="to" className="w-14 px-1 py-0.5 text-center border border-app-border-medium rounded tabular-nums" />
         </span>
       )}

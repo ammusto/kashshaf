@@ -332,7 +332,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
     []
   );
 
-  if (!book) return <div className="flex-1 p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
+  if (!book) return <div className="flex-1 p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
 
   return (
     <div className="flex-1 flex min-h-0" data-testid="reuse-panel">
@@ -472,7 +472,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
               {visible.map((m) => (
                 <ResultRow key={m.id} m={m} ctx={contexts.get(m.id)} onClick={() => void openTarget(m)} />
               ))}
-              {visible.length === 0 && shownRun != null && <p className="p-4 text-sm text-app-text-tertiary">No matches at this threshold.</p>}
+              {visible.length === 0 && shownRun != null && <p className="p-4 text-sm text-app-text-secondary">No matches at this threshold.</p>}
               {shownRun == null && !busy && (
                 <p className="p-4 text-sm text-app-text-secondary">
                   Select words in the text and press Analyse selected, or analyse the section the reader is in, or the
@@ -487,7 +487,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
         )}
 
         {busy === 'passage' && <LoadingOverlay step={{ label: 'Searching the corpus for this passage…' }} onCancel={cancel} />}
-        {busy === 'estimate' && <LoadingOverlay step={{ label: 'Working out how long that would take…' }} />}
+        {busy === 'estimate' && <LoadingOverlay step={{ label: 'Working out how long that would take…' }} onCancel={cancel} />}
       </section>
 
       <HeavyRunModal
@@ -753,33 +753,33 @@ function GearModal({
       <div
         role="dialog"
         aria-label="Reuse parameters"
-        className="bg-app-surface rounded shadow-lg border border-app-border-light w-[30rem] max-w-[95vw] p-4 text-sm space-y-4"
+        className="bg-app-surface rounded-2xl shadow-lg border border-app-border-light w-[30rem] max-w-[95vw] p-4 text-sm space-y-4"
         onClick={(e) => e.stopPropagation()}
         data-testid="reuse-gear-modal"
       >
         <h2 className="font-semibold">Reuse parameters</h2>
 
         <label className="flex items-center gap-2">
-          <span className="w-28 text-xs text-app-text-tertiary">Threshold</span>
+          <span className="w-28 text-xs text-app-text-secondary">Threshold</span>
           <input type="range" min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} className="flex-1" aria-label="Threshold" />
           <span className="w-10 tabular-nums text-right">{threshold.toFixed(2)}</span>
         </label>
-        <p className="text-[11px] text-app-text-tertiary -mt-2 ltr:ml-[7.5rem]">Hides rows below this score. No re-run.</p>
+        <p className="text-[11px] text-app-text-secondary -mt-2 ltr:ml-[7.5rem]">Hides rows below this score. No re-run.</p>
 
         <label className="flex items-center gap-2">
-          <span className="w-28 text-xs text-app-text-tertiary">Banality</span>
+          <span className="w-28 text-xs text-app-text-secondary">Banality</span>
           <input type="range" min={0.05} max={1} step={0.05} value={banalityScale} onChange={(e) => onBanality(Number(e.target.value))} className="flex-1" aria-label="Banality scale" />
           <span className="w-10 tabular-nums text-right">{banalityScale.toFixed(2)}</span>
         </label>
-        <p className="text-[11px] text-app-text-tertiary -mt-2 ltr:ml-[7.5rem]">
+        <p className="text-[11px] text-app-text-secondary -mt-2 ltr:ml-[7.5rem]">
           How hard a passage of common words is penalised. Re-scores what is already found.
         </p>
 
         <div>
-          <span className="block text-xs text-app-text-tertiary mb-1">Kinds of match shown</span>
+          <span className="block text-xs text-app-text-secondary mb-1">Kinds of match shown</span>
           <div className="flex flex-wrap gap-3">
             {TYPES.map((t) => (
-              <label key={t} className={`flex items-center gap-1 ${t === 'formulaic' ? 'text-app-text-tertiary' : ''}`}>
+              <label key={t} className={`flex items-center gap-1 ${t === 'formulaic' ? 'text-app-text-secondary' : ''}`}>
                 <input
                   type="checkbox"
                   checked={typeFilter.has(t)}
@@ -803,7 +803,7 @@ function GearModal({
 
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2">
-            <span className="text-xs text-app-text-tertiary">Banality rank</span>
+            <span className="text-xs text-app-text-secondary">Banality rank</span>
             <input
               type="number"
               min={0}
@@ -816,7 +816,7 @@ function GearModal({
             />
           </label>
           <label className="flex items-center gap-2">
-            <span className="text-xs text-app-text-tertiary">Least aligned words</span>
+            <span className="text-xs text-app-text-secondary">Least aligned words</span>
             <input
               type="number"
               min={2}
@@ -828,7 +828,7 @@ function GearModal({
             />
           </label>
         </div>
-        <p className="text-[11px] text-app-text-tertiary">Both of these change what a run finds, so they take effect on the next run.</p>
+        <p className="text-[11px] text-app-text-secondary">Both of these change what a run finds, so they take effect on the next run.</p>
 
         <div className="text-right">
           <button onClick={onClose} className="px-3 py-1 border border-app-border-medium rounded">

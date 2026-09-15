@@ -32,10 +32,10 @@ export function SettingsModal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30" onClick={onClose} data-testid="settings-modal">
-      <div role="dialog" aria-label={title} className="bg-app-surface rounded shadow-lg border border-app-border-light w-96 max-w-[95vw] p-4 text-sm" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-label={title} className="bg-app-surface rounded-2xl shadow-lg border border-app-border-light w-96 max-w-[95vw] p-4 text-sm" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center mb-3">
           <h2 className="font-semibold">{title}</h2>
-          <button onClick={onClose} className="ml-auto px-2 text-app-text-tertiary" aria-label="Close">
+          <button onClick={onClose} className="ml-auto px-2 text-app-text-secondary" aria-label="Close">
             ×
           </button>
         </div>

@@ -4,6 +4,7 @@ import { workspaceApi, whenAccessed, type WorkspaceEntry } from '../../api/works
 import { TextBrowser } from './TextBrowser';
 import { BookDetail } from './BookDetail';
 import { Notice } from '../ui/Running';
+import { useDragWidth } from '../ui/Splitter';
 
 /**
  * What Lab opens to (spec 1.5 §A1).
@@ -48,6 +49,7 @@ export function WorkspaceView({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<WorkspaceEntry | null>(null);
+  const { width, handle } = useDragWidth('lab.workspace.pane', 320, 240, 560);
 
   const ids = useMemo(() => new Set(entries.map((e) => e.book_id)), [entries]);
 
@@ -109,59 +111,72 @@ export function WorkspaceView({
 
   return (
     <div className="flex-1 flex min-h-0" data-testid="workspace-view">
-      <aside className="w-[280px] shrink-0 border-r border-app-border-light bg-app-surface flex flex-col min-h-0">
-        <div className="px-3 py-2 border-b border-app-border-light">
-          <h2 className="text-sm font-semibold">Workspace</h2>
-          <p className="text-[11px] text-app-text-tertiary mt-0.5">
+      <aside
+        className="relative shrink-0 border-r border-app-border-light bg-app-surface flex flex-col min-h-0"
+        style={{ width }}
+        data-testid="workspace-pane"
+      >
+        {handle}
+        <div className="px-4 py-3 border-b border-app-border-light">
+          <h2 className="text-base font-semibold">Workspace</h2>
+          <p className="text-xs text-app-text-secondary mt-0.5">
             {entries.length === 0 ? 'No texts yet' : `${entries.length} text${entries.length === 1 ? '' : 's'}`}
           </p>
         </div>
 
-        <div className="flex text-[11px] text-app-text-tertiary border-b border-app-border-light bg-app-surface-variant">
-          <button onClick={() => clickHeader('title')} className="flex-1 text-left px-3 py-1.5 hover:text-app-text-primary">
+        <div className="flex items-center h-10 text-xs font-semibold uppercase tracking-wide text-app-text-secondary
+                        border-b border-app-border-light bg-app-surface-variant">
+          <button onClick={() => clickHeader('title')} className="flex-1 min-w-0 text-left px-4 hover:text-app-text-primary">
             Name {sort.key === 'title' && (sort.dir === 'asc' ? '▲' : '▼')}
           </button>
-          <button onClick={() => clickHeader('accessed')} className="w-24 text-right px-3 py-1.5 hover:text-app-text-primary">
+          <button onClick={() => clickHeader('accessed')} className="w-24 text-right px-2 hover:text-app-text-primary">
             Accessed {sort.key === 'accessed' && (sort.dir === 'asc' ? '▲' : '▼')}
           </button>
+          <span className="w-8 shrink-0" />
         </div>
 
         <ul className="flex-1 overflow-y-auto" role="listbox" aria-label="Workspace texts" data-testid="workspace-list">
           {sorted.map((e) => (
-            <li key={e.book_id} className="group relative">
+            <li
+              key={e.book_id}
+              className={`group flex items-center border-b border-app-border-light hover:bg-app-surface-variant ${
+                e.book_id === currentId ? 'bg-app-accent-light' : ''
+              }`}
+            >
               <button
                 role="option"
                 aria-selected={e.book_id === currentId}
                 onClick={() => onOpen(e.book_id)}
-                className={`w-full flex items-start gap-2 px-3 py-2 text-left border-b border-app-border-light hover:bg-app-surface-variant ${
-                  e.book_id === currentId ? 'bg-app-accent-light' : ''
-                }`}
+                className="flex-1 min-w-0 flex items-start gap-2 px-4 py-2.5 text-left"
               >
                 <span className="flex-1 min-w-0">
-                  <span className="block font-arabic text-sm leading-snug truncate" dir="rtl">
+                  <span className="block font-arabic text-base leading-snug truncate" dir="rtl">
                     {e.title}
                   </span>
-                  <span className="block text-[11px] text-app-text-tertiary truncate">
+                  <span className="block text-xs text-app-text-secondary truncate">
                     {e.author ?? 'Unknown author'}
                     {e.death_ah != null && ` · d. ${e.death_ah}`}
                     {e.confirmed_isnads > 0 && ` · ${e.confirmed_isnads} isnād${e.confirmed_isnads === 1 ? '' : 's'}`}
                     {e.notes > 0 && ` · ${e.notes} note${e.notes === 1 ? '' : 's'}`}
                   </span>
                 </span>
-                <span className="w-20 shrink-0 text-right text-[11px] text-app-text-tertiary pt-0.5">{whenAccessed(e.accessed)}</span>
+                <span className="w-24 shrink-0 text-right text-xs text-app-text-secondary pt-0.5">
+                  {whenAccessed(e.accessed)}
+                </span>
               </button>
               <button
                 onClick={() => setConfirmRemove(e)}
                 title="Remove from workspace"
                 aria-label={`Remove ${e.title} from the workspace`}
-                className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 px-1 text-xs text-app-text-tertiary hover:text-app-error"
+                className="w-8 shrink-0 self-stretch flex items-center justify-center text-app-text-secondary
+                           opacity-0 group-hover:opacity-100 hover:text-app-error focus:opacity-100"
               >
                 ✕
               </button>
             </li>
           ))}
           {entries.length === 0 && (
-            <li className="px-3 py-4 text-xs text-app-text-tertiary">
+            <li className="px-4 py-4 text-sm text-app-text-secondary">
               Find a text on the right and add it. Its folder, with everything you confirm about it, lives in the workspace on disk.
             </li>
           )}
@@ -198,7 +213,7 @@ export function WorkspaceView({
           <div
             role="dialog"
             aria-label="Remove from workspace"
-            className="bg-app-surface rounded shadow-lg border border-app-border-light w-[28rem] max-w-[95vw] p-4 text-sm"
+            className="bg-app-surface rounded-2xl shadow-lg border border-app-border-light w-[28rem] max-w-[95vw] p-5 text-sm"
             onClick={(e) => e.stopPropagation()}
             data-testid="confirm-remove"
           >

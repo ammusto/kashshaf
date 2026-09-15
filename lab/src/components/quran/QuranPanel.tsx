@@ -320,7 +320,7 @@ export function QuranPanel({ book, onChanged }: Props) {
   ];
 
   if (!book) {
-    return <div className="p-6 text-sm text-app-text-tertiary">Open a text from the workspace first.</div>;
+    return <div className="p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
   }
 
   return (
@@ -338,7 +338,7 @@ export function QuranPanel({ book, onChanged }: Props) {
           <option value="confirmed">confirmed</option>
           <option value="open">open</option>
         </select>
-        <span className="text-app-text-tertiary">
+        <span className="text-app-text-secondary">
           {shown.length}/{rows.length} rows
         </span>
         {rows.length > 0 && (
@@ -352,7 +352,7 @@ export function QuranPanel({ book, onChanged }: Props) {
           </span>
         )}
         {status && (
-          <span className="text-app-text-tertiary" title={status.error ?? `${status.tokens.toLocaleString()} tokens, ${status.ayas} āyāt, ${status.trigrams.toLocaleString()} trigrams; ingest v${status.ingest_version}, detector ${status.detector_version}`}>
+          <span className="text-app-text-secondary" title={status.error ?? `${status.tokens.toLocaleString()} tokens, ${status.ayas} āyāt, ${status.trigrams.toLocaleString()} trigrams; ingest v${status.ingest_version}, detector ${status.detector_version}`}>
             {status.available ? `Qurʾān ${status.tokens.toLocaleString()} tokens · detector ${status.detector_version}` : `Qurʾān unavailable: ${status.error}`}
           </span>
         )}
@@ -371,7 +371,7 @@ export function QuranPanel({ book, onChanged }: Props) {
           <span title="Lemma agreement a quotation needs (spec §4.4: 0.8)">Lemma agreement ≥</span>
           <input type="number" min={0.5} max={1} step={0.05} value={draft.min_lemma_agree} onChange={(e) => setDraft({ ...draft, min_lemma_agree: Number(e.target.value) })} className="w-16 border border-app-border-medium rounded px-1" aria-label="Min lemma agreement" />
         </label>
-        <p className="text-xs text-app-text-tertiary">Defaults are the spec's (§4.4). Applied to the next run; kept between sessions.</p>
+        <p className="text-xs text-app-text-secondary">Defaults are the spec's (§4.4). Applied to the next run; kept between sessions.</p>
       </SettingsModal>
 
       <RunBar
@@ -409,39 +409,39 @@ export function QuranPanel({ book, onChanged }: Props) {
               <div className="flex items-center gap-2 mb-2">
                 <span className="font-semibold">{refOf(detail)}</span>
                 <span className="font-arabic text-base">{detail.sura_name}</span>
-                <span className="text-app-text-tertiary text-xs">{labels.label(detail.part_index, detail.page_id)}</span>
+                <span className="text-app-text-secondary text-xs">{labels.label(detail.part_index, detail.page_id)}</span>
                 <button onClick={() => show(detail)} className="text-xs text-app-accent underline">
                   show in reader
                 </button>
-                <button onClick={() => setDetail(null)} className="ml-auto px-2 text-app-text-tertiary" aria-label="Close details">
+                <button onClick={() => setDetail(null)} className="ml-auto px-2 text-app-text-secondary" aria-label="Close details">
                   ×
                 </button>
               </div>
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs mb-3">
-                <dt className="text-app-text-tertiary">Tokens</dt>
+                <dt className="text-app-text-secondary">Tokens</dt>
                 <dd>{detail.aligned}</dd>
-                <dt className="text-app-text-tertiary">Lemma</dt>
+                <dt className="text-app-text-secondary">Lemma</dt>
                 <dd>{detail.lemma_agree.toFixed(2)}</dd>
-                <dt className="text-app-text-tertiary">Surface</dt>
+                <dt className="text-app-text-secondary">Surface</dt>
                 <dd>
-                  {detail.surface_agree.toFixed(2)} <span className="text-app-text-tertiary">({detail.surface_agree >= 0.9 ? 'verbatim' : 'paraphrased or inflected'})</span>
+                  {detail.surface_agree.toFixed(2)} <span className="text-app-text-secondary">({detail.surface_agree >= 0.9 ? 'verbatim' : 'paraphrased or inflected'})</span>
                 </dd>
-                <dt className="text-app-text-tertiary">Cue</dt>
+                <dt className="text-app-text-secondary">Cue</dt>
                 <dd>{detail.cue ?? '—'}</dd>
-                <dt className="text-app-text-tertiary">Verdict</dt>
+                <dt className="text-app-text-secondary">Verdict</dt>
                 <dd>
                   <VerdictButtons r={detail} onVerdict={verdict} />
                 </dd>
               </dl>
               <div className="font-arabic page-body text-base mb-3" dir="rtl">
-                <span className="text-app-text-tertiary text-xs font-ui" dir="ltr">
+                <span className="text-app-text-secondary text-xs font-ui" dir="ltr">
                   as quoted:{' '}
                 </span>
                 {detail.snapshot}
               </div>
               {detail.also.length > 0 && (
                 <div className="text-xs mb-3" data-testid="quran-ambiguous">
-                  <div className="text-app-text-tertiary mb-1">Aligns equally to {detail.also.length + 1} āyāt — every reading:</div>
+                  <div className="text-app-text-secondary mb-1">Aligns equally to {detail.also.length + 1} āyāt — every reading:</div>
                   <div className="flex flex-wrap gap-1">
                     <span className="px-1 rounded bg-app-accent-light">{refOf(detail)}</span>
                     {detail.also.map((a) => (
@@ -453,23 +453,23 @@ export function QuranPanel({ book, onChanged }: Props) {
                 </div>
               )}
               <div className="flex items-center gap-2 text-xs mb-1">
-                <span className="text-app-text-tertiary">Āya with context</span>
+                <span className="text-app-text-secondary">Āya with context</span>
                 <label className="flex items-center gap-1">
                   <input type="checkbox" checked={uthmani} onChange={(e) => setUthmani(e.target.checked)} /> Uthmani
                 </label>
               </div>
               {context ? (
                 <div className="font-arabic page-body text-lg leading-9" dir="rtl" data-testid="quran-context">
-                  {context.before && <span className="text-app-text-tertiary">{uthmani ? context.before.text_uthmani : context.before.text} ﴿{context.before.aya}﴾ </span>}
+                  {context.before && <span className="text-app-text-secondary">{uthmani ? context.before.text_uthmani : context.before.text} ﴿{context.before.aya}﴾ </span>}
                   {context.ayas.map((a) => (
                     <span key={a.aya} className="bg-app-accent-light rounded px-0.5">
                       {uthmani ? a.text_uthmani : a.text} ﴿{a.aya}﴾{' '}
                     </span>
                   ))}
-                  {context.after && <span className="text-app-text-tertiary">{uthmani ? context.after.text_uthmani : context.after.text} ﴿{context.after.aya}﴾</span>}
+                  {context.after && <span className="text-app-text-secondary">{uthmani ? context.after.text_uthmani : context.after.text} ﴿{context.after.aya}﴾</span>}
                 </div>
               ) : (
-                <div className="text-xs text-app-text-tertiary">loading…</div>
+                <div className="text-xs text-app-text-secondary">loading…</div>
               )}
             </div>
           ) : (
