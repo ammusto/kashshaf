@@ -6,6 +6,40 @@ Nothing below has been published yet.
 
 ---
 
+## [lab 0.9.0] - 2026-09-15
+
+### Annotations
+
+Annotations now show in the text, as a coloured highlight behind the words
+they are on. Hover to read the note, click to edit it. Pick one of six
+colours when you write it, and mark words in the note bold or underlined.
+
+The contents pane has an Annotations list at the bottom, closed until you
+open it. It gives the page, the words and the first line of each note, in
+reading order, and takes you there.
+
+The annotation box now says where you are the way the rest of Lab does:
+volume and page, and the volume only when the text has more than one.
+
+### Cite
+
+A Cite button in the reader gives the text's citation in Chicago or MLA,
+with the page you are on, and copies it. Same citations as Kashshaf.
+
+### Metadata
+
+A Metadata panel above Read, showing everything the corpus knows about the
+open text: the same record the workspace browser shows, without the buttons.
+
+### Network
+
+Clicking a person used to quietly replace the whole graph with that person
+and their neighbours, which looked like a graph with almost nothing in it.
+It now says so, with the numbers, and offers the way back. A direct source
+with no link to draw is marked instead of silently missing, the number of
+sources is on the heading, and the number of unlinked names is on screen,
+with a word about what linking them does.
+
 ## [lab 0.8.0] - 2026-09-15
 
 ### Panels fill the window
