@@ -346,7 +346,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
 
   return (
     <div className="flex-1 flex min-h-0" data-testid="reuse-panel">
-      <section className="flex-1 min-w-0 flex border-r border-app-border-light">
+      <section className="flex-1 min-w-0 overflow-hidden flex border-r border-app-border-light">
         <ReadPanel
           book={book}
           initialAt={from?.at ?? null}

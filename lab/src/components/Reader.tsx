@@ -291,7 +291,7 @@ export function Reader({
         {loading && !page && <div className="text-sm text-app-text-tertiary">Loading page…</div>}
         {page && (
           <div
-            className="arabic page-body text-2xl select-text max-w-3xl mx-auto"
+            className="arabic page-body text-2xl select-text max-w-3xl mx-auto break-words"
             dir="rtl"
             onMouseLeave={() => { anchor.current = null; }}
             data-testid="page-body"

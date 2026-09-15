@@ -176,6 +176,28 @@ describe('ReusePanel', () => {
     await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(1));
   });
 
+  it('keeps the text pane shrinkable when a long passage is selected (A4)', async () => {
+    // A flex item's default min-width is its content's width, so without
+    // min-w-0 a multi-line selection made the reader grow over the results.
+    // jsdom does no layout, so what is asserted is the rule that permits
+    // shrinking; removing it is what caused the overlap.
+    api.reuse.passage.mockResolvedValue(passageResult([match(1, 0.74, 'verbatim')]));
+    render(<ReusePanel book={book} local />);
+    await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
+
+    const panel = screen.getByTestId('read-panel');
+    expect(panel.className).toContain('min-w-0');
+    expect(panel.className).toContain('overflow-hidden');
+
+    // Select a long run, the case that broke it.
+    selectTokens(0, 12);
+    const actions = await screen.findByTestId('selection-actions');
+    // The selected text is shown in a cell that can shrink and clips.
+    const shown = actions.querySelector('span');
+    expect(shown!.className).toContain('min-w-0');
+    expect(shown!.className).toContain('truncate');
+  });
+
   it('opens the matched page on a row click, and comes back to the results', async () => {
     api.reuse.passage.mockResolvedValue(passageResult([match(1, 0.74, 'verbatim')]));
     api.reuse.verdict.mockImplementation(async (id: number, v: string | null) => ({ ...match(1, 0.74, 'verbatim'), id, user_verdict: v }));

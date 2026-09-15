@@ -348,7 +348,7 @@ export function ReadPanel({
   );
 
   return (
-    <div className="flex-1 flex min-h-0 relative" data-testid="read-panel">
+    <div className="flex-1 min-w-0 flex min-h-0 relative overflow-hidden" data-testid="read-panel">
       <div className="flex-1 min-w-0 flex flex-col min-h-0 relative">
         <Notice error={error} />
         <Reader
