@@ -253,14 +253,6 @@ export function QuranPanel({ book, onChanged }: Props) {
     [pageRows, selected]
   );
 
-  const onTokenClick = useCallback(
-    (idx: number) => {
-      const r = pageRows.find((x) => idx >= x.tok_start && idx < x.tok_end);
-      if (r) setSelected(r.id);
-    },
-    [pageRows]
-  );
-
   const show = (r: QuranMatchRow) => {
     setSelected(r.id);
     const i = refs.findIndex((x) => x.part_index === r.part_index && x.page_id === r.page_id);
@@ -409,7 +401,7 @@ export function QuranPanel({ book, onChanged }: Props) {
 
       <div className="flex-1 min-h-0 flex">
         <section className="flex-1 min-w-0 border-r border-app-border-light">
-          <Reader page={page} pages={refs} index={index} onNavigate={(i) => goTo(i)} highlight={highlight} layerClass={layerClass} onTokenClick={onTokenClick} onClearSelection={() => setSelected(null)} loading={pageLoading} error={null} />
+          <Reader page={page} pages={refs} index={index} onNavigate={(i) => goTo(i)} highlight={highlight} layerClass={layerClass} interaction="text" loading={pageLoading} error={null} />
         </section>
         <section className="w-[52%] min-w-[460px] min-h-0 flex flex-col">
           {detail ? (

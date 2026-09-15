@@ -8,7 +8,6 @@ import { MenuBar } from './components/MenuBar';
 import { PanelBoundary } from './components/ui/PanelBoundary';
 import { WorkspaceView } from './components/workspace/WorkspaceView';
 import { ReadPanel } from './components/read/ReadPanel';
-import { SearchPanel } from './components/search/SearchPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StatsPanel, type HitRef } from './components/stats/StatsPanel';
 import { IsnadWorkbench } from './components/isnad/IsnadWorkbench';
@@ -28,7 +27,6 @@ import { PoetryPanel } from './components/poetry/PoetryPanel';
 
 const PANELS = [
   { id: 'read', label: 'Read' },
-  { id: 'search', label: 'Search' },
   { id: 'stats', label: 'Stats' },
   { id: 'isnad', label: 'Isnād' },
   { id: 'reuse', label: 'Reuse' },
@@ -60,8 +58,8 @@ export default function App() {
   /** Where the Read panel should open, when another panel sends it there. */
   const [readAt, setReadAt] = useState<At | null>(null);
   const [readMark, setReadMark] = useState<[number, number] | null>(null);
-  /** A passage handed to Reuse by "Find reuse" (spec §C4, §H1). */
-  const [reuseFrom, setReuseFrom] = useState<{ at: At; range: [number, number] } | null>(null);
+  /** The page Reuse should open at, from "Find reuse on this page" (7 B). */
+  const [reuseFrom, setReuseFrom] = useState<At | null>(null);
 
   const [dirty, setDirty] = useState(false);
   /**
@@ -241,8 +239,8 @@ export default function App() {
             book={current}
             initialAt={readAt}
             highlight={readMark}
-            onFindReuse={(sel) => {
-              setReuseFrom({ at: sel.at, range: sel.range });
+            onFindReuse={(at) => {
+              setReuseFrom(at);
               setPanel('reuse');
             }}
             onPageChange={(at) => {
@@ -251,17 +249,6 @@ export default function App() {
             onNotesChanged={() => {
               setDirty(true);
               void loadWorkspace();
-            }}
-          />
-        );
-      case 'search':
-        return (
-          <SearchPanel
-            book={current}
-            onShowHit={(at, matched) => {
-              setReadAt(at);
-              setReadMark(matched.length > 0 ? [Math.min(...matched), Math.max(...matched) + 1] : null);
-              setPanel('read');
             }}
           />
         );

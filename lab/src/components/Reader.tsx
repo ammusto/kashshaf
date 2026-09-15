@@ -88,6 +88,9 @@ export function Reader({
   marks,
   labels,
   toolbar,
+  interaction = 'tokens',
+  paneRef,
+  onScroll,
   onTokenClick,
   loading,
   error,
@@ -124,6 +127,19 @@ export function Reader({
    */
   toolbar?: React.ReactNode;
   /**
+   * How the mouse behaves over the text (Phase 7 B).
+   *
+   * `tokens` is the overlay: a drag paints a token range and a click opens
+   * the morphology popup, which is what the isnād workbench needs. `text`
+   * leaves the mouse to the browser, so the page selects and copies like
+   * any other text; the spans still carry their indices, so a selection can
+   * be read back as a token range by `tokenRangeOfSelection`.
+   */
+  interaction?: 'tokens' | 'text';
+  /** The scrolling pane, so a caller can restore where the reader was. */
+  paneRef?: React.MutableRefObject<HTMLDivElement | null>;
+  onScroll?: (top: number) => void;
+  /**
    * When set, a click on a token calls this instead of opening the popup
    * (the workbench's set-boundary / split / retag modes).
    */
@@ -134,7 +150,7 @@ export function Reader({
   const [popup, setPopup] = useState<{ token: Token; x: number; y: number } | null>(null);
   const [selection, setSelection] = useState<[number, number] | null>(null);
   const anchor = useRef<number | null>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const { runs, tokenByIdx, displayCount } = useMemo(() => {
     if (!page) return { runs: [] as Run[], tokenByIdx: new Map<number, Token>(), displayCount: 0 };
@@ -281,7 +297,11 @@ export function Reader({
       )}
 
       <div
-        ref={bodyRef}
+        ref={(el) => {
+          bodyRef.current = el;
+          if (paneRef) paneRef.current = el;
+        }}
+        onScroll={onScroll ? (e) => onScroll((e.target as HTMLDivElement).scrollTop) : undefined}
         className="flex-1 overflow-y-auto px-8 py-6"
         data-testid="reader-pane"
         onClick={(e) => {
@@ -304,16 +324,18 @@ export function Reader({
               ) : (
                 <span
                   key={i}
-                  className={`tok ${run.heading !== undefined ? 'page-heading' : ''} ${
+                  className={`${interaction === 'tokens' ? 'tok' : ''} ${
+                    run.heading !== undefined ? 'page-heading' : ''
+                  } ${
                     inSelection(run.token, selection) ? 'tok-selected' : ''
                   } ${inSelection(run.token, highlight ?? null) ? 'tok-hit' : ''} ${
                     layerClass?.(run.token) ?? ''
                   } ${markByToken.get(run.token)?.className ?? ''}`}
                   title={markByToken.get(run.token)?.title}
                   data-token={run.token}
-                  onMouseDown={(e) => onTokenDown(e, run.token as number)}
-                  onMouseEnter={() => onTokenEnter(run.token as number)}
-                  onMouseUp={(e) => onTokenUp(e, run.token as number)}
+                  onMouseDown={interaction === 'tokens' ? (e) => onTokenDown(e, run.token as number) : undefined}
+                  onMouseEnter={interaction === 'tokens' ? () => onTokenEnter(run.token as number) : undefined}
+                  onMouseUp={interaction === 'tokens' ? (e) => onTokenUp(e, run.token as number) : undefined}
                 >
                   {run.text}
                 </span>

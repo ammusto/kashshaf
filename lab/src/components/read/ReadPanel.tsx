@@ -1,21 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
-import { stripHtml } from '@kashshaf/shared';
 import { labApi, type Page } from '../../api/lab';
-import { Pages, sameAt, type At } from '../../api/pages';
+import { Pages, type At } from '../../api/pages';
 import { entryForPage, notesApi, tocApi, type Note, type TocNode, type TocRow } from '../../api/workspace';
+import { searchApi, toTerms, type Hit, type SearchInput, type SearchResults } from '../../api/search';
+import { selectedText, tokenRangeOfSelection } from '../../api/selection';
 import { Reader, type Mark } from '../Reader';
 import { TocPane } from './TocPane';
+import { SearchForm } from './SearchForm';
+import { ResultRow } from './ResultRow';
+import { Splitter, useDragWidth } from '../ui/Splitter';
 import { LoadingOverlay, Notice } from '../ui/Running';
 
 /**
- * The Read panel (spec 1.5 §C).
+ * Reading and searching one text, in one panel (Phase 7 §B).
  *
- * It owns one text's reading state: the page list with its printed numbers,
- * the table of contents, the notes, and where the reader is. The Reuse panel
- * embeds a second one as its left half (§H1), which is why this loads its own
- * data instead of taking it from the shell — two readers on the same text sit
- * on different pages.
+ * The arrangement is Kashshaf's: the search form down the left, the text
+ * filling the middle, its results underneath behind a draggable splitter, the
+ * contents on the right. A result scrolls the text above it to that page with
+ * the hit marked. There is no separate Search tab, because a search here is
+ * always a search of the text you are reading.
+ *
+ * The text selects like text. The overlay that used to capture the mouse is
+ * gone; a passage is chosen the ordinary way and read back through
+ * `tokenRangeOfSelection`, which the spans' token indices still make exact.
+ * What used to be a floating selection toolbar is now two buttons in the
+ * reader's own toolbar.
  */
 
 export interface Selection {
@@ -23,6 +33,48 @@ export interface Selection {
   range: [number, number];
   /** The selected words, for whatever the caller does with them. */
   text: string;
+}
+
+const EMPTY = (id: number): SearchInput => ({ id, query: '', mode: 'surface', cliticToggle: false });
+const PAGE_SIZE = 50;
+
+/** What survives a trip to another panel and back (§B). */
+interface Remembered {
+  and: SearchInput[];
+  or: SearchInput[];
+  tab: 'and' | 'or';
+  results: SearchResults | null;
+  offset: number;
+  at: At | null;
+  scrollTop: number;
+  ratio: number;
+}
+
+const blank = (): Remembered => ({
+  and: [EMPTY(1)],
+  or: [EMPTY(2)],
+  tab: 'and',
+  results: null,
+  offset: 0,
+  at: null,
+  scrollTop: 0,
+  ratio: 0.62,
+});
+
+const memory = new Map<number, Remembered>();
+
+export function resetReadMemory() {
+  memory.clear();
+}
+
+function remembered(bookId: number | null): Remembered {
+  if (bookId == null) return blank();
+  let m = memory.get(bookId);
+  if (!m) {
+    m = blank();
+    memory.set(bookId, m);
+  }
+  return m;
 }
 
 export function ReadPanel({
@@ -34,23 +86,26 @@ export function ReadPanel({
   onSectionChange,
   onNotesChanged,
   showToc: showTocDefault = true,
-  extraActions,
+  showSearch = true,
+  onSelectionChange,
 }: {
   book: BookMetadata | null;
-  /** Where to open; the first page when absent. */
   initialAt?: At | null;
-  /** A range to mark and scroll to on the opened page (a search hit). */
   highlight?: [number, number] | null;
-  /** "Find reuse" on the selection (spec §C4); hidden when absent. */
-  onFindReuse?: (sel: Selection) => void;
+  /** "Find reuse on this page": hands the open page to the Reuse panel (§B). */
+  onFindReuse?: (at: At) => void;
   onPageChange?: (at: At) => void;
-  /** The section the reader is in, as it changes (spec 1.5 H3, "Analyse section"). */
   onSectionChange?: (section: TocRow | null) => void;
   onNotesChanged?: () => void;
   showToc?: boolean;
-  /** Buttons the embedding panel adds to the selection strip. */
-  extraActions?: (sel: Selection) => React.ReactNode;
+  /** Reuse embeds the reader without the search rail. */
+  showSearch?: boolean;
+  /** The passage selected in the text, for Reuse's "Analyse selected" (§C1). */
+  onSelectionChange?: (sel: Selection | null) => void;
 }) {
+  const bookId = book?.id ?? null;
+  const mem = remembered(bookId);
+
   const [pages, setPages] = useState<Pages>(() => Pages.empty(book?.parts));
   const [index, setIndex] = useState(0);
   const [page, setPage] = useState<Page | null>(null);
@@ -67,11 +122,23 @@ export function ReadPanel({
   const [selection, setSelection] = useState<Selection | null>(null);
   const [editing, setEditing] = useState<{ note: Note | null; at: At; range: [number, number]; text: string } | null>(null);
 
+  const [andInputs, setAnd] = useState<SearchInput[]>(mem.and);
+  const [orInputs, setOr] = useState<SearchInput[]>(mem.or);
+  const [tab, setTab] = useState<'and' | 'or'>(mem.tab);
+  const [results, setResults] = useState<SearchResults | null>(mem.results);
+  const [offset, setOffset] = useState(mem.offset);
+  const [searching, setSearching] = useState(false);
+  const [ratio, setRatio] = useState(mem.ratio);
+  const nextId = useRef(3);
+
   const [partInput, setPartInput] = useState('');
   const [pageInput, setPageInput] = useState('');
-  const bookId = book?.id ?? null;
+  const [mark, setMark] = useState<[number, number] | null>(highlight ?? null);
 
-  // --- the page list, the contents and the notes, once per text ------------
+  const textRef = useRef<HTMLDivElement>(null);
+  const { width: railWidth, handle: railHandle } = useDragWidth('lab.read.rail', 300, 220, 520);
+
+  // --- the text ------------------------------------------------------------
 
   useEffect(() => {
     if (bookId == null) {
@@ -84,10 +151,7 @@ export function ReadPanel({
     setError(null);
     labApi
       .listPages(bookId)
-      .then((entries) => {
-        if (!live) return;
-        setPages(new Pages(entries, book?.parts));
-      })
+      .then((entries) => live && setPages(new Pages(entries, book?.parts)))
       .catch((e) => live && setError(String(e)))
       .finally(() => live && setLoading(false));
     return () => {
@@ -120,17 +184,12 @@ export function ReadPanel({
 
   const reloadNotes = useCallback(() => {
     if (bookId == null) return;
-    notesApi
-      .list(bookId)
-      .then(setNotes)
-      .catch(() => setNotes([]));
+    notesApi.list(bookId).then(setNotes).catch(() => setNotes([]));
   }, [bookId]);
   useEffect(reloadNotes, [reloadNotes]);
 
-  // --- navigation (spec §C2) ----------------------------------------------
-
   const go = useCallback(
-    async (next: number) => {
+    async (next: number, marked: [number, number] | null = null) => {
       if (bookId == null || next < 0 || next >= pages.length) return;
       const entry = pages.at(next);
       if (!entry) return;
@@ -140,33 +199,48 @@ export function ReadPanel({
         const p = await labApi.getPage(bookId, entry.part_index, entry.page_id);
         setIndex(next);
         setPage(p);
+        setMark(marked);
         setSelection(null);
-        onPageChange?.({ part_index: entry.part_index, page_id: entry.page_id });
+        const at = { part_index: entry.part_index, page_id: entry.page_id };
+        mem.at = at;
+        mem.scrollTop = 0;
+        onPageChange?.(at);
       } catch (e) {
         setError(String(e));
       } finally {
         setLoading(false);
       }
     },
-    [bookId, pages, onPageChange]
+    [bookId, pages, onPageChange, mem]
   );
 
-  // Open where the caller asked, once the page list is in.
+  // Open where we left off, or where the caller asked.
   const openedFor = useRef<string>('');
   useEffect(() => {
     if (bookId == null || pages.length === 0) return;
-    const wanted = initialAt ?? pages.at(0)!;
+    const wanted = initialAt ?? mem.at ?? pages.at(0)!;
     const key = `${bookId}:${wanted.part_index}:${wanted.page_id}`;
     if (openedFor.current === key) return;
     openedFor.current = key;
     const i = pages.indexOf(wanted.part_index, wanted.page_id);
-    void go(i >= 0 ? i : 0);
-    // `go` changes with `pages`; the key guard is what stops the loop.
+    void go(i >= 0 ? i : 0, initialAt ? highlight ?? null : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, pages, initialAt?.part_index, initialAt?.page_id]);
 
-  // The inputs follow the page unless the reader is typing in them.
+  // Where you were scrolled to is part of where you were (§B).
+  const restored = useRef('');
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el || !page) return;
+    const key = `${page.part_index}:${page.page_id}`;
+    if (restored.current === key) return;
+    restored.current = key;
+    el.scrollTop = mem.scrollTop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page?.part_index, page?.page_id]);
+
   const current = page ? { part_index: page.part_index, page_id: page.page_id } : null;
+
   useEffect(() => {
     if (!current) return;
     setPartInput(String(current.part_index + 1));
@@ -183,7 +257,6 @@ export function ReadPanel({
     void go(pages.indexOf(entry.part_index, entry.page_id));
   };
 
-  // Arrow keys page the book, except while the reader is in a field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -194,15 +267,13 @@ export function ReadPanel({
         return;
       }
       if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
-      // The text is right-to-left, so the right arrow goes back in it.
+      // The text reads right to left, so the right arrow goes back in it.
       if (e.key === 'ArrowRight') void go(index - 1);
       if (e.key === 'ArrowLeft') void go(index + 1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [go, index]);
-
-  // --- the contents (spec §C3) --------------------------------------------
 
   const currentEntry = useMemo(
     () => (current ? entryForPage(rows, current.part_index, current.page_id) : null),
@@ -211,16 +282,25 @@ export function ReadPanel({
 
   useEffect(() => {
     onSectionChange?.(currentEntry ?? null);
-    // The callback is the caller's; re-running on the entry alone is the point.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentEntry?.id]);
 
-  const jumpTo = (node: TocNode) => {
-    const i = pages.indexOf(node.part_index, node.page_id);
-    if (i >= 0) void go(i);
-  };
+  // --- the selection, as the browser makes it (§B) -------------------------
 
-  // --- notes (spec §C4) ----------------------------------------------------
+  useEffect(() => {
+    const read = () => {
+      if (!current) return;
+      const range = tokenRangeOfSelection(textRef.current);
+      const next = range ? { at: current, range, text: selectedText() } : null;
+      setSelection(next);
+      onSelectionChange?.(next);
+    };
+    document.addEventListener('selectionchange', read);
+    return () => document.removeEventListener('selectionchange', read);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onSelectionChange, current?.part_index, current?.page_id]);
+
+  // --- notes ---------------------------------------------------------------
 
   const pageNotes = useMemo(
     () => (current ? notes.filter((n) => n.part_index === current.part_index && n.page_id === current.page_id) : []),
@@ -228,26 +308,8 @@ export function ReadPanel({
   );
 
   const marks: Mark[] = useMemo(
-    () =>
-      pageNotes.map((n) => ({
-        start: n.tok_start,
-        end: n.tok_end,
-        className: 'tok-note',
-        title: n.text,
-      })),
+    () => pageNotes.map((n) => ({ start: n.tok_start, end: n.tok_end, className: 'tok-note', title: n.text })),
     [pageNotes]
-  );
-
-  const onSelectRange = useCallback(
-    (range: [number, number] | null) => {
-      if (!range || !page) {
-        setSelection(null);
-        return;
-      }
-      const words = page.tokens.filter((t) => t.idx >= range[0] && t.idx < range[1]).map((t) => t.surface);
-      setSelection({ at: { part_index: page.part_index, page_id: page.page_id }, range, text: words.join(' ') });
-    },
-    [page]
   );
 
   const saveNote = async () => {
@@ -282,14 +344,57 @@ export function ReadPanel({
     }
   };
 
+  // --- search --------------------------------------------------------------
+
+  const runSearch = useCallback(
+    async (at = 0) => {
+      if (bookId == null) return;
+      const { and_terms, or_terms } = toTerms(andInputs, orInputs);
+      if (and_terms.length === 0 && or_terms.length === 0) return;
+      setSearching(true);
+      setError(null);
+      try {
+        const r = await searchApi.book({ book_id: bookId, and_terms, or_terms, limit: PAGE_SIZE, offset: at });
+        setResults(r);
+        setOffset(at);
+        mem.results = r;
+        mem.offset = at;
+      } catch (e) {
+        setResults(null);
+        setError(String(e));
+      } finally {
+        setSearching(false);
+      }
+    },
+    [bookId, andInputs, orInputs, mem]
+  );
+
+  const setInputs = (which: 'and' | 'or', next: SearchInput[]) => {
+    (which === 'and' ? setAnd : setOr)(next);
+    mem[which] = next;
+  };
+
+  const showHit = (hit: Hit) => {
+    const i = pages.indexOf(hit.part_index, hit.page_id);
+    if (i < 0) return;
+    void go(i, hit.matched.length ? [Math.min(...hit.matched), Math.max(...hit.matched) + 1] : null);
+  };
+
   // --- render --------------------------------------------------------------
 
+  if (!book) {
+    return <div className="flex-1 p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
+  }
+
   const label = current ? pages.label(current.part_index, current.page_id) : '—';
-  const sectionTitle = currentEntry?.title ?? null;
 
   const toolbar = (
     <div className="flex items-center gap-3 px-3 py-1.5 border-b border-app-border-light bg-app-surface text-xs">
-      <button onClick={() => void go(index - 1)} disabled={index <= 0 || loading} className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40">
+      <button
+        onClick={() => void go(index - 1)}
+        disabled={index <= 0 || loading}
+        className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
+      >
         ‹ Prev
       </button>
       <form
@@ -308,7 +413,7 @@ export function ReadPanel({
               inputMode="numeric"
               className="w-10 px-1 py-1 text-center tabular-nums border border-app-border-medium rounded"
             />
-            <span className="text-app-text-tertiary">:</span>
+            <span className="text-app-text-secondary">:</span>
           </>
         )}
         <input
@@ -329,16 +434,42 @@ export function ReadPanel({
         Next ›
       </button>
 
-      {sectionTitle && (
-        <span className="flex-1 min-w-0 font-arabic text-sm text-app-text-secondary truncate text-center" dir="rtl" title={sectionTitle}>
-          {sectionTitle}
+      {currentEntry?.title ? (
+        <span
+          className="flex-1 min-w-0 font-arabic text-sm text-app-text-secondary truncate text-center"
+          dir="rtl"
+          title={currentEntry.title}
+        >
+          {currentEntry.title}
         </span>
+      ) : (
+        <div className="flex-1" />
       )}
-      {!sectionTitle && <div className="flex-1" />}
 
-      <span className="text-app-text-tertiary tabular-nums" data-testid="read-locator">
+      <span className="text-app-text-secondary tabular-nums" data-testid="read-locator">
         {label}
       </span>
+
+      <button
+        onClick={() => selection && setEditing({ note: null, at: selection.at, range: selection.range, text: '' })}
+        disabled={!selection}
+        title={selection ? 'Annotate the selected words' : 'Select some words first'}
+        data-testid="annotate"
+        className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40 hover:bg-app-surface-variant"
+      >
+        Annotate
+      </button>
+
+      {onFindReuse && current && (
+        <button
+          onClick={() => onFindReuse(current)}
+          className="px-2 py-1 border border-app-border-medium rounded hover:bg-app-surface-variant"
+          data-testid="find-reuse-page"
+          title="Look for this page's text elsewhere in the corpus"
+        >
+          Find reuse on this page
+        </button>
+      )}
       {!tocOpen && (
         <button onClick={() => setTocOpen(true)} title="Contents (Ctrl+T)" className="px-2 py-1 border border-app-border-medium rounded">
           Contents
@@ -347,61 +478,139 @@ export function ReadPanel({
     </div>
   );
 
+  const reader = (
+    <Reader
+      page={page}
+      pages={pages.entries.map((e) => ({ book_id: e.book_id, part_index: e.part_index, page_id: e.page_id }))}
+      index={index}
+      onNavigate={(i) => void go(i)}
+      highlight={mark}
+      labels={pages}
+      marks={marks}
+      toolbar={toolbar}
+      interaction="text"
+      paneRef={textRef}
+      onScroll={(top) => {
+        mem.scrollTop = top;
+      }}
+      loading={loading}
+      error={null}
+    />
+  );
+
   return (
     <div className="flex-1 min-w-0 flex min-h-0 relative overflow-hidden" data-testid="read-panel">
-      <div className="flex-1 min-w-0 flex flex-col min-h-0 relative">
+      {showSearch && (
+        <aside
+          className="relative flex-shrink-0 bg-app-surface border-r border-app-border-light"
+          style={{ width: railWidth }}
+          data-testid="search-rail"
+        >
+          {railHandle}
+          <SearchForm
+            tab={tab}
+            onTab={(t) => {
+              setTab(t);
+              mem.tab = t;
+            }}
+            andInputs={andInputs}
+            orInputs={orInputs}
+            onChange={(which, input) =>
+              setInputs(which, (which === 'and' ? andInputs : orInputs).map((i) => (i.id === input.id ? input : i)))
+            }
+            onAdd={(which) => setInputs(which, [...(which === 'and' ? andInputs : orInputs), EMPTY(nextId.current++)])}
+            onRemove={(which, id) => setInputs(which, (which === 'and' ? andInputs : orInputs).filter((i) => i.id !== id))}
+            onSearch={() => void runSearch(0)}
+            onClear={() => {
+              setInputs('and', [EMPTY(nextId.current++)]);
+              setInputs('or', [EMPTY(nextId.current++)]);
+              setTab('and');
+              setResults(null);
+              mem.tab = 'and';
+              mem.results = null;
+            }}
+            running={searching}
+            disabled={bookId == null}
+          />
+        </aside>
+      )}
+
+      <div className="flex-1 min-w-0 flex flex-col min-h-0 p-4">
         <Notice error={error} />
-        <Reader
-          page={page}
-          pages={pages.entries.map((e) => ({ book_id: e.book_id, part_index: e.part_index, page_id: e.page_id }))}
-          index={index}
-          onNavigate={(i) => void go(i)}
-          onSelectRange={onSelectRange}
-          highlight={highlight ?? null}
-          labels={pages}
-          marks={marks}
-          toolbar={toolbar}
-          loading={loading}
-          error={null}
-        />
 
-        {selection && (
-          <div className="px-3 py-1.5 border-t border-app-border-light bg-app-surface-variant flex items-center gap-2 text-xs" data-testid="selection-actions">
-            <span className="flex-1 min-w-0 font-arabic truncate" dir="rtl">
-              {selection.text}
-            </span>
-            <button
-              onClick={() => setEditing({ note: null, at: selection.at, range: selection.range, text: '' })}
-              className="px-2 py-1 border border-app-border-medium rounded"
-              data-testid="annotate"
-            >
-              Annotate
-            </button>
-            {onFindReuse && (
-              <button onClick={() => onFindReuse(selection)} className="px-2 py-1 border border-app-border-medium rounded" data-testid="find-reuse">
-                Find reuse
-              </button>
-            )}
-            {extraActions?.(selection)}
+        {showSearch ? (
+          <>
+            <div className="overflow-hidden rounded-xl bg-app-surface mb-3 flex flex-col min-h-0 border border-app-border-light" style={{ flex: ratio }}>
+              {reader}
+            </div>
+
+            <Splitter
+              ratio={ratio}
+              onDrag={(r) => {
+                setRatio(r);
+                mem.ratio = r;
+              }}
+            />
+
+            <div className="overflow-hidden rounded-xl bg-app-surface flex flex-col min-h-0 border border-app-border-light" style={{ flex: 1 - ratio }}>
+              <div className="h-10 bg-app-surface-variant px-6 flex items-center flex-shrink-0 border-b border-app-border-light gap-4">
+                <span className="text-xs font-semibold text-app-text-secondary uppercase tracking-wide" data-testid="search-summary">
+                  {results
+                    ? `${results.total.toLocaleString()} page${results.total === 1 ? '' : 's'}${results.capped ? '+' : ''}`
+                    : 'Results'}
+                </span>
+                {results && results.total > PAGE_SIZE && (
+                  <span className="flex items-center gap-2 text-xs">
+                    <button
+                      onClick={() => void runSearch(Math.max(0, offset - PAGE_SIZE))}
+                      disabled={offset === 0}
+                      className="px-2 py-0.5 border border-app-border-medium rounded disabled:opacity-40"
+                    >
+                      ‹
+                    </button>
+                    <span className="tabular-nums text-app-text-secondary">
+                      {(offset + 1).toLocaleString()}–{Math.min(offset + results.hits.length, results.total).toLocaleString()}
+                    </span>
+                    <button
+                      onClick={() => void runSearch(offset + PAGE_SIZE)}
+                      disabled={offset + PAGE_SIZE >= results.total}
+                      className="px-2 py-0.5 border border-app-border-medium rounded disabled:opacity-40"
+                    >
+                      ›
+                    </button>
+                  </span>
+                )}
+                {results && <span className="text-xs text-app-text-secondary ltr:ml-auto">{results.elapsed_ms} ms</span>}
+              </div>
+
+              <div className="flex-1 min-h-0 overflow-y-auto relative">
+                {results?.hits.map((h) => (
+                  <ResultRow
+                    key={`${h.part_index}:${h.page_id}`}
+                    hit={h}
+                    pages={pages}
+                    section={entryForPage(rows, h.part_index, h.page_id)?.title ?? null}
+                    onClick={() => showHit(h)}
+                  />
+                ))}
+                {results && results.hits.length === 0 && (
+                  <p className="p-6 text-sm text-app-text-secondary">Nothing in this text matches that.</p>
+                )}
+                {!results && (
+                  <p className="p-6 text-sm text-app-text-secondary">
+                    Search the text on the left. A term matches on its surface form, its lemma or its root, and the
+                    clitic toggle also matches the word with و ف ب ل or ك in front of it.
+                  </p>
+                )}
+                {searching && <LoadingOverlay step={{ label: 'Searching the text…' }} />}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden rounded-xl bg-app-surface border border-app-border-light">
+            {reader}
           </div>
         )}
-
-        {pageNotes.length > 0 && (
-          <div className="px-3 py-1 border-t border-app-border-light text-xs text-app-text-tertiary flex flex-wrap gap-2" data-testid="page-notes">
-            {pageNotes.map((n) => (
-              <button
-                key={n.id}
-                onClick={() => setEditing({ note: n, at: { part_index: n.part_index, page_id: n.page_id }, range: [n.tok_start, n.tok_end], text: n.text })}
-                className="px-2 py-0.5 rounded bg-app-surface border border-app-border-light hover:border-app-accent max-w-xs truncate"
-                title={n.text}
-              >
-                {n.text.split('\n')[0] || '(empty note)'}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {loading && pages.length === 0 && <LoadingOverlay step={{ label: 'Loading the text…' }} />}
       </div>
 
       {tocOpen && (
@@ -409,7 +618,10 @@ export function ReadPanel({
           tree={tree}
           pages={pages}
           currentId={currentEntry?.id ?? null}
-          onJump={jumpTo}
+          onJump={(node) => {
+            const i = pages.indexOf(node.part_index, node.page_id);
+            if (i >= 0) void go(i);
+          }}
           onClose={() => setTocOpen(false)}
           loading={tocLoading}
           error={tocError}
@@ -421,35 +633,37 @@ export function ReadPanel({
           <div
             role="dialog"
             aria-label="Annotation"
-            className="bg-app-surface rounded shadow-lg border border-app-border-light w-[32rem] max-w-[95vw] p-4"
+            className="bg-app-surface rounded-2xl shadow-lg border border-app-border-light w-[32rem] max-w-[95vw] p-5"
             onClick={(e) => e.stopPropagation()}
             data-testid="note-editor"
           >
             <h2 className="text-sm font-semibold mb-1">{editing.note ? 'Edit the note' : 'Annotate this passage'}</h2>
-            <p className="text-xs text-app-text-tertiary mb-2">
+            <p className="text-xs text-app-text-secondary mb-2">
               {pages.label(editing.at.part_index, editing.at.page_id)} · words {editing.range[0]}–{editing.range[1] - 1}
             </p>
-            {page && sameAt(editing.at, current) && (
-              <p className="font-arabic text-sm bg-app-surface-variant rounded p-2 mb-3 max-h-24 overflow-y-auto" dir="rtl">
-                {selectedWords(page, editing.range)}
-              </p>
-            )}
             <textarea
               value={editing.text}
               onChange={(e) => setEditing({ ...editing, text: e.target.value })}
               autoFocus
               aria-label="Note"
-              className="w-full h-32 border border-app-border-medium rounded p-2 text-sm"
+              className="w-full h-32 border border-app-border-medium rounded-lg p-2 text-sm"
             />
             <div className="flex items-center gap-2 mt-3">
-              <button onClick={() => void saveNote()} disabled={!editing.text.trim()} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40">
+              <button
+                onClick={() => void saveNote()}
+                disabled={!editing.text.trim()}
+                className="px-3 py-1 text-sm bg-app-accent text-white rounded-lg disabled:opacity-40"
+              >
                 Save
               </button>
-              <button onClick={() => setEditing(null)} className="px-3 py-1 text-sm border border-app-border-medium rounded">
+              <button onClick={() => setEditing(null)} className="px-3 py-1 text-sm border border-app-border-medium rounded-lg">
                 Cancel
               </button>
               {editing.note && (
-                <button onClick={() => void deleteNote(editing.note!)} className="ltr:ml-auto px-3 py-1 text-sm text-app-error border border-app-border-medium rounded">
+                <button
+                  onClick={() => void deleteNote(editing.note!)}
+                  className="ltr:ml-auto px-3 py-1 text-sm text-app-error border border-app-border-medium rounded-lg"
+                >
                   Delete
                 </button>
               )}
@@ -457,11 +671,23 @@ export function ReadPanel({
           </div>
         </div>
       )}
+
+      {pageNotes.length > 0 && (
+        <div className="absolute bottom-0 left-0 right-0 px-3 py-1 border-t border-app-border-light bg-app-surface text-xs flex flex-wrap gap-2" data-testid="page-notes">
+          {pageNotes.map((n) => (
+            <button
+              key={n.id}
+              onClick={() =>
+                setEditing({ note: n, at: { part_index: n.part_index, page_id: n.page_id }, range: [n.tok_start, n.tok_end], text: n.text })
+              }
+              className="px-2 py-0.5 rounded border border-app-border-light hover:border-app-accent max-w-xs truncate"
+              title={n.text}
+            >
+              {n.text.split('\n')[0] || '(empty note)'}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
-}
-
-function selectedWords(page: Page, range: [number, number]): string {
-  const words = page.tokens.filter((t) => t.idx >= range[0] && t.idx < range[1]).map((t) => t.surface);
-  return words.length > 0 ? words.join(' ') : stripHtml(page.body).slice(0, 200);
 }

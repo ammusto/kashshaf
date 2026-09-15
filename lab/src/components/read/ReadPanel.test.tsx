@@ -21,6 +21,7 @@ const api = vi.hoisted(() => ({
     rows: vi.fn(async (): Promise<unknown[]> => []),
     sectionRange: vi.fn(),
   },
+  search: vi.fn(async (): Promise<{ hits: unknown[]; total: number; elapsed_ms: number; capped: boolean }> => ({ hits: [], total: 0, elapsed_ms: 1, capped: false })),
   notes: {
     list: vi.fn(async (): Promise<unknown[]> => []),
     save: vi.fn(),
@@ -30,12 +31,16 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock('../../api/lab', () => ({ labApi: api.lab }));
+vi.mock('../../api/search', async () => {
+  const real = await vi.importActual<typeof import('../../api/search')>('../../api/search');
+  return { ...real, searchApi: { book: api.search } };
+});
 vi.mock('../../api/workspace', async () => {
   const real = await vi.importActual<typeof import('../../api/workspace')>('../../api/workspace');
   return { ...real, tocApi: api.toc, notesApi: api.notes };
 });
 
-import { ReadPanel } from './ReadPanel';
+import { ReadPanel, resetReadMemory } from './ReadPanel';
 
 const book: BookMetadata = { id: 527, title: 'الزهد', in_corpus: true, parts: 2 };
 
@@ -83,12 +88,26 @@ const rows = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetReadMemory();
   api.lab.listPages.mockResolvedValue(entries);
   api.lab.getPage.mockImplementation(async (_id: number, p: number, g: number) => pages.get(`${p}:${g}`) ?? null);
   api.toc.tree.mockResolvedValue(tree);
   api.toc.rows.mockResolvedValue(rows);
   api.notes.list.mockResolvedValue([]);
 });
+
+/** Select tokens [a, b) the way a person would: a real DOM selection. */
+function selectTokensNatively(a: number, b: number) {
+  const first = document.querySelector(`[data-token="${a}"]`)!;
+  const last = document.querySelector(`[data-token="${b - 1}"]`)!;
+  const range = document.createRange();
+  range.setStartBefore(first);
+  range.setEndAfter(last);
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.dispatchEvent(new Event('selectionchange'));
+}
 
 describe('ReadPanel', () => {
   it('labels a multi-part page as part:printed-page, counting parts from one', async () => {
@@ -138,24 +157,24 @@ describe('ReadPanel', () => {
     await waitFor(() => expect(screen.queryByTestId('toc-pane')).not.toBeInTheDocument());
   });
 
-  it('offers Annotate and Find reuse on a selection, and saves a note', async () => {
-    const onFindReuse = vi.fn();
+  it('selects like ordinary text, and annotates what was selected (7 B)', async () => {
     api.notes.save.mockResolvedValue({ id: 3, book_id: 527, part_index: 0, page_id: 1, tok_start: 0, tok_end: 2, text: 'a note', snapshot: '', created_at: '', updated_at: '', corpus_version: '4.1.0' });
-    render(<ReadPanel book={book} onFindReuse={onFindReuse} />);
+    render(<ReadPanel book={book} />);
     await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
 
-    fireEvent.mouseDown(document.querySelector('[data-token="0"]')!);
-    fireEvent.mouseEnter(document.querySelector('[data-token="1"]')!);
-    fireEvent.mouseUp(document.querySelector('[data-token="1"]')!);
-    const actions = await screen.findByTestId('selection-actions');
-    expect(actions).toHaveTextContent('قال حدثنا');
+    // No drag-to-analyse overlay and no floating toolbar.
+    expect(screen.queryByTestId('selection-actions')).toBeNull();
+    expect(document.querySelector('[data-token="0"]')!.className).not.toContain('tok ');
 
-    fireEvent.click(screen.getByTestId('find-reuse'));
-    expect(onFindReuse).toHaveBeenCalledWith(expect.objectContaining({ at: { part_index: 0, page_id: 1 }, range: [0, 2] }));
+    // Annotate is in the toolbar, and disabled until something is selected.
+    const annotate = screen.getByTestId('annotate');
+    expect(annotate).toBeDisabled();
+
+    selectTokensNatively(0, 2);
+    await waitFor(() => expect(screen.getByTestId('annotate')).toBeEnabled());
 
     fireEvent.click(screen.getByTestId('annotate'));
     const editor = await screen.findByTestId('note-editor');
-    // The note names its page the way every other label does.
     expect(editor).toHaveTextContent('1:7');
     fireEvent.change(within(editor).getByLabelText('Note'), { target: { value: 'a note' } });
     fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
@@ -163,6 +182,36 @@ describe('ReadPanel', () => {
     await waitFor(() =>
       expect(api.notes.save).toHaveBeenCalledWith({ book_id: 527, part_index: 0, page_id: 1, tok_start: 0, tok_end: 2, text: 'a note' })
     );
+  });
+
+  it('hands the open page to Reuse (7 B)', async () => {
+    const onFindReuse = vi.fn();
+    render(<ReadPanel book={book} onFindReuse={onFindReuse} />);
+    await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:7'));
+    fireEvent.click(screen.getByTestId('find-reuse-page'));
+    expect(onFindReuse).toHaveBeenCalledWith({ part_index: 0, page_id: 1 });
+  });
+
+  it('shows the search form beside the text and lists results below it (7 B)', async () => {
+    api.search.mockResolvedValue({
+      hits: [{ part_index: 0, page_id: 2, part_label: '', page_number: '8', body: 'ثم قال رحمه الله', score: 1, matched: [1] }],
+      total: 1,
+      elapsed_ms: 4,
+      capped: false,
+    });
+    render(<ReadPanel book={book} />);
+    await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:7'));
+    expect(screen.getByTestId('search-rail')).toBeInTheDocument();
+
+    fireEvent.change(screen.getAllByLabelText('Term')[0], { target: { value: 'قال' } });
+    fireEvent.click(screen.getByTestId('run-search'));
+    await waitFor(() => expect(api.search).toHaveBeenCalled());
+
+    const hit = await screen.findByTestId('search-hit');
+    expect(hit).toHaveTextContent('8');
+    // Clicking it moves the text above to that page.
+    fireEvent.click(hit);
+    await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:8'));
   });
 
   it('says why the contents are missing rather than showing an empty pane', async () => {

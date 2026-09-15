@@ -49,8 +49,8 @@ export function BookDetail({
         {inWorkspace ? (
           <>
             <span className="text-xs text-app-text-tertiary">In the workspace</span>
-            <button onClick={onOpen} className="px-3 py-1 text-sm bg-app-accent text-white rounded">
-              Open
+            <button onClick={onOpen} className="px-3 py-1 text-sm bg-app-accent text-white rounded-lg">
+              View Text
             </button>
           </>
         ) : (

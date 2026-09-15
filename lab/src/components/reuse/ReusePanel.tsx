@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { BookMetadata } from '@kashshaf/shared';
 import { labApi, type Page, type PageSpan } from '../../api/lab';
 import { Pages, plainPageLabel, type At } from '../../api/pages';
@@ -44,8 +45,8 @@ interface Props {
   book: BookMetadata | null;
   /** Whether the source is the local corpus (book mode needs it). */
   local: boolean;
-  /** A passage handed over by "Find reuse" in the Read panel (spec §C4, §H1). */
-  from?: { at: At; range: [number, number] } | null;
+  /** The page to open at, from "Find reuse on this page" (7 B). */
+  from?: At | null;
   /** Something was confirmed or rejected: the workspace folder is behind. */
   onChanged?: () => void;
 }
@@ -73,7 +74,9 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   const [section, setSection] = useState<TocRow | null>(null);
   const [pending, setPending] = useState<{ what: string; span: PageSpan | null; pages: number; tokens: number; estimateMs: number | null } | null>(null);
 
-  /** The row whose target page is open on the right (spec §H2). */
+  /** What the reader has selected, for "Analyse selected" (7 C1). */
+  const [selection, setSelection] = useState<{ at: At; range: [number, number]; text: string } | null>(null);
+  /** The row whose page is open in the reader (7 C3). */
   const [open, setOpen] = useState<MatchRow | null>(null);
   const [openPage, setOpenPage] = useState<Page | null>(null);
   const [sideBySide, setSideBySide] = useState(false);
@@ -136,19 +139,6 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
     },
     [bookId, params, threshold, banalityScale, excludeSameBook]
   );
-
-  // Arriving from the Read panel's "Find reuse": run it without being asked
-  // twice (spec §H1, "pre-loaded when arriving via Find reuse").
-  const ranFor = useRef<string>('');
-  useEffect(() => {
-    if (!from || bookId == null) return;
-    const key = `${bookId}:${from.at.part_index}:${from.at.page_id}:${from.range[0]}:${from.range[1]}`;
-    if (ranFor.current === key) return;
-    ranFor.current = key;
-    void findReuse(from.at, from.range);
-    // `findReuse` changes with every parameter; the key guard is the gate.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, bookId]);
 
   /** Ask first when the run is heavy (spec §F4), then start it. */
   const proposeRun = useCallback(
@@ -349,17 +339,27 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
       <section className="flex-1 min-w-0 overflow-hidden flex border-r border-app-border-light">
         <ReadPanel
           book={book}
-          initialAt={from?.at ?? null}
-          highlight={from?.range ?? null}
+          initialAt={open ? { part_index: open.target.part_index, page_id: open.target.page_id } : from ?? null}
+          highlight={open ? [open.t_start, open.t_end] : null}
           showToc={false}
+          showSearch={false}
           onSectionChange={setSection}
-          onFindReuse={(sel) => void findReuse(sel.at, sel.range)}
+          onSelectionChange={setSelection}
         />
       </section>
 
       <section className="w-[46%] min-w-[420px] flex flex-col min-h-0 relative">
         <div className="px-3 py-1.5 border-b border-app-border-light bg-app-surface text-xs flex items-center gap-2 flex-wrap">
           <span className="font-semibold">Reuse</span>
+          <button
+            onClick={() => selection && void findReuse(selection.at, selection.range)}
+            disabled={!selection || !!busy}
+            title={selection ? `Analyse the ${selection.range[1] - selection.range[0]} selected words` : 'Select some words in the text first'}
+            className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
+            data-testid="analyse-selected"
+          >
+            Analyse selected
+          </button>
           <button
             onClick={() => void analyseSection()}
             disabled={!local || !!busy || !section}
@@ -432,8 +432,8 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
         />
         <Notice error={error} message={message} />
 
-        {open ? (
-          <TargetView
+        {open && (
+          <OpenMatch
             m={open}
             page={openPage}
             queryPage={queryPages.get(`${open.part_index}:${open.page_id}`) ?? null}
@@ -442,7 +442,8 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
             onBack={() => setOpen(null)}
             onVerdict={verdict}
           />
-        ) : (
+        )}
+        {(
           <div className="flex-1 min-h-0 flex flex-col">
             {bookRun && aggregates.length > 0 && (
               <div className="border-b border-app-border-light">
@@ -457,10 +458,14 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
               </div>
             )}
 
-            <div className="flex items-center gap-2 px-3 py-1 text-[11px] text-app-text-tertiary border-b border-app-border-light" dir="rtl">
-              <span className="flex-1">Book</span>
-              <span className="flex-[2]">The words</span>
-              <span className="w-16 text-left">Page</span>
+            <div
+              className="flex items-center gap-3 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide
+                         text-app-text-secondary border-b border-app-border-light bg-app-surface-variant"
+              dir="rtl"
+            >
+              <span className="w-16 shrink-0">Page</span>
+              <span className="flex-[2] min-w-0">Text</span>
+              <span className="flex-1 min-w-0">Book</span>
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -469,11 +474,14 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
               ))}
               {visible.length === 0 && shownRun != null && <p className="p-4 text-sm text-app-text-tertiary">No matches at this threshold.</p>}
               {shownRun == null && !busy && (
-                <p className="p-4 text-sm text-app-text-tertiary">
-                  Select a passage on the left and press Find reuse, or analyse the section the reader is in.
+                <p className="p-4 text-sm text-app-text-secondary">
+                  Select words in the text and press Analyse selected, or analyse the section the reader is in, or the
+                  whole text.
                 </p>
               )}
-              {contextBusy && visible.length > 0 && <p className="p-2 text-[11px] text-app-text-tertiary">Fetching the surrounding words…</p>}
+              {contextBusy && visible.length > 0 && (
+                <p className="p-2 text-xs text-app-text-secondary">Fetching the surrounding words…</p>
+              )}
             </div>
           </div>
         )}
@@ -541,45 +549,76 @@ function contextOf(page: Page | null, m: MatchRow): Context {
  * rather than being what the reader came for.
  */
 function ResultRow({ m, ctx, onClick }: { m: MatchRow; ctx?: Context; onClick: () => void }) {
+  const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
+  const title = m.target_title ?? `book ${m.target.book_id}`;
   return (
-    <button
-      onClick={onClick}
-      dir="rtl"
-      className={`w-full flex items-start gap-2 px-3 py-2 text-right border-b border-app-border-light hover:bg-app-surface-variant ${
-        m.user_verdict === 'rejected' ? 'opacity-50' : ''
-      }`}
-      data-testid="reuse-row"
-    >
-      <span className="flex-1 min-w-0">
-        <span className="block font-arabic text-sm leading-snug truncate" title={m.target_title ?? undefined}>
-          {m.target_title ?? `book ${m.target.book_id}`}
-          {m.target_death_ah != null && <span className="text-app-text-tertiary"> (d. {m.target_death_ah})</span>}
+    <>
+      <div
+        onClick={onClick}
+        dir="rtl"
+        className={`w-full flex items-center gap-3 px-4 py-2.5 text-right border-b border-app-border-light
+                    cursor-pointer hover:bg-app-surface-variant transition-colors ${
+                      m.user_verdict === 'rejected' ? 'opacity-50' : ''
+                    }`}
+        data-testid="reuse-row"
+      >
+        <span className="w-16 shrink-0 text-sm text-app-text-primary tabular-nums" dir="ltr">
+          {plainPageLabel(m.target.part_index, m.target.page_id, m.target_parts, ctx?.pageNumber)}
         </span>
-        <span className="block text-[11px] text-app-text-tertiary" dir="ltr">
-          {m.score.toFixed(2)} · {m.kind}
-          {m.user_verdict === 'confirmed' && ' · confirmed'}
+
+        <span className="flex-[2] min-w-0 font-arabic text-lg leading-8 truncate">
+          {ctx ? (
+            <>
+              <span className="text-app-text-secondary">{ctx.before} </span>
+              <span className="text-red-700 font-semibold">{ctx.phrase}</span>
+              <span className="text-app-text-secondary"> {ctx.after}</span>
+            </>
+          ) : (
+            <span className="text-red-700 font-semibold">{m.snapshot}</span>
+          )}
         </span>
-      </span>
-      <span className="flex-[2] min-w-0 font-arabic text-base leading-7 line-clamp-2">
-        {ctx ? (
-          <>
-            <span className="text-app-text-tertiary">{ctx.before} </span>
-            <span className="font-medium">{ctx.phrase}</span>
-            <span className="text-app-text-tertiary"> {ctx.after}</span>
-          </>
-        ) : (
-          <span className="text-app-text-tertiary">{m.snapshot}</span>
+
+        <span
+          className="flex-1 min-w-0"
+          onMouseEnter={(e) => setTip({ x: e.clientX, y: e.clientY })}
+          onMouseMove={(e) => setTip({ x: e.clientX, y: e.clientY })}
+          onMouseLeave={() => setTip(null)}
+        >
+          <span className="block font-arabic text-lg font-medium text-app-accent truncate">{title}</span>
+          <span className="block text-xs text-app-text-secondary" dir="ltr">
+            {m.score.toFixed(2)} · {m.kind}
+            {m.user_verdict === 'confirmed' && ' · confirmed'}
+          </span>
+        </span>
+      </div>
+
+      {tip &&
+        createPortal(
+          <div
+            className="fixed z-50 max-w-sm px-3 py-2 rounded-lg bg-app-surface border border-app-border-medium
+                       shadow-lg text-sm pointer-events-none"
+            style={{ left: tip.x + 14, top: tip.y + 14 }}
+          >
+            <p className="font-arabic text-base" dir="rtl">
+              {title}
+            </p>
+            {m.target_author_name && (
+              <p className="font-arabic text-sm text-app-text-secondary mt-0.5" dir="rtl">
+                {m.target_author_name}
+              </p>
+            )}
+            {m.target_death_ah != null && (
+              <p className="text-xs text-app-text-secondary mt-0.5">died {m.target_death_ah} AH</p>
+            )}
+          </div>,
+          document.body
         )}
-      </span>
-      <span className="w-16 shrink-0 text-left text-[11px] text-app-text-tertiary tabular-nums pt-0.5">
-        {plainPageLabel(m.target.part_index, m.target.page_id, m.target_parts, ctx?.pageNumber)}
-      </span>
-    </button>
+    </>
   );
 }
 
-/** The matched page in the other book, with the match marked (spec §H2). */
-function TargetView({
+/** What is open in the reader, with the way back and the verdict (7 C3). */
+function OpenMatch({
   m,
   page,
   queryPage,
@@ -609,7 +648,7 @@ function TargetView({
   const labels = useMemo(() => (page ? new Pages([{ book_id: page.book_id, part_index: page.part_index, page_id: page.page_id, page_number: page.page_number, part_label: page.part_label }]) : Pages.empty()), [page]);
 
   return (
-    <div className="flex-1 flex flex-col min-h-0" data-testid="reuse-target">
+    <div className="flex-shrink-0 flex flex-col" data-testid="reuse-target">
       <div className="px-3 py-1.5 border-b border-app-border-light bg-app-surface-variant flex items-center gap-2 text-xs">
         <button onClick={onBack} className="px-2 py-1 border border-app-border-medium rounded" data-testid="back-to-results">
           ‹ Back to results
@@ -617,7 +656,7 @@ function TargetView({
         <span className="flex-1 min-w-0 font-arabic truncate text-right" dir="rtl" title={m.target_title ?? undefined}>
           {m.target_title ?? `book ${m.target.book_id}`}
         </span>
-        <span className="tabular-nums text-app-text-tertiary">{page ? labels.label(page.part_index, page.page_id) : '…'}</span>
+        <span className="tabular-nums text-app-text-secondary">{page ? labels.label(page.part_index, page.page_id) : '…'}</span>
         <label className="flex items-center gap-1">
           <input type="checkbox" checked={sideBySide} onChange={onToggleSideBySide} />
           Side by side
@@ -638,50 +677,38 @@ function TargetView({
         </button>
       </div>
 
-      <div className="px-3 py-1 text-[11px] text-app-text-tertiary border-b border-app-border-light">
+      <div className="px-3 py-1 text-xs text-app-text-secondary border-b border-app-border-light">
         score {m.score.toFixed(3)} · {m.kind} · coverage {m.components.coverage.toFixed(2)} · lemma {m.components.lemma_agree.toFixed(2)} · root{' '}
         {m.components.root_agree.toFixed(2)} · surface {m.components.surface_agree.toFixed(2)} · banal {m.components.banal_share.toFixed(2)} →{' '}
         {m.components.banality_factor.toFixed(2)} · {m.components.aligned} aligned
       </div>
 
-      {sideBySide && queryPage && page ? (
-        <div className="flex-1 overflow-y-auto grid grid-cols-2 gap-3 p-4 font-arabic text-lg leading-8" dir="rtl" data-testid="side-by-side">
+      {sideBySide && queryPage && page && (
+        <div className="max-h-56 overflow-y-auto grid grid-cols-2 gap-3 p-4 font-arabic text-lg leading-8 border-b border-app-border-light" dir="rtl" data-testid="side-by-side">
           <div>
-            <div className="text-[10px] text-app-text-tertiary mb-1" dir="ltr">
+            <div className="text-xs text-app-text-secondary mb-1" dir="ltr">
               this text
             </div>
             {queryPage.tokens
               .filter((t) => t.idx >= m.tok_start && t.idx < m.tok_end)
               .map((t) => (
-                <span key={t.idx} className={pairs.q.has(t.idx) ? `lay-pair-${pairs.q.get(t.idx)! % 8}` : 'text-app-text-tertiary'}>
+                <span key={t.idx} className={pairs.q.has(t.idx) ? `lay-pair-${pairs.q.get(t.idx)! % 8}` : 'text-app-text-secondary'}>
                   {t.surface}{' '}
                 </span>
               ))}
           </div>
           <div>
-            <div className="text-[10px] text-app-text-tertiary mb-1" dir="ltr">
+            <div className="text-xs text-app-text-secondary mb-1" dir="ltr">
               the other
             </div>
             {page.tokens
               .filter((t) => t.idx >= m.t_start && t.idx < m.t_end)
               .map((t) => (
-                <span key={t.idx} className={pairs.t.has(t.idx) ? `lay-pair-${pairs.t.get(t.idx)! % 8}` : 'text-app-text-tertiary'}>
+                <span key={t.idx} className={pairs.t.has(t.idx) ? `lay-pair-${pairs.t.get(t.idx)! % 8}` : 'text-app-text-secondary'}>
                   {t.surface}{' '}
                 </span>
               ))}
           </div>
-        </div>
-      ) : (
-        <div className="flex-1 overflow-y-auto p-6 font-arabic text-xl leading-9" dir="rtl">
-          {page ? (
-            page.tokens.map((t) => (
-              <span key={t.idx} className={t.idx >= m.t_start && t.idx < m.t_end ? 'tok-hit' : ''}>
-                {t.surface}{' '}
-              </span>
-            ))
-          ) : (
-            <p className="text-sm text-app-text-tertiary">Loading the page…</p>
-          )}
         </div>
       )}
     </div>

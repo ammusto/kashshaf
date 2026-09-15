@@ -95,6 +95,8 @@ export interface MatchRow {
   target: PageRef;
   target_title: string | null;
   target_author: number | null;
+  /** The author's name, for the row's hover card (Phase 7 C2). */
+  target_author_name: string | null;
   target_death_ah: number | null;
   /** The target book's part count, for its page label (spec 1.5 C1). */
   target_parts: number | null;

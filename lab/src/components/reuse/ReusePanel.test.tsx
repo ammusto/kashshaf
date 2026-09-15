@@ -56,6 +56,7 @@ vi.mock('../../api/workspace', async () => {
 });
 
 import { ReusePanel } from './ReusePanel';
+import { resetReadMemory } from '../read/ReadPanel';
 import type { MatchRow, PassageResult } from '../../api/reuse';
 
 const book: BookMetadata = { id: 4382, title: 'إعلام الموقعين', in_corpus: true, parts: 1 };
@@ -88,6 +89,7 @@ const match = (id: number, score: number, kind: MatchRow['kind'], banal = 0.2): 
   target_title: 'منحة الباري',
   target_author: null,
   target_death_ah: 926,
+  target_author_name: 'القسطلاني',
   target_parts: 1,
   t_start: 1,
   t_end: 16,
@@ -115,6 +117,7 @@ const passageResult = (matches: MatchRow[]): PassageResult => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetReadMemory();
   api.lab.listPageRefs.mockResolvedValue([{ book_id: 4382, part_index: 0, page_id: 118 }]);
   api.lab.listPages.mockResolvedValue([{ book_id: 4382, part_index: 0, page_id: 118, page_number: '118', part_label: 'ج١' }]);
   api.lab.getPage.mockImplementation(async (id: number, _p: number, pageId: number) =>
@@ -124,20 +127,25 @@ beforeEach(() => {
   api.reuse.pageLayer.mockResolvedValue([]);
 });
 
-/** Select tokens [a, b) in the reader by mouse. */
+/** Select tokens [a, b) the way a person would: a real DOM selection. */
 function selectTokens(a: number, b: number) {
-  const first = document.querySelector(`[data-token="${a}"]`) as HTMLElement;
-  const last = document.querySelector(`[data-token="${b - 1}"]`) as HTMLElement;
-  fireEvent.mouseDown(first);
-  fireEvent.mouseEnter(last);
-  fireEvent.mouseUp(last);
+  const first = document.querySelector(`[data-token="${a}"]`)!;
+  const last = document.querySelector(`[data-token="${b - 1}"]`)!;
+  const range = document.createRange();
+  range.setStartBefore(first);
+  range.setEndAfter(last);
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.dispatchEvent(new Event('selectionchange'));
 }
 
-/** Run passage mode over a selection and wait for the rows. */
+/** Select, then press Analyse selected, and wait for the rows (7 C1). */
 async function findReuseOver(a: number, b: number) {
   await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
   selectTokens(a, b);
-  fireEvent.click(await screen.findByTestId('find-reuse'));
+  await waitFor(() => expect(screen.getByTestId('analyse-selected')).toBeEnabled());
+  fireEvent.click(screen.getByTestId('analyse-selected'));
   await waitFor(() => expect(api.reuse.passage).toHaveBeenCalled());
 }
 
@@ -160,7 +168,12 @@ describe('ReusePanel', () => {
     await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(1));
     const row = screen.getByTestId('reuse-row');
     expect(row).toHaveTextContent('منحة الباري');
-    expect(row).toHaveTextContent('(d. 926)');
+    // 7 C2: the death year leaves the cell and appears on hover, with the
+    // title and the author.
+    expect(row).not.toHaveTextContent('926');
+    fireEvent.mouseEnter(within(row).getByText('منحة الباري'));
+    await waitFor(() => expect(document.body).toHaveTextContent('القسطلاني'));
+    expect(document.body).toHaveTextContent('died 926 AH');
     // Spec C1: a single-part book's page is its printed number, alone.
     expect(row).toHaveTextContent('6260');
     // The words, with a few on each side for context (spec H2).
@@ -189,13 +202,11 @@ describe('ReusePanel', () => {
     expect(panel.className).toContain('min-w-0');
     expect(panel.className).toContain('overflow-hidden');
 
-    // Select a long run, the case that broke it.
+    // Select a long run, the case that broke it, and the pane still cannot
+    // push its neighbour aside.
     selectTokens(0, 12);
-    const actions = await screen.findByTestId('selection-actions');
-    // The selected text is shown in a cell that can shrink and clips.
-    const shown = actions.querySelector('span');
-    expect(shown!.className).toContain('min-w-0');
-    expect(shown!.className).toContain('truncate');
+    await waitFor(() => expect(screen.getByTestId('analyse-selected')).toBeEnabled());
+    expect(screen.getByTestId('read-panel').className).toContain('min-w-0');
   });
 
   it('opens the matched page on a row click, and comes back to the results', async () => {
@@ -206,8 +217,11 @@ describe('ReusePanel', () => {
 
     fireEvent.click(await screen.findByTestId('reuse-row'));
     const target = await screen.findByTestId('reuse-target');
-    await waitFor(() => expect(target).toHaveTextContent('لليهود'));
+    // The strip names the book and offers the way back; the page itself is
+    // loaded in the reader on the left (7 C3).
+    expect(target).toHaveTextContent('منحة الباري');
     expect(within(target).getByTestId('back-to-results')).toBeInTheDocument();
+    await waitFor(() => expect(api.lab.getPage).toHaveBeenCalledWith(5563, 0, 6260));
 
     // The alignment is a toggle on that page, not a card that expands (§H2).
     fireEvent.click(within(target).getByLabelText('Side by side'));

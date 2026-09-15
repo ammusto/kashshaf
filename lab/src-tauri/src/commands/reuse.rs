@@ -238,6 +238,8 @@ pub struct MatchRow {
     pub target: PageRef,
     pub target_title: Option<String>,
     pub target_author: Option<i64>,
+    /// The author's name, for the row's hover card (Phase 7 C2).
+    pub target_author_name: Option<String>,
     pub target_death_ah: Option<i64>,
     /// How many parts the target book has, so the row can label its page the
     /// way that book prints it (spec 1.5 C1).
@@ -272,6 +274,7 @@ fn read_matches(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> 
                 target: PageRef { book_id: r.get::<_, i64>(8)? as u64, part_index: r.get::<_, i64>(9)? as u32, page_id: r.get::<_, i64>(10)? as u64 },
                 target_title: None,
                 target_author: None,
+                target_author_name: None,
                 target_death_ah: None,
                 target_parts: None,
                 t_start: r.get::<_, i64>(11)? as usize,
@@ -309,6 +312,11 @@ const MATCH_COLUMNS: &str = "id, run_id, book_id, part_index, page_id, tok_start
 
 /// Fill target titles from the source's book list, once per distinct book.
 fn with_titles(source: &dyn BookSource, rows: &mut [MatchRow]) {
+    // The author's name, which the book row carries only as an id.
+    let authors: HashMap<i64, String> = source
+        .authors()
+        .map(|v| v.into_iter().map(|a| (a.id, a.name)).collect())
+        .unwrap_or_default();
     let mut cache: HashMap<u64, Option<(String, Option<i64>, Option<i64>, Option<i64>)>> = HashMap::new();
     for r in rows.iter_mut() {
         let e = cache
@@ -319,6 +327,7 @@ fn with_titles(source: &dyn BookSource, rows: &mut [MatchRow]) {
             r.target_author = *a;
             r.target_death_ah = *d;
             r.target_parts = *parts;
+            r.target_author_name = a.and_then(|id| authors.get(&id).cloned());
         }
     }
 }
