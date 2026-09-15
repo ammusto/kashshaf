@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { BookMetadata } from '@kashshaf/shared';
 
 /**
@@ -157,6 +157,104 @@ describe('NetworkPanel', () => {
     expect(screen.getByTestId('node-f:الجنيد')).toHaveAttribute('data-linked', 'false');
     expect(screen.getByTestId('network-summary')).toHaveTextContent('2 transmitters (0 linked)');
     expect(screen.queryByTestId('panel-error')).toBeNull();
+  });
+
+  // ------------------------------------------------------ the canvas (8 C) ---
+
+  /** jsdom has no PointerEvent, and React only reads the mouse fields. `act`
+   *  is what flushes the state the handler sets. */
+  function pointer(target: EventTarget, type: string, init: MouseEventInit) {
+    act(() => {
+      target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, ...init }));
+    });
+  }
+
+  const level = () => Number((screen.getByTestId('zoom-level').textContent ?? '').replace('%', ''));
+  const viewport = () => screen.getByTestId('network-viewport').getAttribute('transform') ?? '';
+
+  it('fills the panel rather than drawing in a fixed box', async () => {
+    render(<NetworkPanel book={book} />);
+    const canvas = await screen.findByTestId('network-canvas');
+    // No viewBox and no width or height: the SVG is whatever the panel is.
+    expect(canvas).not.toHaveAttribute('viewBox');
+    expect(canvas).not.toHaveAttribute('width');
+    expect(canvas).not.toHaveAttribute('height');
+    expect(canvas.getAttribute('class')).toContain('w-full');
+    expect(canvas.getAttribute('class')).toContain('h-full');
+    // Everything drawn sits under one transform, which is the view.
+    expect(viewport()).toMatch(/translate\(-?[\d.]+,-?[\d.]+\) scale\([\d.]+\)/);
+  });
+
+  it('zooms on the wheel, on the buttons, and back to life size on reset', async () => {
+    render(<NetworkPanel book={book} />);
+    const canvas = await screen.findByTestId('network-canvas');
+
+    // The first wheel also takes the view off auto-fit, so the reading after
+    // it is the baseline.
+    fireEvent.wheel(canvas, { deltaY: -100, clientX: 100, clientY: 100 });
+    const first = level();
+    fireEvent.wheel(canvas, { deltaY: -100, clientX: 100, clientY: 100 });
+    expect(level()).toBeGreaterThan(first);
+
+    const before = level();
+    fireEvent.click(screen.getByLabelText('Zoom in'));
+    expect(level()).toBe(Math.round(before * 1.3));
+    fireEvent.click(screen.getByLabelText('Zoom out'));
+    expect(level()).toBeCloseTo(before, 0);
+
+    fireEvent.click(screen.getByTestId('zoom-reset'));
+    expect(level()).toBe(100);
+  });
+
+  it('pans on a drag of the background, and fits on demand', async () => {
+    render(<NetworkPanel book={book} />);
+    const canvas = await screen.findByTestId('network-canvas');
+    fireEvent.click(screen.getByTestId('zoom-reset'));
+    const start = viewport();
+
+    pointer(canvas, 'pointerdown', { button: 0, clientX: 0, clientY: 0 });
+    pointer(window, 'pointermove', { clientX: 40, clientY: 25 });
+    pointer(window, 'pointerup', { clientX: 40, clientY: 25 });
+    const panned = viewport();
+    expect(panned).not.toBe(start);
+    expect(panned).toContain('scale(1)');
+
+    // Fit puts it back over the graph at a scale that holds all of it.
+    fireEvent.click(screen.getByTestId('zoom-fit'));
+    expect(viewport()).not.toBe(panned);
+    expect(level()).toBeGreaterThan(0);
+  });
+
+  it('drops the labels once they would be too small to read', async () => {
+    render(<NetworkPanel book={book} />);
+    const canvas = await screen.findByTestId('network-canvas');
+    fireEvent.click(screen.getByTestId('zoom-reset'));
+    expect(canvas.querySelectorAll('text').length).toBe(3);
+
+    // 11px type at anything under about 64% is a smudge.
+    const out = screen.getByLabelText('Zoom out');
+    while (level() > 60) fireEvent.click(out);
+    expect(canvas.querySelectorAll('text').length).toBe(0);
+    // The nodes themselves stay.
+    expect(canvas.querySelectorAll('circle').length).toBe(3);
+  });
+
+  it('finds a person by name and puts them in the middle', async () => {
+    render(<NetworkPanel book={book} />);
+    await screen.findByTestId('network-canvas');
+    fireEvent.click(screen.getByTestId('zoom-reset'));
+    const before = viewport();
+
+    // Typed without the hamza, as a reader would.
+    fireEvent.change(screen.getByTestId('network-search'), { target: { value: 'ابو داود' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Find' }));
+    expect(screen.getByTestId('node-p1')).toHaveAttribute('data-found', 'true');
+    expect(viewport()).not.toBe(before);
+
+    fireEvent.change(screen.getByTestId('network-search'), { target: { value: 'سفيان' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Find' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('No one in this graph');
+    expect(screen.queryByTestId('node-p1')).not.toHaveAttribute('data-found');
   });
 
   it('redraws when the workbench says something was confirmed (spec 1.5 J1)', async () => {
