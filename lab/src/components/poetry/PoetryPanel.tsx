@@ -139,7 +139,7 @@ export function PoetryPanel({ book }: Props) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex-1 min-w-0 flex min-h-0 flex-col" data-testid="poetry-panel">
       <div className="px-3 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-2 flex-wrap text-xs">
         <span className="px-1.5 py-0.5 rounded bg-app-surface-variant text-app-text-secondary" title="Spec §4.6: candidate verses and ʿarūḍ meter detection are experimental">
           experimental

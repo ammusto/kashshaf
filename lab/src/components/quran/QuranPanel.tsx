@@ -324,7 +324,7 @@ export function QuranPanel({ book, onChanged }: Props) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex-1 min-w-0 flex min-h-0 flex-col" data-testid="quran-panel">
       <div className="px-3 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-2 flex-wrap text-xs">
         <button onClick={() => void propose()} disabled={busy || !status?.available} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40" title="Whole-book run (§4.4)">
           {busy ? 'Detecting…' : 'Detect quotations'}

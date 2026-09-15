@@ -232,7 +232,7 @@ export function NetworkPanel({ book, version = 0 }: Props) {
   }
 
   return (
-    <div className="flex-1 flex h-full min-h-0 flex-col">
+    <div className="flex-1 min-w-0 flex min-h-0 flex-col" data-testid="network-panel">
       <div className="px-3 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-3 flex-wrap text-xs">
         <label className="flex items-center gap-1" title="Edges lighter than this are hidden (spec §4.5)">
           min edge weight

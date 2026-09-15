@@ -128,7 +128,7 @@ export function StatsPanel({ book, onShowHit }: { book: BookMetadata | null; onS
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex-1 min-w-0 flex flex-col min-h-0" data-testid="stats-panel">
       <div className="px-4 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-4 flex-wrap">
         <div className="flex gap-1" role="tablist">
           {TABS.map((t) => (

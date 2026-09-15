@@ -335,7 +335,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   if (!book) return <div className="flex-1 p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>;
 
   return (
-    <div className="flex-1 flex min-h-0" data-testid="reuse-panel">
+    <div className="flex-1 min-w-0 flex min-h-0" data-testid="reuse-panel">
       <section className="flex-1 min-w-0 overflow-hidden flex border-r border-app-border-light">
         <ReadPanel
           book={book}
