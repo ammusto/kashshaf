@@ -81,6 +81,7 @@ export function ReadPanel({
   book,
   initialAt,
   highlight,
+  highlightClass,
   onFindReuse,
   onPageChange,
   onSectionChange,
@@ -92,9 +93,12 @@ export function ReadPanel({
   book: BookMetadata | null;
   initialAt?: At | null;
   highlight?: [number, number] | null;
+  /** The class the highlight is drawn in; see `Reader`. */
+  highlightClass?: string;
   /** "Find reuse on this page": hands the open page to the Reuse panel (§B). */
   onFindReuse?: (at: At) => void;
-  onPageChange?: (at: At) => void;
+  /** The page now open, and its label by the C1 rule. */
+  onPageChange?: (at: At, label: string) => void;
   onSectionChange?: (section: TocRow | null) => void;
   onNotesChanged?: () => void;
   showToc?: boolean;
@@ -204,7 +208,7 @@ export function ReadPanel({
         const at = { part_index: entry.part_index, page_id: entry.page_id };
         mem.at = at;
         mem.scrollTop = 0;
-        onPageChange?.(at);
+        onPageChange?.(at, pages.label(entry.part_index, entry.page_id));
       } catch (e) {
         setError(String(e));
       } finally {
@@ -213,6 +217,13 @@ export function ReadPanel({
     },
     [bookId, pages, onPageChange, mem]
   );
+
+  // A caller that changes only the span, and not the page, still means it:
+  // the reuse panel moves the mark from one match to the next within a page.
+  useEffect(() => {
+    setMark(highlight ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlight?.[0], highlight?.[1]]);
 
   // Open where we left off, or where the caller asked.
   const openedFor = useRef<string>('');
@@ -485,6 +496,7 @@ export function ReadPanel({
       index={index}
       onNavigate={(i) => void go(i)}
       highlight={mark}
+      highlightClass={highlightClass}
       labels={pages}
       marks={marks}
       toolbar={toolbar}

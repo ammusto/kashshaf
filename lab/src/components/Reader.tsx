@@ -84,6 +84,7 @@ export function Reader({
   onSelectRange,
   onClearSelection,
   highlight,
+  highlightClass = 'tok-hit',
   layerClass,
   marks,
   labels,
@@ -108,6 +109,11 @@ export function Reader({
    * heading (spec §7.3 click-through). Distinct from the user's selection.
    */
   highlight?: [number, number] | null;
+  /**
+   * What to draw the highlight in. Green by default, which is a hit; the
+   * reuse panel asks for red on the side that matched (8 D).
+   */
+  highlightClass?: string;
   /**
    * Extra CSS class per token index — the workbench's highlight layers
    * (transmitters, verbs, matn, chain outline), spec §7.2/§7.4.
@@ -328,7 +334,7 @@ export function Reader({
                     run.heading !== undefined ? 'page-heading' : ''
                   } ${
                     inSelection(run.token, selection) ? 'tok-selected' : ''
-                  } ${inSelection(run.token, highlight ?? null) ? 'tok-hit' : ''} ${
+                  } ${inSelection(run.token, highlight ?? null) ? highlightClass : ''} ${
                     layerClass?.(run.token) ?? ''
                   } ${markByToken.get(run.token)?.className ?? ''}`}
                   title={markByToken.get(run.token)?.title}

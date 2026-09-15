@@ -119,7 +119,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetReadMemory();
   api.lab.listPageRefs.mockResolvedValue([{ book_id: 4382, part_index: 0, page_id: 118 }]);
-  api.lab.listPages.mockResolvedValue([{ book_id: 4382, part_index: 0, page_id: 118, page_number: '118', part_label: 'ج١' }]);
+  api.lab.listPages.mockImplementation(async (id: number) =>
+    id === 5563
+      ? [{ book_id: 5563, part_index: 0, page_id: 6260, page_number: '6260', part_label: 'ج١' }]
+      : [{ book_id: 4382, part_index: 0, page_id: 118, page_number: '118', part_label: 'ج١' }]
+  );
   api.lab.getPage.mockImplementation(async (id: number, _p: number, pageId: number) =>
     id === 4382 && pageId === 118 ? queryPage : id === 5563 ? targetPage : null
   );
@@ -235,6 +239,52 @@ describe('ReusePanel', () => {
 
     fireEvent.click(screen.getByTestId('back-to-results'));
     await waitFor(() => expect(screen.getByTestId('reuse-row')).toBeInTheDocument());
+  });
+
+  it('opens the other text in a second reader, green here and red there (8 D)', async () => {
+    api.reuse.passage.mockResolvedValue(passageResult([match(1, 0.74, 'verbatim')]));
+    render(<ReusePanel book={book} local />);
+    await findReuseOver(0, 8);
+
+    // One reader until a row is opened.
+    expect(screen.getAllByTestId('read-panel')).toHaveLength(1);
+    fireEvent.click(await screen.findByTestId('reuse-row'));
+
+    await waitFor(() => expect(screen.getAllByTestId('read-panel')).toHaveLength(2));
+    const [left, right] = screen.getAllByTestId('read-panel');
+    // Two panes, each with its own scroll.
+    expect(screen.getAllByTestId('reader-pane')).toHaveLength(2);
+
+    // The left one stayed on the query text and marks the query span green.
+    expect(within(left).getByTestId('read-locator')).toHaveTextContent('118');
+    const green = left.querySelectorAll('.tok-hit');
+    expect(green.length).toBeGreaterThan(0);
+    expect(green[0].getAttribute('data-token')).toBe('0');
+    expect(left.querySelectorAll('.tok-match')).toHaveLength(0);
+
+    // The right one loaded the other book, at the matched page, in red.
+    await waitFor(() => expect(api.lab.listPages).toHaveBeenCalledWith(5563));
+    await waitFor(() => expect(right.querySelectorAll('.tok-match').length).toBeGreaterThan(0));
+    expect(right.querySelectorAll('.tok-match')[0].getAttribute('data-token')).toBe('1');
+    expect(right.querySelectorAll('.tok-hit')).toHaveLength(0);
+    // Its text is the other book's, not this one's.
+    expect(right).toHaveTextContent('عزير ابن الله');
+
+    // The header says whose book it is, by whom, and which page (§C1).
+    const target = screen.getByTestId('reuse-target');
+    expect(target).toHaveTextContent('منحة الباري');
+    expect(target).toHaveTextContent('القسطلاني');
+    expect(within(target).getByTestId('target-page')).toHaveTextContent('6260');
+
+    // The alignment is still a toggle within this state.
+    fireEvent.click(within(target).getByLabelText('Side by side'));
+    expect(await screen.findByTestId('side-by-side')).toBeInTheDocument();
+
+    // Back to the table, and the left reader has not moved.
+    fireEvent.click(screen.getByTestId('back-to-results'));
+    await waitFor(() => expect(screen.getByTestId('reuse-row')).toBeInTheDocument());
+    expect(screen.getAllByTestId('read-panel')).toHaveLength(1);
+    expect(within(screen.getByTestId('read-panel')).getByTestId('read-locator')).toHaveTextContent('118');
   });
 
   it('re-scores through Rust when the banality slider moves', async () => {

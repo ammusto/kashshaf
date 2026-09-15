@@ -164,10 +164,29 @@ body {
   border-bottom: 2px solid #F59E0B;
 }
 
-/* A concordance hit or section heading the user clicked through to. */
+/*
+ * A concordance hit or section heading the user clicked through to, and the
+ * query span in the reuse panel: green is always "the passage you asked
+ * about" (8 D).
+ */
 .tok-hit {
   background: #D4EDDA;
   border-bottom: 2px solid #28A745;
+}
+
+/*
+ * And red is always "the passage someone else has": the matched words in the
+ * results table, in the target reader, and in the reader's reuse layer.
+ */
+.tok-match {
+  background: #FDE2E2;
+  border-bottom: 2px solid #DC3545;
+}
+
+/* The same red, on one line in the results table, where a fill would shout. */
+.reuse-phrase {
+  color: #DC3545;
+  font-weight: 600;
 }
 
 /*
@@ -201,7 +220,7 @@ body {
  * eight colours that connect aligned tokens in the side-by-side view, and
  * the target text's aligned tokens (bold when the surface is the same).
  */
-.lay-reuse { background: #FFF1D6; border-bottom: 2px solid #E8A33D; }
+.lay-reuse { background: #FDE2E2; border-bottom: 2px solid #DC3545; }
 .lay-reuse-confirmed { background: #DCF5E3; border-bottom: 2px solid #1F9D55; }
 .lay-reuse-rejected { background: #F3F4F6; border-bottom: 2px dotted #9CA3AF; }
 .lay-zone-quran { box-shadow: 0 2px 0 0 #0E7C7B; }

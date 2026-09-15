@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { BookMetadata } from '@kashshaf/shared';
 import { labApi, type Page, type PageSpan } from '../../api/lab';
-import { Pages, plainPageLabel, type At } from '../../api/pages';
+import { plainPageLabel, type At } from '../../api/pages';
 import { tocApi, type TocRow } from '../../api/workspace';
 import {
   DEFAULT_REUSE_PARAMS,
@@ -32,8 +32,14 @@ import { useHeavyLimits } from '../../api/settings';
  *
  * Right is the answer to one question: who else has this passage. Three
  * columns, read right to left: which book, the words themselves in their
- * context, and the page. Clicking a row opens that page; the parameters that
- * shape the run live behind the gear, out of the way of the result.
+ * context, and the page. The parameters that shape the run live behind the
+ * gear, out of the way of the result.
+ *
+ * Clicking a row opens the other book in a second reader of the same kind,
+ * in place of the table (8 D). Two texts, side by side, each scrolling on
+ * its own: the passage you asked about in green on the left, the passage
+ * someone else has in red on the right. Those two colours mean the same
+ * thing everywhere in the panel.
  */
 
 const TYPES: MatchType[] = ['verbatim', 'inflected', 'paraphrase', 'weak', 'formulaic'];
@@ -76,8 +82,13 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
 
   /** What the reader has selected, for "Analyse selected" (7 C1). */
   const [selection, setSelection] = useState<{ at: At; range: [number, number]; text: string } | null>(null);
-  /** The row whose page is open in the reader (7 C3). */
+  /** Where the left reader sits, and the span it marks green (8 D). */
+  const [queryAt, setQueryAt] = useState<At | null>(from ?? null);
+  const [querySpan, setQuerySpan] = useState<[number, number] | null>(null);
+  /** The row whose text is open in the right reader (7 C3, 8 D). */
   const [open, setOpen] = useState<MatchRow | null>(null);
+  /** The right reader's page, by the C1 rule, for its header. */
+  const [targetLabel, setTargetLabel] = useState('');
   const [openPage, setOpenPage] = useState<Page | null>(null);
   const [sideBySide, setSideBySide] = useState(false);
   const [queryPages, setQueryPages] = useState<Map<string, Page>>(new Map());
@@ -91,6 +102,12 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
     reuseApi.onProgress((p) => setProgress(p)).then((u) => (un = u)).catch(() => {});
     return () => un?.();
   }, []);
+
+  // "Find reuse on this page" moves the left reader; nothing else does.
+  useEffect(() => {
+    if (from) setQueryAt(from);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from?.part_index, from?.page_id]);
 
   useEffect(() => {
     setBookRun(null);
@@ -108,6 +125,8 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
     async (at: At, range: [number, number]) => {
       if (bookId == null) return;
       setBusy('passage');
+      setQueryAt(at);
+      setQuerySpan(range);
       setRun({ running: true, paused: false, cancelledAt: null });
       setError(null);
       setMessage(null);
@@ -312,6 +331,11 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
     setOpen(m);
     setOpenPage(null);
     setSideBySide(false);
+    // The left reader goes to this match's own page and marks its words; the
+    // right one is about to open the other book at the other page.
+    setQueryAt({ part_index: m.part_index, page_id: m.page_id });
+    setQuerySpan([m.tok_start, m.tok_end]);
+    setTargetLabel(plainPageLabel(m.target.part_index, m.target.page_id, m.target_parts, contexts.get(m.id)?.pageNumber ?? null));
     const p = await labApi.getPage(m.target.book_id, m.target.part_index, m.target.page_id).catch(() => null);
     setOpenPage(p);
     if (!queryPages.has(`${m.part_index}:${m.page_id}`)) {
@@ -319,6 +343,21 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
       if (q) setQueryPages((map) => new Map(map).set(`${m.part_index}:${m.page_id}`, q));
     }
   };
+
+  /** Enough of a book for the reader: the rest it loads for itself. */
+  const targetBook: BookMetadata | null = useMemo(
+    () =>
+      open
+        ? {
+            id: open.target.book_id,
+            title: open.target_title ?? `book ${open.target.book_id}`,
+            death_ah: open.target_death_ah ?? undefined,
+            parts: open.target_parts ?? undefined,
+            in_corpus: true,
+          }
+        : null,
+    [open]
+  );
 
   const aggregates = useMemo(() => (bookRun ? aggregate(matches, threshold) : []), [bookRun, matches, threshold]);
   const aggColumns: Column<BookAggRow>[] = useMemo(
@@ -339,8 +378,8 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
       <section className="flex-1 min-w-0 overflow-hidden flex border-r border-app-border-light">
         <ReadPanel
           book={book}
-          initialAt={open ? { part_index: open.target.part_index, page_id: open.target.page_id } : from ?? null}
-          highlight={open ? [open.t_start, open.t_end] : null}
+          initialAt={queryAt}
+          highlight={querySpan}
           showToc={false}
           showSearch={false}
           onSectionChange={setSection}
@@ -432,18 +471,31 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
         />
         <Notice error={error} message={message} />
 
-        {open && (
-          <OpenMatch
-            m={open}
-            page={openPage}
-            queryPage={queryPages.get(`${open.part_index}:${open.page_id}`) ?? null}
-            sideBySide={sideBySide}
-            onToggleSideBySide={() => setSideBySide((v) => !v)}
-            onBack={() => setOpen(null)}
-            onVerdict={verdict}
-          />
-        )}
-        {(
+        {open && targetBook ? (
+          <>
+            <OpenMatch
+              m={open}
+              label={targetLabel}
+              page={openPage}
+              queryPage={queryPages.get(`${open.part_index}:${open.page_id}`) ?? null}
+              sideBySide={sideBySide}
+              onToggleSideBySide={() => setSideBySide((v) => !v)}
+              onBack={() => setOpen(null)}
+              onVerdict={verdict}
+            />
+            {/* The same reader as the left one, on the other book: its own
+                pages, its own contents, its own scroll. */}
+            <ReadPanel
+              book={targetBook}
+              initialAt={{ part_index: open.target.part_index, page_id: open.target.page_id }}
+              highlight={[open.t_start, open.t_end]}
+              highlightClass="tok-match"
+              showToc={false}
+              showSearch={false}
+              onPageChange={(_at, label) => setTargetLabel(label)}
+            />
+          </>
+        ) : (
           <div className="flex-1 min-h-0 flex flex-col">
             {bookRun && aggregates.length > 0 && (
               <div className="border-b border-app-border-light">
@@ -570,11 +622,11 @@ function ResultRow({ m, ctx, onClick }: { m: MatchRow; ctx?: Context; onClick: (
           {ctx ? (
             <>
               <span className="text-app-text-secondary">{ctx.before} </span>
-              <span className="text-red-700 font-semibold">{ctx.phrase}</span>
+              <span className="reuse-phrase">{ctx.phrase}</span>
               <span className="text-app-text-secondary"> {ctx.after}</span>
             </>
           ) : (
-            <span className="text-red-700 font-semibold">{m.snapshot}</span>
+            <span className="reuse-phrase">{m.snapshot}</span>
           )}
         </span>
 
@@ -617,9 +669,14 @@ function ResultRow({ m, ctx, onClick }: { m: MatchRow; ctx?: Context; onClick: (
   );
 }
 
-/** What is open in the reader, with the way back and the verdict (7 C3). */
+/**
+ * The right reader's header: whose book this is, who wrote it, which page,
+ * and the way back to the table (7 C3, 8 D). The alignment of the two
+ * passages stays here as a toggle, above both texts.
+ */
 function OpenMatch({
   m,
+  label,
   page,
   queryPage,
   sideBySide,
@@ -628,6 +685,8 @@ function OpenMatch({
   onVerdict,
 }: {
   m: MatchRow;
+  /** The target page by the C1 rule, from the reader below. */
+  label: string;
   page: Page | null;
   queryPage: Page | null;
   sideBySide: boolean;
@@ -645,18 +704,19 @@ function OpenMatch({
     return { q, t };
   }, [m.pairs]);
 
-  const labels = useMemo(() => (page ? new Pages([{ book_id: page.book_id, part_index: page.part_index, page_id: page.page_id, page_number: page.page_number, part_label: page.part_label }]) : Pages.empty()), [page]);
-
   return (
     <div className="flex-shrink-0 flex flex-col" data-testid="reuse-target">
       <div className="px-3 py-1.5 border-b border-app-border-light bg-app-surface-variant flex items-center gap-2 text-xs">
         <button onClick={onBack} className="px-2 py-1 border border-app-border-medium rounded" data-testid="back-to-results">
           ‹ Back to results
         </button>
-        <span className="flex-1 min-w-0 font-arabic truncate text-right" dir="rtl" title={m.target_title ?? undefined}>
-          {m.target_title ?? `book ${m.target.book_id}`}
+        <span className="flex-1 min-w-0 text-right" dir="rtl" title={m.target_title ?? undefined}>
+          <span className="font-arabic truncate">{m.target_title ?? `book ${m.target.book_id}`}</span>
+          {m.target_author_name && <span className="font-arabic text-app-text-secondary">{' · '}{m.target_author_name}</span>}
         </span>
-        <span className="tabular-nums text-app-text-secondary">{page ? labels.label(page.part_index, page.page_id) : '…'}</span>
+        <span className="tabular-nums text-app-text-secondary" data-testid="target-page">
+          {label || '…'}
+        </span>
         <label className="flex items-center gap-1">
           <input type="checkbox" checked={sideBySide} onChange={onToggleSideBySide} />
           Side by side
@@ -686,7 +746,8 @@ function OpenMatch({
       {sideBySide && queryPage && page && (
         <div className="max-h-56 overflow-y-auto grid grid-cols-2 gap-3 p-4 font-arabic text-lg leading-8 border-b border-app-border-light" dir="rtl" data-testid="side-by-side">
           <div>
-            <div className="text-xs text-app-text-secondary mb-1" dir="ltr">
+            <div className="text-xs text-app-text-secondary mb-1 flex items-center gap-1" dir="ltr">
+              <span className="inline-block w-2 h-2 rounded-sm bg-[#D4EDDA] border border-[#28A745]" />
               this text
             </div>
             {queryPage.tokens
@@ -698,7 +759,8 @@ function OpenMatch({
               ))}
           </div>
           <div>
-            <div className="text-xs text-app-text-secondary mb-1" dir="ltr">
+            <div className="text-xs text-app-text-secondary mb-1 flex items-center gap-1" dir="ltr">
+              <span className="inline-block w-2 h-2 rounded-sm bg-[#FDE2E2] border border-[#DC3545]" />
               the other
             </div>
             {page.tokens
