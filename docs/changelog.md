@@ -6,6 +6,54 @@ Nothing below has been published yet.
 
 ---
 
+## [lab 0.7.0] - 2026-09-15
+
+### Fixed
+
+- The Network panel went white on opening, for any text with a transmitter
+  you had not linked yet, which is every text before you start. Every panel
+  now fails on its own: you get the message and the rest of the app keeps
+  working.
+- Page text ran together as one paragraph. Line breaks in the source are kept,
+  in the reader, in Reuse and in the Qurʾān details. Headings look like
+  headings instead of running into the prose after them.
+- Selecting several lines in Reuse pushed the text over the results.
+- Poetry meter was found for almost nothing. Two faults: a verse carrying its
+  number in Arabic-Indic digits was unreadable to the scansion, and a word
+  ending in tanwīn fatḥa was counted a syllable long. Meters found went up by
+  a fifth. Most verse in the corpus still has too little tashkil to scan, and
+  is reported unknown rather than guessed.
+
+### Read and Search are one panel
+
+The search form sits down the left, the text fills the middle, results appear
+underneath, and the contents stay on the right. Drag the divider to give
+either more room. Click a result and the text above moves to that page with
+the hit marked. Your results, your place in the text and the form all survive
+a trip to another panel.
+
+The text now selects like text: drag to select, copy, no overlay in the way.
+Annotate and Find reuse on this page are buttons in the reader's toolbar.
+
+### Reuse
+
+Three buttons where the dead end was: Analyse selected, Analyse section,
+Analyse whole text. Section and whole text show what they will read and
+roughly how long it will take before they start, and can be cancelled at any
+point, including while they are working that out.
+
+Results read Page, Text, Book, at a size you can read. Hovering the title
+gives the author and death year. Clicking a result opens that page in the
+reader on the left, where a page belongs, with a way back.
+
+### Appearance
+
+Body text is black, and there is one grey instead of three. Matched words are
+red, the same red everywhere. English placeholders in Arabic boxes read left
+to right again. The workspace pane is wider, sorts from a proper header, and
+you can drag its edge; the width is remembered. Stats fills its panel and its
+layer control looks like a control.
+
 ## [lab 0.6.0] - 2026-09-14
 
 Lab is now arranged around the text you are reading rather than around its
