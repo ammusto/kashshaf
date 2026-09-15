@@ -33,6 +33,8 @@ export interface Mark {
   end: number;
   className: string;
   title?: string;
+  /** What `onMarkClick` is given: a note's id (9 B2). */
+  id?: number;
 }
 
 /** One run of characters that belongs to a single token, or to none. */
@@ -87,6 +89,7 @@ export function Reader({
   highlightClass = 'tok-hit',
   layerClass,
   marks,
+  onMarkClick,
   labels,
   toolbar,
   interaction = 'tokens',
@@ -121,6 +124,8 @@ export function Reader({
   layerClass?: (idx: number) => string | null;
   /** Ranges drawn over the text that are not the selection (spec §C4). */
   marks?: Mark[];
+  /** A click on a mark that carries an id, when nothing is being selected. */
+  onMarkClick?: (id: number) => void;
   /**
    * The book's page list, which every page label is built from (spec §C1).
    * Without it the locator falls back to the page's own printed number.
@@ -339,6 +344,19 @@ export function Reader({
                   } ${markByToken.get(run.token)?.className ?? ''}`}
                   title={markByToken.get(run.token)?.title}
                   data-token={run.token}
+                  data-mark={markByToken.get(run.token)?.id}
+                  onClick={
+                    onMarkClick
+                      ? (e) => {
+                          const id = markByToken.get(run.token as number)?.id;
+                          // A drag through an annotation is a selection, not
+                          // a click on it.
+                          if (id == null || !(window.getSelection()?.isCollapsed ?? true)) return;
+                          e.stopPropagation();
+                          onMarkClick(id);
+                        }
+                      : undefined
+                  }
                   onMouseDown={interaction === 'tokens' ? (e) => onTokenDown(e, run.token as number) : undefined}
                   onMouseEnter={interaction === 'tokens' ? () => onTokenEnter(run.token as number) : undefined}
                   onMouseUp={interaction === 'tokens' ? (e) => onTokenUp(e, run.token as number) : undefined}

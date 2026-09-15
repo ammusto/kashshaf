@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { TocNode } from '../../api/workspace';
+import { noteColor, type Note, type TocNode } from '../../api/workspace';
+import { noteFirstLine } from '../../api/noteText';
 import type { Pages } from '../../api/pages';
 
 /**
@@ -22,6 +23,8 @@ export function TocPane({
   onClose,
   loading,
   error,
+  notes = [],
+  onJumpNote,
 }: {
   tree: TocNode[];
   pages: Pages;
@@ -31,6 +34,9 @@ export function TocPane({
   onClose: () => void;
   loading: boolean;
   error: string | null;
+  /** This text's annotations, in reading order (9 B1). */
+  notes?: Note[];
+  onJumpNote?: (n: Note) => void;
 }) {
   const [filter, setFilter] = useState('');
   const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set<number>());
@@ -92,7 +98,7 @@ export function TocPane({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto py-1">
+      <div className="flex-1 min-h-0 overflow-y-auto py-1">
         {loading && <p className="px-3 py-2 text-xs text-app-text-secondary">Loading the contents…</p>}
         {error && (
           <p className="px-3 py-2 text-xs text-app-error" role="alert">
@@ -118,7 +124,61 @@ export function TocPane({
           />
         ))}
       </div>
+
+      {onJumpNote && <Annotations notes={notes} pages={pages} onJump={onJumpNote} />}
     </aside>
+  );
+}
+
+/**
+ * The text's annotations, under the contents (9 B1). Closed to begin with:
+ * it is a second list in a narrow pane, and the contents are what the pane
+ * is for.
+ */
+function Annotations({ notes, pages, onJump }: { notes: Note[]; pages: Pages; onJump: (n: Note) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="shrink-0 border-t border-app-border-light" data-testid="annotations-section">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-app-surface-variant"
+        data-testid="annotations-toggle"
+      >
+        <span className={`inline-block text-[10px] leading-none transition-transform duration-150 ${open ? 'rotate-90' : ''}`} aria-hidden="true">
+          ▸
+        </span>
+        <span className="text-sm font-semibold flex-1">Annotations</span>
+        <span className="text-xs text-app-text-secondary tabular-nums">{notes.length}</span>
+      </button>
+
+      {open && (
+        <div className="max-h-64 overflow-y-auto border-t border-app-border-light" data-testid="annotations-list">
+          {notes.length === 0 && <p className="px-3 py-2 text-xs text-app-text-secondary">Select some words and press Annotate.</p>}
+          {notes.map((n) => (
+            <button
+              key={n.id}
+              onClick={() => onJump(n)}
+              className="w-full flex items-start gap-2 px-3 py-1.5 text-right border-b border-app-border-light hover:bg-app-surface-variant"
+              data-testid={`annotation-${n.id}`}
+            >
+              <span className={`mt-1 w-2.5 h-2.5 shrink-0 rounded-sm tok-note tok-note-${noteColor(n.color)}`} aria-hidden="true" />
+              <span className="flex-1 min-w-0">
+                <span className="block font-arabic text-sm leading-snug truncate" dir="rtl">
+                  {n.snapshot}
+                </span>
+                <span className="block text-xs text-app-text-secondary truncate" dir="auto">
+                  {noteFirstLine(n.text, 40)}
+                </span>
+              </span>
+              <span className="text-[11px] text-app-text-secondary tabular-nums shrink-0 mt-0.5" dir="ltr">
+                {pages.label(n.part_index, n.page_id)}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

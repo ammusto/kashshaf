@@ -152,7 +152,11 @@ pub struct NoteArgs {
     pub page_id: u64,
     pub tok_start: usize,
     pub tok_end: usize,
+    /// The note in 9 B3's markup: **bold** and __underline__.
     pub text: String,
+    /// The highlight colour the reader draws it in (9 B3).
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 /// Every note on one book, in reading order.
@@ -181,7 +185,7 @@ pub async fn note_save(state: State<'_, ManagedLabState>, args: NoteArgs) -> Res
         let ts = now();
         conn.execute(
             "INSERT INTO note (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
-             text, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+             text, created_at, updated_at, color) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)",
             params![
                 h.source.corpus_version(),
                 args.book_id as i64,
@@ -193,6 +197,7 @@ pub async fn note_save(state: State<'_, ManagedLabState>, args: NoteArgs) -> Res
                 hash,
                 args.text,
                 ts,
+                args.color.as_deref().unwrap_or("yellow"),
             ],
         )
         .map_err(dberr)?;
@@ -203,13 +208,20 @@ pub async fn note_save(state: State<'_, ManagedLabState>, args: NoteArgs) -> Res
     .await
 }
 
-/// Edit a note's text.
+/// Edit a note's text, and the colour it is drawn in (9 B3).
 #[tauri::command]
-pub async fn note_update(state: State<'_, ManagedLabState>, id: i64, text: String) -> Result<Note, LabError> {
+pub async fn note_update(state: State<'_, ManagedLabState>, id: i64, text: String, color: Option<String>) -> Result<Note, LabError> {
     let h = handles(&state)?;
     blocking(move || {
         let conn = db(&h)?;
-        conn.execute("UPDATE note SET text = ?2, updated_at = ?3 WHERE id = ?1", params![id, text, now()]).map_err(dberr)?;
+        match color {
+            Some(c) => conn
+                .execute("UPDATE note SET text = ?2, color = ?4, updated_at = ?3 WHERE id = ?1", params![id, text, now(), c])
+                .map_err(dberr)?,
+            None => conn
+                .execute("UPDATE note SET text = ?2, updated_at = ?3 WHERE id = ?1", params![id, text, now()])
+                .map_err(dberr)?,
+        };
         let note = crate::workspace::note(&conn, id)?;
         mirror(&h, note.book_id, Part::Notes);
         Ok(note)

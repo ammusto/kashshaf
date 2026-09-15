@@ -190,6 +190,35 @@ body {
 }
 
 /*
+ * An annotation's highlight (9 B2), in the colour it was given (9 B3). Muted
+ * on purpose: these sit behind black Arabic type at 24px and must not
+ * compete with it. The dark values are ready for a dark rendering; nothing
+ * in Lab asks for one yet.
+ */
+.tok-note {
+  border-radius: 2px;
+  cursor: pointer;
+  background: var(--note-fill, #FBF0C4);
+  box-shadow: inset 0 -2px 0 0 var(--note-edge, #E0C34A);
+}
+
+.tok-note-yellow { --note-fill: #FBF0C4; --note-edge: #E0C34A; }
+.tok-note-green  { --note-fill: #D9EFD9; --note-edge: #6FB37A; }
+.tok-note-blue   { --note-fill: #D6E4F7; --note-edge: #6E9BD1; }
+.tok-note-purple { --note-fill: #E6DCF3; --note-edge: #9B7FC7; }
+.tok-note-red    { --note-fill: #F7DEDE; --note-edge: #D08B8B; }
+.tok-note-orange { --note-fill: #FBE3CC; --note-edge: #D9A063; }
+
+@media (prefers-color-scheme: dark) {
+  .tok-note-yellow { --note-fill: #4E4218; --note-edge: #A48C34; }
+  .tok-note-green  { --note-fill: #23401F; --note-edge: #4E8355; }
+  .tok-note-blue   { --note-fill: #1E3450; --note-edge: #4F74A5; }
+  .tok-note-purple { --note-fill: #332748; --note-edge: #7259A0; }
+  .tok-note-red    { --note-fill: #4A2424; --note-edge: #A16565; }
+  .tok-note-orange { --note-fill: #4C3318; --note-edge: #A9753F; }
+}
+
+/*
  * The isnād workbench's layers (spec §7.4): the whole chain outlined, each
  * transmitter in its own colour (six, cycling), every transmission verb in
  * one shared verb colour, the matn in a fourth.

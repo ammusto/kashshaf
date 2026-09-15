@@ -475,13 +475,21 @@ pub struct Note {
     pub page_id: u64,
     pub tok_start: usize,
     pub tok_end: usize,
+    /// The note, in the markup of 9 B3: **bold** and __underline__.
     pub text: String,
+    /// One of the six highlight colours (9 B3); older rows are yellow.
+    #[serde(default = "yellow")]
+    pub color: String,
     /// The tokens the note is on, normalised — what re-anchoring matches.
     pub snapshot: String,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
     pub corpus_version: String,
+}
+
+fn yellow() -> String {
+    "yellow".to_string()
 }
 
 /// Every note of one book, in reading order (spec 1.5 C4).
@@ -492,7 +500,8 @@ pub fn notes(conn: &Connection, book_id: u64) -> Result<Vec<Note>, LabError> {
 /// One note by id.
 pub fn note(conn: &Connection, id: i64) -> Result<Note, LabError> {
     conn.query_row(
-        "SELECT id, book_id, part_index, page_id, tok_start, tok_end, text, snapshot, created_at, updated_at, corpus_version          FROM note WHERE id = ?1",
+        "SELECT id, book_id, part_index, page_id, tok_start, tok_end, text, snapshot, created_at, updated_at, corpus_version, color \
+         FROM note WHERE id = ?1",
         [id],
         |r| {
             Ok(Note {
@@ -507,6 +516,7 @@ pub fn note(conn: &Connection, id: i64) -> Result<Note, LabError> {
                 created_at: r.get(8)?,
                 updated_at: r.get(9)?,
                 corpus_version: r.get(10)?,
+                color: r.get(11)?,
             })
         },
     )
@@ -516,7 +526,7 @@ pub fn note(conn: &Connection, id: i64) -> Result<Note, LabError> {
 fn note_rows(conn: &Connection, book_id: u64) -> Result<Vec<Note>, LabError> {
     let mut st = conn
         .prepare(
-            "SELECT id, part_index, page_id, tok_start, tok_end, text, snapshot, created_at, updated_at, corpus_version \
+            "SELECT id, part_index, page_id, tok_start, tok_end, text, snapshot, created_at, updated_at, corpus_version, color \
              FROM note WHERE book_id = ?1 ORDER BY part_index, page_id, tok_start",
         )
         .map_err(db)?;
@@ -534,6 +544,7 @@ fn note_rows(conn: &Connection, book_id: u64) -> Result<Vec<Note>, LabError> {
                 created_at: r.get(7)?,
                 updated_at: r.get(8)?,
                 corpus_version: r.get(9)?,
+                color: r.get(10)?,
             })
         })
         .map_err(db)?
@@ -980,7 +991,7 @@ pub fn import(conn: &Connection, source: &dyn BookSource, book_id: u64) -> Resul
             }
             conn.execute(
                 "INSERT INTO note (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
-                 text, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 text, created_at, updated_at, color) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     corpus_version,
                     book_id as i64,
@@ -993,6 +1004,7 @@ pub fn import(conn: &Connection, source: &dyn BookSource, book_id: u64) -> Resul
                     n.text,
                     n.created_at,
                     now(),
+                    n.color,
                 ],
             )
             .map_err(db)?;

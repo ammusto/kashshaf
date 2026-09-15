@@ -2,7 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
 import { labApi, type Page } from '../../api/lab';
 import { Pages, type At } from '../../api/pages';
-import { entryForPage, notesApi, tocApi, type Note, type TocNode, type TocRow } from '../../api/workspace';
+import {
+  DEFAULT_NOTE_COLOR,
+  NOTE_COLORS,
+  entryForPage,
+  noteColor,
+  notesApi,
+  tocApi,
+  type Note,
+  type NoteColor,
+  type TocNode,
+  type TocRow,
+} from '../../api/workspace';
+import { noteFirstLine, parseNote, plainNote, toggleMark } from '../../api/noteText';
 import { searchApi, toTerms, type Hit, type SearchInput, type SearchResults } from '../../api/search';
 import { selectedText, tokenRangeOfSelection } from '../../api/selection';
 import { Reader, type Mark } from '../Reader';
@@ -139,7 +151,10 @@ export function ReadPanel({
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [editing, setEditing] = useState<{ note: Note | null; at: At; range: [number, number]; text: string } | null>(null);
+  const [editing, setEditing] = useState<{ note: Note | null; at: At; range: [number, number]; text: string; color: NoteColor } | null>(null);
+  /** A note to bring into view once its page has rendered (9 B1). */
+  const [seekNote, setSeekNote] = useState<number | null>(null);
+  const noteBox = useRef<HTMLTextAreaElement | null>(null);
 
   const [andInputs, setAnd] = useState<SearchInput[]>(mem.and);
   const [orInputs, setOr] = useState<SearchInput[]>(mem.or);
@@ -335,15 +350,73 @@ export function ReadPanel({
     [notes, current?.part_index, current?.page_id] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  // 9 B2: an annotation is a coloured ground behind the words it is on,
+  // with the note itself on hover and a click to open it.
   const marks: Mark[] = useMemo(
-    () => pageNotes.map((n) => ({ start: n.tok_start, end: n.tok_end, className: 'tok-note', title: n.text })),
+    () =>
+      pageNotes.map((n) => ({
+        start: n.tok_start,
+        end: n.tok_end,
+        className: `tok-note tok-note-${noteColor(n.color)}`,
+        title: plainNote(n.text),
+        id: n.id,
+      })),
     [pageNotes]
   );
+
+  /** Open an annotation for editing, from the text or from the contents. */
+  const openNote = useCallback(
+    (id: number) => {
+      const n = notes.find((x) => x.id === id);
+      if (!n) return;
+      setEditing({
+        note: n,
+        at: { part_index: n.part_index, page_id: n.page_id },
+        range: [n.tok_start, n.tok_end],
+        text: n.text,
+        color: noteColor(n.color),
+      });
+    },
+    [notes]
+  );
+
+  /** Go to a note's page and put it on screen (9 B1). */
+  const jumpToNote = useCallback(
+    (n: Note) => {
+      const i = pages.indexOf(n.part_index, n.page_id);
+      setSeekNote(n.id);
+      if (i >= 0 && (current?.part_index !== n.part_index || current?.page_id !== n.page_id)) void go(i);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pages, go, current?.part_index, current?.page_id]
+  );
+
+  useEffect(() => {
+    if (seekNote == null || !page) return;
+    const el = textRef.current?.querySelector(`[data-mark="${seekNote}"]`);
+    if (!el) return;
+    if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
+    setSeekNote(null);
+  }, [seekNote, page, notes]);
+
+  /** Bold or underline whatever is selected in the note box (9 B3). */
+  const applyMark = (which: 'bold' | 'underline') => {
+    const el = noteBox.current;
+    if (!el || !editing) return;
+    const next = toggleMark(editing.text, el.selectionStart, el.selectionEnd, which);
+    setEditing({ ...editing, text: next.text });
+    // Keep the words selected, so the two marks can be applied one after
+    // the other.
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(next.start, next.end);
+    });
+  };
 
   const saveNote = async () => {
     if (!editing || bookId == null) return;
     try {
-      if (editing.note) await notesApi.update(editing.note.id, editing.text);
+      if (editing.note) await notesApi.update(editing.note.id, editing.text, editing.color);
       else
         await notesApi.save({
           book_id: bookId,
@@ -352,6 +425,7 @@ export function ReadPanel({
           tok_start: editing.range[0],
           tok_end: editing.range[1],
           text: editing.text,
+          color: editing.color,
         });
       setEditing(null);
       reloadNotes();
@@ -479,7 +553,9 @@ export function ReadPanel({
       </span>
 
       <button
-        onClick={() => selection && setEditing({ note: null, at: selection.at, range: selection.range, text: '' })}
+        onClick={() =>
+          selection && setEditing({ note: null, at: selection.at, range: selection.range, text: '', color: DEFAULT_NOTE_COLOR })
+        }
         disabled={!selection}
         title={selection ? 'Annotate the selected words' : 'Select some words first'}
         data-testid="annotate"
@@ -516,6 +592,7 @@ export function ReadPanel({
       highlightClass={highlightClass}
       labels={pages}
       marks={marks}
+      onMarkClick={openNote}
       toolbar={toolbar}
       interaction="text"
       paneRef={textRef}
@@ -659,6 +736,8 @@ export function ReadPanel({
           onClose={() => setTocOpen(false)}
           loading={tocLoading}
           error={tocError}
+          notes={notes}
+          onJumpNote={jumpToNote}
         />
       )}
 
@@ -672,16 +751,64 @@ export function ReadPanel({
             data-testid="note-editor"
           >
             <h2 className="text-sm font-semibold mb-1">{editing.note ? 'Edit the note' : 'Annotate this passage'}</h2>
-            <p className="text-xs text-app-text-secondary mb-2">
-              {pages.label(editing.at.part_index, editing.at.page_id)} · words {editing.range[0]}–{editing.range[1] - 1}
+            {/* 9 B4: the C1 rule here too, so a one-part text says only its page. */}
+            <p className="text-xs text-app-text-secondary mb-2" data-testid="note-location">
+              {pages.multiPart && `Volume: ${editing.at.part_index + 1}, `}
+              Page: {pages.printed(editing.at.part_index, editing.at.page_id)} · tokens {editing.range[0]}–
+              {editing.range[1] - 1}
             </p>
+
+            <div className="flex items-center gap-2 mb-2">
+              <button
+                onClick={() => applyMark('bold')}
+                aria-label="Bold"
+                title="Bold the selected words"
+                className="w-8 h-7 border border-app-border-medium rounded font-bold text-sm hover:bg-app-surface-variant"
+              >
+                B
+              </button>
+              <button
+                onClick={() => applyMark('underline')}
+                aria-label="Underline"
+                title="Underline the selected words"
+                className="w-8 h-7 border border-app-border-medium rounded underline text-sm hover:bg-app-surface-variant"
+              >
+                U
+              </button>
+              <span className="w-px h-5 bg-app-border-light" />
+              <span className="text-xs text-app-text-secondary">Highlight</span>
+              {NOTE_COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setEditing({ ...editing, color: c })}
+                  aria-label={c}
+                  aria-pressed={editing.color === c}
+                  title={c}
+                  data-testid={`note-color-${c}`}
+                  className={`tok-note tok-note-${c} w-6 h-6 rounded border ${
+                    editing.color === c ? 'border-app-text-primary' : 'border-app-border-medium'
+                  }`}
+                />
+              ))}
+            </div>
+
             <textarea
+              ref={noteBox}
               value={editing.text}
               onChange={(e) => setEditing({ ...editing, text: e.target.value })}
               autoFocus
               aria-label="Note"
               className="w-full h-32 border border-app-border-medium rounded-lg p-2 text-sm"
             />
+            {editing.text.trim() !== '' && (
+              <p className="mt-2 text-sm whitespace-pre-wrap" data-testid="note-preview">
+                {parseNote(editing.text).map((sp, i) => (
+                  <span key={i} className={`${sp.bold ? 'font-bold' : ''} ${sp.underline ? 'underline' : ''}`}>
+                    {sp.text}
+                  </span>
+                ))}
+              </p>
+            )}
             <div className="flex items-center gap-2 mt-3">
               <button
                 onClick={() => void saveNote()}
@@ -711,13 +838,13 @@ export function ReadPanel({
           {pageNotes.map((n) => (
             <button
               key={n.id}
-              onClick={() =>
-                setEditing({ note: n, at: { part_index: n.part_index, page_id: n.page_id }, range: [n.tok_start, n.tok_end], text: n.text })
-              }
-              className="px-2 py-0.5 rounded border border-app-border-light hover:border-app-accent max-w-xs truncate"
-              title={n.text}
+              onClick={() => openNote(n.id)}
+              className={`px-2 py-0.5 rounded border border-app-border-light hover:border-app-accent max-w-xs truncate tok-note tok-note-${noteColor(
+                n.color
+              )}`}
+              title={plainNote(n.text)}
             >
-              {n.text.split('\n')[0] || '(empty note)'}
+              {noteFirstLine(n.text, 40) || '(empty note)'}
             </button>
           ))}
         </div>

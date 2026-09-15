@@ -202,6 +202,20 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS note_page ON note(book_id, part_index, page_id);
     "#,
     },
+    Migration {
+        version: 6,
+        name: "note colour and formatted text",
+        // The highlight the annotation draws in the reader (9 B3). Notes
+        // written before this are yellow, which is what they were drawn in.
+        //
+        // `note.text` is unchanged in shape and now carries formatting, in
+        // the smallest markup that round-trips: **bold** and __underline__.
+        // Text written before this reads as itself, because plain text is
+        // valid in that markup.
+        sql: r#"
+        ALTER TABLE note ADD COLUMN color TEXT NOT NULL DEFAULT 'yellow';
+    "#,
+    },
 ];
 
 fn migration_sql(m: &Migration) -> String {

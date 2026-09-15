@@ -143,7 +143,10 @@ export interface Note {
   page_id: number;
   tok_start: number;
   tok_end: number;
+  /** The note in 9 B3's markup: **bold** and __underline__. */
   text: string;
+  /** The highlight colour it is drawn in; see `NOTE_COLORS`. */
+  color: NoteColor;
   snapshot: string;
   created_at: string;
   updated_at: string;
@@ -157,12 +160,23 @@ export interface NoteArgs {
   tok_start: number;
   tok_end: number;
   text: string;
+  color: NoteColor;
+}
+
+/** The six highlight colours an annotation can be drawn in (9 B3). */
+export const NOTE_COLORS = ['yellow', 'green', 'blue', 'purple', 'red', 'orange'] as const;
+export type NoteColor = (typeof NOTE_COLORS)[number];
+export const DEFAULT_NOTE_COLOR: NoteColor = 'yellow';
+
+/** A stored colour, or yellow for anything written before 9 B3. */
+export function noteColor(c: string | null | undefined): NoteColor {
+  return (NOTE_COLORS as readonly string[]).includes(c ?? '') ? (c as NoteColor) : DEFAULT_NOTE_COLOR;
 }
 
 export const notesApi = {
   list: (bookId: number) => invoke<Note[]>('notes_list', { bookId }),
   save: (args: NoteArgs) => invoke<Note>('note_save', { args }),
-  update: (id: number, text: string) => invoke<Note>('note_update', { id, text }),
+  update: (id: number, text: string, color: NoteColor) => invoke<Note>('note_update', { id, text, color }),
   delete: (id: number) => invoke<void>('note_delete', { id }),
 };
 

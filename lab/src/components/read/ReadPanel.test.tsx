@@ -81,6 +81,32 @@ const tree = [
     children: [{ id: 2, parent: 1, title: 'باب التواضع', part_index: 1, page_id: 1, page_number: '3', depth: 1, children: [] }],
   },
 ];
+function mkNote(
+  id: number,
+  partIndex: number,
+  pageId: number,
+  a: number,
+  b: number,
+  text: string,
+  color = 'yellow',
+  snapshot = ''
+) {
+  return {
+    id,
+    book_id: 527,
+    part_index: partIndex,
+    page_id: pageId,
+    tok_start: a,
+    tok_end: b,
+    text,
+    color,
+    snapshot,
+    created_at: '',
+    updated_at: '',
+    corpus_version: '4.1.0',
+  };
+}
+
 const rows = [
   { id: 1, parent: 0, title: 'كتاب الزهد', part_index: 0, page_id: 1, page_number: '7' },
   { id: 2, parent: 1, title: 'باب التواضع', part_index: 1, page_id: 1, page_number: '3' },
@@ -177,7 +203,7 @@ describe('ReadPanel', () => {
   });
 
   it('selects like ordinary text, and annotates what was selected (7 B)', async () => {
-    api.notes.save.mockResolvedValue({ id: 3, book_id: 527, part_index: 0, page_id: 1, tok_start: 0, tok_end: 2, text: 'a note', snapshot: '', created_at: '', updated_at: '', corpus_version: '4.1.0' });
+    api.notes.save.mockResolvedValue(mkNote(3, 0, 1, 0, 2, 'a note'));
     render(<ReadPanel book={book} />);
     await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
 
@@ -194,13 +220,104 @@ describe('ReadPanel', () => {
 
     fireEvent.click(screen.getByTestId('annotate'));
     const editor = await screen.findByTestId('note-editor');
-    expect(editor).toHaveTextContent('1:7');
+    // 9 B4: a multi-part text names its volume, and the words are tokens.
+    expect(within(editor).getByTestId('note-location')).toHaveTextContent('Volume: 1, Page: 7 · tokens 0–1');
     fireEvent.change(within(editor).getByLabelText('Note'), { target: { value: 'a note' } });
     fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(api.notes.save).toHaveBeenCalledWith({ book_id: 527, part_index: 0, page_id: 1, tok_start: 0, tok_end: 2, text: 'a note' })
+      expect(api.notes.save).toHaveBeenCalledWith({
+        book_id: 527,
+        part_index: 0,
+        page_id: 1,
+        tok_start: 0,
+        tok_end: 2,
+        text: 'a note',
+        color: 'yellow',
+      })
     );
+  });
+
+  it('omits the volume in a single-part text (9 B4)', async () => {
+    api.lab.listPages.mockResolvedValue(entries.filter((e) => e.part_index === 0));
+    render(<ReadPanel book={{ ...book, parts: 1 }} />);
+    await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
+    selectTokensNatively(0, 2);
+    await waitFor(() => expect(screen.getByTestId('annotate')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('annotate'));
+
+    const loc = within(await screen.findByTestId('note-editor')).getByTestId('note-location');
+    expect(loc).toHaveTextContent('Page: 7 · tokens 0–1');
+    expect(loc).not.toHaveTextContent('Volume');
+  });
+
+  it('marks up the note and picks a highlight colour (9 B3)', async () => {
+    api.notes.save.mockResolvedValue(mkNote(4, 0, 1, 0, 2, '**a note**', 'blue'));
+    render(<ReadPanel book={book} />);
+    await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
+    selectTokensNatively(0, 2);
+    await waitFor(() => expect(screen.getByTestId('annotate')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('annotate'));
+
+    const editor = await screen.findByTestId('note-editor');
+    const box = within(editor).getByLabelText('Note') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'a note' } });
+    box.setSelectionRange(0, 6);
+    fireEvent.click(within(editor).getByLabelText('Bold'));
+    await waitFor(() => expect((within(editor).getByLabelText('Note') as HTMLTextAreaElement).value).toBe('**a note**'));
+    // The preview shows what the markup means, not the markup.
+    expect(within(editor).getByTestId('note-preview')).toHaveTextContent('a note');
+    expect(within(editor).getByTestId('note-preview').querySelector('.font-bold')).not.toBeNull();
+
+    fireEvent.click(within(editor).getByTestId('note-color-blue'));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.notes.save).toHaveBeenCalledWith(expect.objectContaining({ text: '**a note**', color: 'blue' }))
+    );
+  });
+
+  it('draws an annotation behind its words, and opens it on a click (9 B2)', async () => {
+    api.notes.list.mockResolvedValue([mkNote(7, 0, 1, 1, 3, 'on these words', 'green')]);
+    render(<ReadPanel book={book} />);
+    await waitFor(() => expect(document.querySelector('[data-token="1"]')).toBeTruthy());
+
+    const marked = document.querySelectorAll('.tok-note-green');
+    expect(marked.length).toBeGreaterThan(0);
+    expect(marked[0].getAttribute('data-mark')).toBe('7');
+    expect(marked[0].getAttribute('title')).toBe('on these words');
+    // A token outside the range is not marked.
+    expect(document.querySelector('[data-token="0"]')!.className).not.toContain('tok-note');
+
+    fireEvent.click(marked[0]);
+    const editor = await screen.findByTestId('note-editor');
+    expect((within(editor).getByLabelText('Note') as HTMLTextAreaElement).value).toBe('on these words');
+  });
+
+  it('lists the annotations under the contents, closed to begin with (9 B1)', async () => {
+    api.notes.list.mockResolvedValue([
+      mkNote(7, 0, 1, 1, 3, 'first note', 'green', 'حدثنا ابو'),
+      mkNote(8, 1, 1, 0, 2, 'second note\nand more', 'red', 'باب ما'),
+    ]);
+    render(<ReadPanel book={book} />);
+    const toc = await screen.findByTestId('toc-pane');
+
+    const section = within(toc).getByTestId('annotations-section');
+    expect(section).toHaveTextContent('Annotations');
+    expect(section).toHaveTextContent('2');
+    expect(within(toc).queryByTestId('annotations-list')).not.toBeInTheDocument();
+
+    fireEvent.click(within(section).getByTestId('annotations-toggle'));
+    const list = await within(toc).findByTestId('annotations-list');
+    // Page label by C1, the words annotated, and the note's first line.
+    expect(list).toHaveTextContent('1:7');
+    expect(list).toHaveTextContent('2:3');
+    expect(list).toHaveTextContent('first note');
+    expect(list).toHaveTextContent('second note');
+    expect(list).not.toHaveTextContent('and more');
+
+    // And it navigates.
+    fireEvent.click(within(list).getByTestId('annotation-8'));
+    await waitFor(() => expect(api.lab.getPage).toHaveBeenCalledWith(527, 1, 1));
   });
 
   it('hands the open page to Reuse (7 B)', async () => {
