@@ -97,6 +97,18 @@ impl PageEntry {
     }
 }
 
+/// A row of one of `metadata.db`'s lookup tables: an author, or a genre.
+///
+/// The book rows carry only `author_id` and `genre_id`; the text browser
+/// (spec 1.5 §A1) searches and filters by the names, so it needs the tables
+/// themselves. Both are small — a few thousand authors, a few dozen genres —
+/// and fetched once when the workspace view opens.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedId {
+    pub id: i64,
+    pub name: String,
+}
+
 /// Which annotation layer a statistic or a query runs on (spec §4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -136,6 +148,10 @@ pub trait BookSource: Send + Sync {
     fn corpus_version(&self) -> &str;
     fn books(&self) -> Result<Vec<BookMetadata>>;
     fn book(&self, id: u64) -> Result<Option<BookMetadata>>;
+    /// Every author name, by id (spec 1.5 §A1).
+    fn authors(&self) -> Result<Vec<NamedId>>;
+    /// Every genre name, by id (spec 1.5 §A1).
+    fn genres(&self) -> Result<Vec<NamedId>>;
     /// Every page of a book in reading order. `progress(done, total)` is
     /// called as pages are produced so a whole-book run can show progress.
     fn book_pages(&self, id: u64, progress: &dyn Fn(u64, u64)) -> Result<Vec<Page>>;

@@ -10,7 +10,7 @@
 
 use super::cache::{BulkCache, DEFAULT_MAX_BYTES};
 use super::freq::{FreqLayer, FreqTable};
-use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, Page, PageEntry, PageRef, Token, TocNode, TocRow};
+use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, NamedId, Page, PageEntry, PageRef, Token, TocNode, TocRow};
 use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -241,6 +241,15 @@ impl BookSource for ApiSource {
 
     fn book(&self, id: u64) -> Result<Option<BookMetadata>> {
         Ok(self.books()?.into_iter().find(|b| b.id == id))
+    }
+
+    /// `/authors` and `/genres` answer with `(id, name)` tuples.
+    fn authors(&self) -> Result<Vec<NamedId>> {
+        Ok(named(self.get_json("/authors")?))
+    }
+
+    fn genres(&self) -> Result<Vec<NamedId>> {
+        Ok(named(self.get_json("/genres")?))
     }
 
     /// §5.2 adds no page-list route: the coordinates come out of the bulk
@@ -511,6 +520,15 @@ impl BookSource for ApiSource {
 }
 
 /// A tree back to rows in reading order, for the api-mode `toc_rows`.
+/// `/authors` and `/genres` answer with bare `(id, name)` tuples; the rest of
+/// Lab speaks in [`NamedId`].
+fn named(rows: Vec<(i64, String)>) -> Vec<NamedId> {
+    rows.into_iter()
+        .filter(|(_, name)| !name.trim().is_empty())
+        .map(|(id, name)| NamedId { id, name })
+        .collect()
+}
+
 fn flatten(nodes: &[TocNode]) -> Vec<TocRow> {
     fn go(nodes: &[TocNode], out: &mut Vec<TocRow>) {
         for n in nodes {

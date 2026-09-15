@@ -1,7 +1,7 @@
 //! The book browser and the reader (spec §7.1, §7.2).
 
 use crate::error::LabError;
-use crate::source::{BookMetadata, Page, PageEntry, PageRef};
+use crate::source::{BookMetadata, NamedId, Page, PageEntry, PageRef};
 use crate::state::{source_of, ManagedLabState};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -16,6 +16,18 @@ pub fn list_books(state: State<'_, ManagedLabState>) -> Result<Vec<BookMetadata>
 #[tauri::command]
 pub fn get_book(state: State<'_, ManagedLabState>, id: u64) -> Result<Option<BookMetadata>, LabError> {
     Ok(source_of(&state)?.book(id)?)
+}
+
+/// Every author name, by id, and every genre name (spec 1.5 A1). The text
+/// browser filters and searches by these; the book rows carry only the ids.
+#[tauri::command]
+pub fn list_authors(state: State<'_, ManagedLabState>) -> Result<Vec<NamedId>, LabError> {
+    Ok(source_of(&state)?.authors()?)
+}
+
+#[tauri::command]
+pub fn list_genres(state: State<'_, ManagedLabState>) -> Result<Vec<NamedId>, LabError> {
+    Ok(source_of(&state)?.genres()?)
 }
 
 /// The page coordinates of one book in reading order. The reader keeps this

@@ -4,6 +4,9 @@ venv/
 # Dependencies
 node_modules/
 target/
+# `cargo test --workspace` writes here, so a running debug build is not
+# relinked out from under the user (9 GB; delete it when done).
+target-test/
 
 # Build outputs
 dist/

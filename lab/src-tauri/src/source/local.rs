@@ -6,7 +6,7 @@
 //! read-only, and nothing in this module issues a write.
 
 use super::freq::{FreqLayer, FreqTable};
-use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, Page, PageEntry, PageRef, TocNode, TocRow};
+use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, NamedId, Page, PageEntry, PageRef, TocNode, TocRow};
 use std::sync::Mutex;
 use anyhow::{anyhow, Context, Result};
 use kashshaf_engine::{
@@ -206,6 +206,22 @@ impl LocalSource {
         Ok(rows)
     }
 
+    /// One of `metadata.db`'s lookup tables as `(id, name)` pairs.
+    ///
+    /// A row whose name is NULL or blank is dropped rather than shown as an
+    /// empty filter option: the id alone tells a reader nothing.
+    fn named(&self, table: &str, col: &str) -> Result<Vec<NamedId>> {
+        let conn = Self::open_ro(&self.metadata_db)?;
+        let sql = format!(
+            "SELECT id, {col} FROM {table} WHERE {col} IS NOT NULL AND {col} <> '' ORDER BY id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map([], |r| Ok(NamedId { id: r.get(0)?, name: r.get(1)? }))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Assemble one page from the index (body and labels) and the token cache.
     fn page_at(&self, key: PageKey) -> Result<Option<Page>> {
         let Some(result) = self.engine.get_page(key.id, key.part_index, key.page_id)? else {
@@ -235,6 +251,14 @@ impl BookSource for LocalSource {
 
     fn book(&self, id: u64) -> Result<Option<BookMetadata>> {
         Ok(self.books_where(Some(id))?.into_iter().next())
+    }
+
+    fn authors(&self) -> Result<Vec<NamedId>> {
+        self.named("authors", "author")
+    }
+
+    fn genres(&self) -> Result<Vec<NamedId>> {
+        self.named("genres", "genre")
     }
 
     /// Schema 4 has no `pages` table — the page list lives in `page_tokens`,

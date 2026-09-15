@@ -447,8 +447,23 @@ pub fn extract_views(
     let mut out: Vec<Candidate> = Vec::new();
     let mut i = 0;
 
+    // A bare `عن` opens a chain (spec 1.5 G): a page that carries on
+    // `عن X عن Y` without a reporting verb in front of it is still an isnad,
+    // and before this it was invisible. Only when no verb within the
+    // lookahead already introduced the particle, so an ordinary
+    // `حدثنا X عن Y` is still one candidate and not two.
+    let opens_bare = |x: usize| -> bool {
+        classes[x] == Class::Connect
+            && views[x].norm == "عن"
+            && params.groups.contains(&Group::Core)
+            && !(x.saturating_sub(k)..x).any(|y| classes[y] == Class::Verb)
+    };
+
     while i < n {
-        if classes[i] != Class::Verb || (i > 0 && classes[i - 1] == Class::Verb && lens[i] == 1 && lens_covers(&lens, i)) {
+        let bare = opens_bare(i);
+        if (classes[i] != Class::Verb && !bare)
+            || (classes[i] == Class::Verb && i > 0 && classes[i - 1] == Class::Verb && lens[i] == 1 && lens_covers(&lens, i))
+        {
             i += 1;
             continue;
         }
@@ -628,7 +643,10 @@ pub fn extract_views(
             let b = boundary;
             let next_marker = markers.iter().copied().find(|&m| m > b);
             let next_heading = headings.iter().map(|h| h.0).filter(|&h| h > b).min();
-            let next_chain = (b + 1..n).find(|&x| classes[x] == Class::Verb && chain_would_open(x, &classes, &groups, &lens, params, k));
+            let next_chain = (b + 1..n).find(|&x| {
+                (classes[x] == Class::Verb && chain_would_open(x, &classes, &groups, &lens, params, k))
+                    || (opens_bare(x) && classes[(x + 1).min(n)..(x + 1 + k).min(n)].iter().any(|c| *c == Class::Name))
+            });
             let end = [next_marker, next_heading, next_chain].into_iter().flatten().min().unwrap_or(n);
             if end > b { Some((b, end)) } else { None }
         } else {
@@ -745,6 +763,27 @@ mod tests {
         assert_eq!(c[11], Class::Other, "رايت is not in the lexicon");
         assert_eq!(c[12], Class::Other);
         assert_eq!(c[13], Class::Other, "كتاب after a preposition is not a name");
+    }
+
+    #[test]
+    fn a_bare_transmission_particle_opens_a_chain() {
+        // No reporting verb anywhere: the page simply carries on from the
+        // chain before it. Spec 1.5 G asks that this be a chain all the same.
+        let c = run("عن/prep مالك عن/prep نافع عن/prep ابن عمر قال/verb ان رسول الله");
+        assert_eq!(c.len(), 1, "one chain, opened by the particle");
+        assert_eq!(c[0].tok_start, 0, "it starts at the particle itself");
+        assert!(c[0].links >= 2, "three transmitters, so at least two links: {:?}", c[0].links);
+        assert_eq!(c[0].kind, Kind::Isnad);
+        assert_eq!(
+            c[0].transmitters.first().map(|t| t.verb_before.clone()).flatten(),
+            Some("عن".to_string()),
+            "the first transmitter is introduced by the particle"
+        );
+
+        // With a verb in front, the verb still opens it: one candidate, not two.
+        let c = run("حدثنا/verb مالك عن/prep نافع عن/prep ابن عمر قال/verb ان رسول الله");
+        assert_eq!(c.len(), 1, "the verb opens it; the particles inside do not open more");
+        assert_eq!(c[0].tok_start, 0);
     }
 
     #[test]

@@ -323,11 +323,15 @@ struct RunProgress {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSummary {
     pub book_id: u64,
+    /// Pages actually read: fewer than the scope when the run was cancelled.
     pub pages: usize,
     pub candidates: usize,
     pub kept_confirmed: usize,
     pub elapsed_ms: u64,
     pub lexicon_hash: String,
+    /// Whether the reader stopped it (spec 1.5 F2: the count it reached is
+    /// what the panel then reports, and everything found is kept).
+    pub cancelled: bool,
 }
 
 /// Extract the whole current book (§4.2 "Whole-book run"), streaming: each
@@ -393,10 +397,13 @@ pub async fn isnad_run(
             .collect();
         let total = in_scope.len() as u64;
         let mut found = 0u64;
+        let mut read = 0u64;
+        let mut cancelled = false;
         let no_overrides = HashMap::new();
         for (n, &i) in in_scope.iter().enumerate() {
             let page = &book.pages[i];
             if h.should_stop() {
+                cancelled = true;
                 break;
             }
             // The book as one stream (amendment 1.4): this page plus the
@@ -420,6 +427,7 @@ pub async fn isnad_run(
             conn.execute_batch("COMMIT").map_err(dberr)?;
             let elapsed = started.elapsed().as_millis() as u64;
             let done = n as u64 + 1;
+            read = done;
             // The rows this page produced travel with the progress event, so
             // the workbench fills as the run goes (spec 1.5 G).
             let rows: Vec<IsnadRow> = new_ids.iter().filter_map(|id| read_isnad(&conn, *id).ok()).collect();
@@ -436,11 +444,12 @@ pub async fn isnad_run(
         }
         Ok(RunSummary {
             book_id,
-            pages: total as usize,
+            pages: read as usize,
             candidates: found as usize,
             kept_confirmed: kept_count,
             elapsed_ms: started.elapsed().as_millis() as u64,
             lexicon_hash: lex.hash,
+            cancelled,
         })
     })
     .await
@@ -1335,6 +1344,8 @@ mod tests {
         fn search_book(&self, _b: u64, _a: &[crate::commands::search::Term], _o: &[crate::commands::search::Term], _l: usize, _f: usize) -> anyhow::Result<crate::commands::search::SearchResults> {
             Ok(crate::commands::search::SearchResults { hits: vec![], total: 0, elapsed_ms: 0, capped: false })
         }
+        fn authors(&self) -> anyhow::Result<Vec<crate::source::NamedId>> { Ok(vec![]) }
+        fn genres(&self) -> anyhow::Result<Vec<crate::source::NamedId>> { Ok(vec![]) }
         fn toc(&self, _id: u64) -> anyhow::Result<Vec<crate::source::TocNode>> { Ok(vec![]) }
         fn toc_rows(&self, _id: u64) -> anyhow::Result<Vec<crate::source::TocRow>> { Ok(vec![]) }
         fn toc_status(&self) -> anyhow::Result<()> { Ok(()) }

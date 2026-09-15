@@ -15,8 +15,10 @@
 //!
 //! The file is optional at this layer: a corpus published before it exists
 //! simply has none, and every caller degrades with the reason (ground rule
-//! 5). It is small — about 50 MB for the whole corpus — and opened
-//! read-only, so Lab and Kashshaf can share it with the API.
+//! 5). The whole corpus is 2,384,556 entries in 242 MB, carrying one index,
+//! `(book_id, parent)`; a book's rows are few enough that ordering them for
+//! display costs nothing, and a second index cost 35 MB. It is opened
+//! read-only, so Lab, Kashshaf and the API can share one file.
 
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{Connection, OpenFlags};

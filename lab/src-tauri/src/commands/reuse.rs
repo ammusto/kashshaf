@@ -239,6 +239,9 @@ pub struct MatchRow {
     pub target_title: Option<String>,
     pub target_author: Option<i64>,
     pub target_death_ah: Option<i64>,
+    /// How many parts the target book has, so the row can label its page the
+    /// way that book prints it (spec 1.5 C1).
+    pub target_parts: Option<i64>,
     pub t_start: usize,
     pub t_end: usize,
     pub pairs: Vec<(usize, usize)>,
@@ -270,6 +273,7 @@ fn read_matches(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> 
                 target_title: None,
                 target_author: None,
                 target_death_ah: None,
+                target_parts: None,
                 t_start: r.get::<_, i64>(11)? as usize,
                 t_end: r.get::<_, i64>(12)? as usize,
                 pairs: pairs_json.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
@@ -305,13 +309,16 @@ const MATCH_COLUMNS: &str = "id, run_id, book_id, part_index, page_id, tok_start
 
 /// Fill target titles from the source's book list, once per distinct book.
 fn with_titles(source: &dyn BookSource, rows: &mut [MatchRow]) {
-    let mut cache: HashMap<u64, Option<(String, Option<i64>, Option<i64>)>> = HashMap::new();
+    let mut cache: HashMap<u64, Option<(String, Option<i64>, Option<i64>, Option<i64>)>> = HashMap::new();
     for r in rows.iter_mut() {
-        let e = cache.entry(r.target.book_id).or_insert_with(|| source.book(r.target.book_id).ok().flatten().map(|b| (b.title, b.author_id, b.death_ah)));
-        if let Some((t, a, d)) = e {
+        let e = cache
+            .entry(r.target.book_id)
+            .or_insert_with(|| source.book(r.target.book_id).ok().flatten().map(|b| (b.title, b.author_id, b.death_ah, b.parts)));
+        if let Some((t, a, d, parts)) = e {
             r.target_title = Some(t.clone());
             r.target_author = *a;
             r.target_death_ah = *d;
+            r.target_parts = *parts;
         }
     }
 }
