@@ -6,12 +6,12 @@
 //! read-only, and nothing in this module issues a write.
 
 use super::freq::{FreqLayer, FreqTable};
-use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, Page, PageRef};
+use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, Page, PageEntry, PageRef, TocNode, TocRow};
 use std::sync::Mutex;
 use anyhow::{anyhow, Context, Result};
 use kashshaf_engine::{
-    check_corpus_schema_supported, tokens::PageKey, verify_corpus_versions_match, EngineConfig, SearchEngine, SearchFilters,
-    SearchMode, TokenCache,
+    check_corpus_schema_supported, toc::TocDb, tokens::PageKey, verify_corpus_versions_match, EngineConfig, SearchEngine,
+    SearchFilters, SearchMode, TokenCache,
 };
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -32,6 +32,10 @@ pub struct LocalSource {
     data_dir: PathBuf,
     /// Loaded frequency tables, one per layer (spec §3.4).
     freq: Mutex<[Option<Arc<FreqTable>>; 2]>,
+    /// `toc.db` (spec 1.5 §B), or why it could not be opened. Optional at
+    /// this layer: a corpus published before it exists simply has none, and
+    /// every caller degrades with the reason.
+    toc: std::result::Result<TocDb, String>,
 }
 
 impl LocalSource {
@@ -73,6 +77,11 @@ impl LocalSource {
         let token_cache = Arc::new(TokenCache::new(corpus_db.clone(), CACHE_CAPACITY)?);
         engine.set_token_cache(token_cache.clone());
 
+        let toc = TocDb::open_in(data_dir).map_err(|e| e.to_string());
+        if let Err(e) = &toc {
+            eprintln!("[lab] no table of contents: {}", e);
+        }
+
         Ok(Self {
             engine: Arc::new(engine),
             token_cache,
@@ -82,6 +91,7 @@ impl LocalSource {
             schema_version,
             data_dir: data_dir.to_path_buf(),
             freq: Mutex::new([None, None]),
+            toc,
         })
     }
 
@@ -124,6 +134,11 @@ impl LocalSource {
 
     pub fn corpus_db(&self) -> &Path {
         &self.corpus_db
+    }
+
+    /// The open `toc.db`, or the reason there is none.
+    pub fn toc_db(&self) -> std::result::Result<&TocDb, &str> {
+        self.toc.as_ref().map_err(|e| e.as_str())
     }
 
     pub fn engine(&self) -> &Arc<SearchEngine> {
@@ -236,6 +251,25 @@ impl BookSource for LocalSource {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(refs)
+    }
+
+    /// The page list with the printed labels the index holds (spec 1.5 C1),
+    /// in one term query rather than one per page.
+    fn page_entries(&self, id: u64) -> Result<Vec<PageEntry>> {
+        let labels: std::collections::HashMap<(u32, u64), (String, String)> = self
+            .engine
+            .book_page_labels(id)?
+            .into_iter()
+            .map(|(part, page, label, number)| ((part as u32, page), (label, number)))
+            .collect();
+        Ok(self
+            .page_refs(id)?
+            .into_iter()
+            .map(|r| {
+                let (part_label, page_number) = labels.get(&(r.part_index, r.page_id)).cloned().unwrap_or_default();
+                PageEntry { book_id: r.book_id, part_index: r.part_index, page_id: r.page_id, page_number, part_label }
+            })
+            .collect())
     }
 
     /// The whole book, through the engine's bulk path.
@@ -352,7 +386,81 @@ impl BookSource for LocalSource {
         })
     }
 
+    fn toc(&self, book_id: u64) -> Result<Vec<TocNode>> {
+        self.toc.as_ref().map_err(|e| toc_missing(e))?.tree(book_id)
+    }
+
+    fn toc_rows(&self, book_id: u64) -> Result<Vec<TocRow>> {
+        self.toc.as_ref().map_err(|e| toc_missing(e))?.rows(book_id)
+    }
+
+    fn toc_status(&self) -> Result<()> {
+        self.toc.as_ref().map(|_| ()).map_err(|e| toc_missing(e))
+    }
+
+    fn search_book(
+        &self,
+        book_id: u64,
+        and_terms: &[crate::commands::search::Term],
+        or_terms: &[crate::commands::search::Term],
+        limit: usize,
+        offset: usize,
+    ) -> Result<crate::commands::search::SearchResults> {
+        use kashshaf_engine::SearchTerm;
+        let to_term = |t: &crate::commands::search::Term| SearchTerm {
+            query: t.query.clone(),
+            mode: match t.mode.as_str() {
+                "lemma" => SearchMode::Lemma,
+                "root" => SearchMode::Root,
+                _ => SearchMode::Surface,
+            },
+        };
+        let and: Vec<SearchTerm> = and_terms.iter().map(to_term).collect();
+        let or: Vec<SearchTerm> = or_terms.iter().map(to_term).collect();
+        let filters = SearchFilters { book_ids: Some(vec![book_id]), ..SearchFilters::default() };
+        let r = self.engine.combined_search(&and, &or, &filters, limit, offset)?;
+        // The matched token indices are per page and need the terms again.
+        let terms: Vec<SearchTerm> = and.iter().chain(or.iter()).cloned().collect();
+        let hits = r
+            .results
+            .into_iter()
+            .map(|h| {
+                let matched = self
+                    .engine
+                    .get_match_positions_combined(h.id, h.part_index, h.page_id, &terms)
+                    .unwrap_or_default();
+                crate::commands::search::Hit {
+                    part_index: h.part_index as u32,
+                    page_id: h.page_id,
+                    part_label: h.part_label,
+                    page_number: h.page_number,
+                    body: h.body,
+                    score: h.score,
+                    matched,
+                }
+            })
+            .collect();
+        Ok(crate::commands::search::SearchResults {
+            hits,
+            total: r.total_hits,
+            elapsed_ms: r.elapsed_ms,
+            capped: r.was_capped.unwrap_or(false),
+        })
+    }
+
     fn as_local(&self) -> Option<&LocalSource> {
         Some(self)
     }
+}
+
+/// The one message every "there is no toc.db" path shows (spec 1.5 §B1).
+fn toc_missing(why: &str) -> anyhow::Error {
+    unavailable(
+        "The table of contents",
+        &format!(
+            "{} — toc.db ships with corpus {} and later; update the corpus from Settings",
+            why,
+            crate::MIN_TOC_CORPUS_VERSION
+        ),
+    )
 }

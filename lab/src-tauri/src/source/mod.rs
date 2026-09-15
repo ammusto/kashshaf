@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub use freq::{Freq, FreqLayer, FreqTable};
 
 pub use kashshaf_engine::tokens::{Token, TokenClitic};
+pub use kashshaf_engine::toc::{TocNode, TocRow};
 
 /// Book metadata as `metadata.db` stores it. The same shape both modes return
 /// and the same shape the TypeScript `BookMetadata` in `@kashshaf/shared`
@@ -66,6 +67,36 @@ pub struct PageRef {
     pub page_id: u64,
 }
 
+impl PageRef {
+    /// Just the coordinates, for the many places that compare positions.
+    pub fn at(&self) -> (u32, u64) {
+        (self.part_index, self.page_id)
+    }
+}
+
+/// A page of the reader's page list: its coordinates and the labels the
+/// book prints on it.
+///
+/// `PageRef` stays a bare coordinate — it is compared, copied and stored in
+/// its thousands — while every *page label* Lab shows (spec 1.5 C1) is built
+/// from the printed `page_number` and the part, which live in the index
+/// rather than in `page_tokens`. The reader fetches these once per book.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageEntry {
+    pub book_id: u64,
+    pub part_index: u32,
+    pub page_id: u64,
+    /// Empty when the index has no document for the page.
+    pub page_number: String,
+    pub part_label: String,
+}
+
+impl PageEntry {
+    pub fn as_ref(&self) -> PageRef {
+        PageRef { book_id: self.book_id, part_index: self.part_index, page_id: self.page_id }
+    }
+}
+
 /// Which annotation layer a statistic or a query runs on (spec §4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -111,6 +142,10 @@ pub trait BookSource: Send + Sync {
     /// The page coordinates of a book in reading order, without its text —
     /// what the reader needs to page forward and back.
     fn page_refs(&self, id: u64) -> Result<Vec<PageRef>>;
+
+    /// The same list with each page's printed number and part label, which
+    /// every page label in the UI is built from (spec 1.5 C1).
+    fn page_entries(&self, id: u64) -> Result<Vec<PageEntry>>;
     fn page(&self, id: u64, part: u32, page: u64) -> Result<Option<Page>>;
     /// Corpus-wide frequencies for one layer (spec §3.4), loaded once and
     /// shared. Keyed by the lemma / root string rather than the id the spec
@@ -121,6 +156,31 @@ pub trait BookSource: Send + Sync {
     /// index query in both modes (engine phrase query locally,
     /// `POST /search/combined` remotely), so the candidate set is the same.
     fn find_pages(&self, q: &CandidateQuery) -> Result<Hits>;
+
+    /// The book's table of contents as a tree (spec 1.5 §B2), from `toc.db`
+    /// locally and `GET /book/{id}/toc` in api mode. Errors with the reason
+    /// when the corpus predates `toc.db`; never returns an empty tree to mean
+    /// "unavailable" — a book with no headings genuinely has none.
+    fn toc(&self, book_id: u64) -> Result<Vec<TocNode>>;
+
+    /// The same entries flat, in reading order — what the "which section is
+    /// this page in" lookup and the section scopes need.
+    fn toc_rows(&self, book_id: u64) -> Result<Vec<TocRow>>;
+
+    /// Whether this source can answer `toc` at all, and why not if it cannot.
+    /// Checked once, so the UI can disable the pane without a failed call.
+    fn toc_status(&self) -> Result<()>;
+
+    /// Boolean search within one book (spec 1.5 D): the same engine query in
+    /// both modes, filtered to the one text.
+    fn search_book(
+        &self,
+        book_id: u64,
+        and_terms: &[crate::commands::search::Term],
+        or_terms: &[crate::commands::search::Term],
+        limit: usize,
+        offset: usize,
+    ) -> Result<crate::commands::search::SearchResults>;
 
     /// `Some` for the local corpus: what the operations that only make
     /// sense on disk (building the frequency snapshot) need.

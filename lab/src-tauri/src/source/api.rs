@@ -10,7 +10,7 @@
 
 use super::cache::{BulkCache, DEFAULT_MAX_BYTES};
 use super::freq::{FreqLayer, FreqTable};
-use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, Page, PageRef, Token};
+use super::{unavailable, BookMetadata, BookSource, CandidateQuery, Hits, Layer, Page, PageEntry, PageRef, Token, TocNode, TocRow};
 use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,9 @@ pub const DEFAULT_API_BASE: &str = "https://api.kashshaf.com";
 /// whether it is new enough for the bulk fetch (§10, "Compatibility note").
 #[derive(Debug, Clone, Deserialize)]
 pub struct Health {
+    /// `toc: true` once the server has `toc.db` (spec 1.5 §B2).
+    #[serde(default)]
+    pub toc: bool,
     pub version: String,
     #[serde(default)]
     pub corpus_version: Option<String>,
@@ -252,6 +255,23 @@ impl BookSource for ApiSource {
             .collect())
     }
 
+    /// The bulk stream already carries every page's labels, so this is the
+    /// same decode with more of each line kept (spec 1.5 C1).
+    fn page_entries(&self, id: u64) -> Result<Vec<PageEntry>> {
+        self.require_bulk()?;
+        Ok(self
+            .decode_bulk(id, &self.bulk_body(id)?, &|_, _| {})?
+            .into_iter()
+            .map(|p| PageEntry {
+                book_id: p.book_id,
+                part_index: p.part_index,
+                page_id: p.page_id,
+                page_number: p.page_number,
+                part_label: p.part_label,
+            })
+            .collect())
+    }
+
     fn book_pages(&self, id: u64, progress: &dyn Fn(u64, u64)) -> Result<Vec<Page>> {
         self.require_bulk()?;
         self.decode_bulk(id, &self.bulk_body(id)?, progress)
@@ -339,6 +359,101 @@ impl BookSource for ApiSource {
         Ok(t)
     }
 
+    fn search_book(
+        &self,
+        book_id: u64,
+        and_terms: &[crate::commands::search::Term],
+        or_terms: &[crate::commands::search::Term],
+        limit: usize,
+        offset: usize,
+    ) -> Result<crate::commands::search::SearchResults> {
+        #[derive(Serialize)]
+        struct Filters {
+            book_ids: Vec<u64>,
+        }
+        #[derive(Serialize)]
+        struct Req<'a> {
+            and_terms: &'a [crate::commands::search::Term],
+            or_terms: &'a [crate::commands::search::Term],
+            filters: Filters,
+            limit: usize,
+            offset: usize,
+        }
+        #[derive(Deserialize)]
+        struct RespHit {
+            part_index: u64,
+            page_id: u64,
+            #[serde(default)]
+            part_label: String,
+            #[serde(default)]
+            page_number: String,
+            #[serde(default)]
+            body: String,
+            #[serde(default)]
+            score: f32,
+            #[serde(default)]
+            matched_token_indices: Vec<u32>,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            total_hits: usize,
+            results: Vec<RespHit>,
+            #[serde(default)]
+            elapsed_ms: u64,
+            #[serde(default)]
+            was_capped: Option<bool>,
+        }
+        let req = Req {
+            and_terms,
+            or_terms,
+            filters: Filters { book_ids: vec![book_id] },
+            limit: limit.min(250),
+            offset,
+        };
+        let r: Resp = self.post_json("/search/combined", &req)?;
+        Ok(crate::commands::search::SearchResults {
+            hits: r
+                .results
+                .into_iter()
+                .map(|h| crate::commands::search::Hit {
+                    part_index: h.part_index as u32,
+                    page_id: h.page_id,
+                    part_label: h.part_label,
+                    page_number: h.page_number,
+                    body: h.body,
+                    score: h.score,
+                    matched: h.matched_token_indices,
+                })
+                .collect(),
+            total: r.total_hits,
+            elapsed_ms: r.elapsed_ms,
+            capped: r.was_capped.unwrap_or(false),
+        })
+    }
+
+    /// `GET /book/{id}/toc` (spec 1.5 §B2): the whole tree as JSON, small
+    /// enough to fetch per book. A server that predates the route answers
+    /// 404, which reaches the caller as the reason the pane is empty.
+    fn toc(&self, book_id: u64) -> Result<Vec<TocNode>> {
+        self.get_json(&format!("/book/{}/toc", book_id))
+            .with_context(|| format!("the table of contents of book {}", book_id))
+    }
+
+    fn toc_rows(&self, book_id: u64) -> Result<Vec<TocRow>> {
+        Ok(flatten(&self.toc(book_id)?))
+    }
+
+    fn toc_status(&self) -> Result<()> {
+        if self.health.toc {
+            Ok(())
+        } else {
+            Err(unavailable(
+                "The table of contents",
+                &format!("this server ({}) does not report toc, so it has no toc.db (spec 1.5 §B)", self.health.version),
+            ))
+        }
+    }
+
     /// `POST /search/combined` with one `and_term` whose query is the phrase
     /// — the server runs the same engine phrase query local mode does. The
     /// server caps a page of results at 250, so a larger limit pages through
@@ -393,4 +508,25 @@ impl BookSource for ApiSource {
         }
         Ok(hits)
     }
+}
+
+/// A tree back to rows in reading order, for the api-mode `toc_rows`.
+fn flatten(nodes: &[TocNode]) -> Vec<TocRow> {
+    fn go(nodes: &[TocNode], out: &mut Vec<TocRow>) {
+        for n in nodes {
+            out.push(TocRow {
+                id: n.id,
+                parent: n.parent,
+                title: n.title.clone(),
+                part_index: n.part_index,
+                page_id: n.page_id,
+                page_number: n.page_number.clone(),
+            });
+            go(&n.children, out);
+        }
+    }
+    let mut out = Vec::new();
+    go(nodes, &mut out);
+    out.sort_by_key(|r| (r.part_index, r.page_id, r.id));
+    out
 }

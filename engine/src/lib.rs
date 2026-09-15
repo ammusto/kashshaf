@@ -17,6 +17,7 @@ pub mod memory;
 pub mod normalize;
 pub mod positional;
 pub mod search;
+pub mod toc;
 pub mod tokens;
 pub mod triples;
 pub mod triples_image;
@@ -46,4 +47,5 @@ pub use walk::{
     PREFIX_CACHE_BYTES, PREFIX_CACHE_ENTRIES, WALK_BUDGET_MS, WALK_INLINE_MS, WALK_QUEUE_MS,
 };
 pub use tokens::{PageKey, Token, TokenClitic, TokenField};
+pub use toc::{TocDb, TocNode, TocRow};
 pub use variants::{compute_variants, Variant, VariantsResponse, MAX_SCANNED_HITS};

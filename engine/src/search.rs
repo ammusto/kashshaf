@@ -1363,6 +1363,33 @@ impl SearchEngine {
         Ok(r)
     }
 
+    /// Every page of one book as `(part_index, page_id, part_label,
+    /// page_number)`, in reading order.
+    ///
+    /// The printed numbers live only in the index, and Kashshaf Lab shows
+    /// them on every page label (its spec 1.5 C1), so it needs all of a
+    /// book's at once. One term query and one stored-field read per page:
+    /// about 130 ms for the largest book in the corpus, against seconds for
+    /// a `get_page` loop, which also decompresses each page's body.
+    pub fn book_page_labels(&self, id: u64) -> Result<Vec<(u64, u64, String, String)>> {
+        let searcher = self.reader.searcher();
+        let f = self.fields;
+        let query = TermQuery::new(Term::from_field_u64(f.text_id, id), IndexRecordOption::Basic);
+        let addrs = searcher.search(&query, &tantivy::collector::DocSetCollector)?;
+        let mut out = Vec::with_capacity(addrs.len());
+        for addr in addrs {
+            let doc: TantivyDocument = searcher.doc(addr)?;
+            out.push((
+                u64_of(&doc, f.part_index).unwrap_or(0),
+                u64_of(&doc, f.page_id).unwrap_or(0),
+                str_of(&doc, f.part_label),
+                str_of(&doc, f.page_number),
+            ));
+        }
+        out.sort_by_key(|(part, page, _, _)| (*part, *page));
+        Ok(out)
+    }
+
     pub fn get_page_by_label(&self, id: u64, part_label: &str, page_number: &str) -> Result<Option<SearchResult>> {
         let searcher = self.reader.searcher();
         let f = self.fields;

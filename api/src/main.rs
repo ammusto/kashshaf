@@ -39,6 +39,10 @@ struct AppState {
     /// Per-client caps for `GET /book/{id}/tokens` (Lab spec §5.1), which is
     /// exempt from the per-request limiter.
     bulk_limiter: Arc<bulk::BulkLimiter>,
+    /// `toc.db` beside the corpus, when the published corpus has one (Lab
+    /// spec 1.5 B2). `None` on a corpus that predates it; the route then
+    /// answers 404 with the reason and `/health.toc` is false.
+    toc: Option<kashshaf_engine::TocDb>,
 }
 
 const WARM_DISABLED: u8 = 0;
@@ -211,6 +215,8 @@ struct HealthResponse {
     /// This server implements `GET /book/{id}/tokens` (Lab spec §5.1).
     /// Kashshaf Lab reads it to tell "unsupported" from "failed".
     bulk_tokens: bool,
+    /// This server has `toc.db`, so `GET /book/{id}/toc` answers (Lab spec 1.5 B2).
+    toc: bool,
     /// Process memory, MiB (working set includes mmapped index pages).
     rss_mb: f64,
     peak_rss_mb: f64,
@@ -279,6 +285,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         }
         .to_string(),
         bulk_tokens: true,
+        toc: state.toc.is_some(),
         rss_mb: mem.rss_mb(),
         peak_rss_mb: mem.peak_rss_mb(),
         private_mb: mem.private_mb(),
@@ -464,6 +471,22 @@ async fn get_name_match_positions(
         .map_err(internal)
 }
 
+/// `GET /book/{id}/toc` - the book's table of contents as a tree (Lab spec
+/// 1.5 B2). Tiny JSON: a few hundred entries at most, so it is neither
+/// compressed nor rate-limited beyond the per-request layer.
+async fn get_book_toc(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+) -> Result<Json<Vec<kashshaf_engine::TocNode>>, ApiError> {
+    let toc = state.toc.as_ref().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse { error: "this server's corpus has no toc.db".to_string() }),
+        )
+    })?;
+    Ok(Json(toc.tree(id).map_err(internal)?))
+}
+
 async fn get_all_books(State(state): State<Arc<AppState>>) -> Result<Json<Vec<BookMetadata>>, ApiError> {
     let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
     let mut stmt = conn
@@ -533,6 +556,16 @@ async fn main() -> anyhow::Result<()> {
     let index_path = data_dir.join("tantivy_index");
     let db_path = data_dir.join("corpus.db");
     let metadata_db_path = data_dir.join("metadata.db");
+    let toc = match kashshaf_engine::TocDb::open_in(&data_dir) {
+        Ok(t) => {
+            println!("toc.db: {} books with a table of contents", t.book_count().unwrap_or(0));
+            Some(t)
+        }
+        Err(e) => {
+            println!("toc.db unavailable: {e}");
+            None
+        }
+    };
 
     // Refuse schemas newer than this build understands; make sure the lookup
     // indexes exist on older schemas (schema 3 ships with both).
@@ -587,6 +620,7 @@ async fn main() -> anyhow::Result<()> {
         db_schema_version,
         warm_cache: warm_cache.clone(),
         bulk_limiter: Arc::new(bulk::BulkLimiter::default()),
+        toc,
     });
 
     // Optional page-cache warm-up: read the index and corpus.db once so the
@@ -674,6 +708,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/book/:id/tokens", get(bulk::get_book_tokens))
+        .route("/book/:id/toc", get(get_book_toc))
         .merge(limited)
         .layer(cors)
         .with_state(state);

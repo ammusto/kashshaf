@@ -19,6 +19,7 @@ pub mod quran_data;
 pub mod source;
 pub mod state;
 pub mod store;
+pub mod workspace;
 
 pub use error::LabError;
 pub use mode::{LabMode, LabStatus};
@@ -37,3 +38,12 @@ pub const LAB_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// until the manifest exists it is the whole rule, alongside the engine's own
 /// `check_corpus_schema_supported`.
 pub const MIN_CORPUS_VERSION: &str = "4.0.0";
+
+/// The first corpus that ships `toc.db` (spec 1.5 §B1).
+///
+/// Separate from [`MIN_CORPUS_VERSION`] on purpose: a corpus without a
+/// table of contents is still fully readable, and refusing to open one
+/// would strand every user between this build and the next publication.
+/// What Lab does instead is refuse the *feature* and name this version —
+/// in the mode badge, in Settings, and in every pane that needs it.
+pub const MIN_TOC_CORPUS_VERSION: &str = "4.2.0";
