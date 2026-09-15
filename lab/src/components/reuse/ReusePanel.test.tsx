@@ -121,11 +121,18 @@ beforeEach(() => {
   api.lab.listPageRefs.mockResolvedValue([{ book_id: 4382, part_index: 0, page_id: 118 }]);
   api.lab.listPages.mockImplementation(async (id: number) =>
     id === 5563
-      ? [{ book_id: 5563, part_index: 0, page_id: 6260, page_number: '6260', part_label: 'ج١' }]
+      ? [
+          { book_id: 5563, part_index: 0, page_id: 6260, page_number: '6260', part_label: 'ج١' },
+          { book_id: 5563, part_index: 0, page_id: 6261, page_number: '6261', part_label: 'ج١' },
+        ]
       : [{ book_id: 4382, part_index: 0, page_id: 118, page_number: '118', part_label: 'ج١' }]
   );
   api.lab.getPage.mockImplementation(async (id: number, _p: number, pageId: number) =>
-    id === 4382 && pageId === 118 ? queryPage : id === 5563 ? targetPage : null
+    id === 4382 && pageId === 118
+      ? queryPage
+      : id === 5563
+        ? { ...targetPage, page_id: pageId, page_number: String(pageId) }
+        : null
   );
   api.reuse.runs.mockResolvedValue([]);
   api.reuse.pageLayer.mockResolvedValue([]);
@@ -279,6 +286,13 @@ describe('ReusePanel', () => {
     // The alignment is still a toggle within this state.
     fireEvent.click(within(target).getByLabelText('Side by side'));
     expect(await screen.findByTestId('side-by-side')).toBeInTheDocument();
+
+    // A keystroke belongs to the reader the pointer is over, not to both.
+    // React synthesises mouseenter from mouseover, so that is what to fire.
+    fireEvent.mouseOver(right);
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(within(right).getByTestId('read-locator')).toHaveTextContent('6261'));
+    expect(within(left).getByTestId('read-locator')).toHaveTextContent('118');
 
     // Back to the table, and the left reader has not moved.
     fireEvent.click(screen.getByTestId('back-to-results'));

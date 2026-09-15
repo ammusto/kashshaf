@@ -29,11 +29,20 @@ const PANELS: Array<[string, string, string]> = [
   ['Poetry', 'poetry/PoetryPanel.tsx', 'poetry-panel'],
 ];
 
-/** The line declaring the element that carries this test id. */
+/** The opening tag of the element carrying this test id, however many lines
+ *  it is written over. */
 function rootElement(source: string, testId: string): string {
-  const line = source.split('\n').find((l) => l.includes(`data-testid="${testId}"`));
-  expect(line, `nothing carries data-testid="${testId}"`).toBeDefined();
-  return line!.trim();
+  const lines = source.split('\n');
+  const at = lines.findIndex((l) => l.includes(`data-testid="${testId}"`));
+  expect(at, `nothing carries data-testid="${testId}"`).toBeGreaterThanOrEqual(0);
+  let from = at;
+  while (from > 0 && !lines[from].trimStart().startsWith('<')) from -= 1;
+  let to = at;
+  while (to < lines.length - 1 && !lines[to].trimEnd().endsWith('>')) to += 1;
+  return lines
+    .slice(from, to + 1)
+    .map((l) => l.trim())
+    .join(' ');
 }
 
 describe('every panel fills the window', () => {

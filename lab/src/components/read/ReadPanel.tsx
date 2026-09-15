@@ -63,6 +63,12 @@ const blank = (): Remembered => ({
 
 const memory = new Map<number, Remembered>();
 
+/**
+ * How many readers are on screen. The reuse panel puts two side by side
+ * (8 D), and a keystroke meant for one of them must not page both.
+ */
+let mounted = 0;
+
 export function resetReadMemory() {
   memory.clear();
 }
@@ -109,6 +115,15 @@ export function ReadPanel({
 }) {
   const bookId = book?.id ?? null;
   const mem = remembered(bookId);
+
+  /** True while the pointer is over this reader; see `mounted`. */
+  const hot = useRef(false);
+  useEffect(() => {
+    mounted += 1;
+    return () => {
+      mounted -= 1;
+    };
+  }, []);
 
   const [pages, setPages] = useState<Pages>(() => Pages.empty(book?.parts));
   const [index, setIndex] = useState(0);
@@ -272,6 +287,8 @@ export function ReadPanel({
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      // With two readers up, the shortcuts belong to the one being read.
+      if (mounted > 1 && !hot.current) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 't') {
         e.preventDefault();
         setTocOpen((v) => !v);
@@ -511,7 +528,12 @@ export function ReadPanel({
   );
 
   return (
-    <div className="flex-1 min-w-0 flex min-h-0 relative overflow-hidden" data-testid="read-panel">
+    <div
+      className="flex-1 min-w-0 flex min-h-0 relative overflow-hidden"
+      data-testid="read-panel"
+      onMouseEnter={() => (hot.current = true)}
+      onMouseLeave={() => (hot.current = false)}
+    >
       {showSearch && (
         <aside
           className="relative flex-shrink-0 bg-app-surface border-r border-app-border-light"
