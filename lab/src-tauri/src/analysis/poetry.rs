@@ -90,8 +90,33 @@ fn split_line(line: &str) -> Option<(String, String, &'static str)> {
     Some((a.to_string(), b.to_string(), "whitespace"))
 }
 
+/// A letter the prosody can read.
+///
+/// `align::is_arabic_letter` is the whole Arabic block minus tashkil, which
+/// is right for alignment and wrong here: it includes the Arabic-Indic
+/// digits and the punctuation. A hemistich in the corpus almost always
+/// carries its verse number -- `\u{0661}\u{0668}\u{0667} - ` -- and those
+/// digits reached the prosody as letters with no vowel, so the whole
+/// hemistich came back unreadable. Everything the scansion cannot read as a
+/// consonant or a long vowel is simply not a letter to it.
 fn is_letter(c: char) -> bool {
-    super::align::is_arabic_letter(c)
+    if !super::align::is_arabic_letter(c) {
+        return false;
+    }
+    !matches!(
+        c,
+        // Arabic-Indic and extended digits
+        '\u{0660}'..='\u{0669}' | '\u{06F0}'..='\u{06F9}'
+        // comma, semicolon, question mark, full stop, percent, decimal marks
+        | '\u{060C}' | '\u{061B}' | '\u{061F}' | '\u{06D4}'
+        | '\u{066A}'..='\u{066D}' | '\u{06DD}' | '\u{06DE}'
+        // honorifics and Qur'anic annotation signs
+        | '\u{0600}'..='\u{0605}' | '\u{0610}'..='\u{061A}'
+        | '\u{06D6}'..='\u{06DC}' | '\u{06DF}'..='\u{06E8}'
+        | '\u{06EA}'..='\u{06ED}'
+        // tatwil: a stretch mark, not a letter
+        | '\u{0640}'
+    )
 }
 
 fn is_mark(c: char) -> bool {
@@ -193,10 +218,18 @@ pub fn prosody(s: &str) -> Option<String> {
                         prev_vowel = None;
                     }
                 } else if tanwin.is_some() {
-                    // Tanwīn: the vowel, then a sākin nūn.
+                    // Tanwīn: the vowel, then a sākin nūn. Tanwīn fatḥa is
+                    // written with a carrier alif (جَمِيعًا) that is not a
+                    // letter of its own; counting it added a second sākin
+                    // and pushed the foot out of every meter.
                     out.push('/');
                     out.push('o');
                     prev_vowel = None;
+                    if matches!(chars.get(j), Some('ا') | Some('ى'))
+                        && !chars.get(j + 1).map(|c| is_mark(*c)).unwrap_or(false)
+                    {
+                        j += 1;
+                    }
                 } else if sukun {
                     out.push('o');
                     prev_vowel = None;
@@ -356,6 +389,143 @@ mod tests {
         // Mutaqārib: فعولن ×4.
         let p = prosody("فَلَا تَحْسَبَنَّ الْحَيَاةَ لَهُمْ").unwrap();
         assert!(scan(&p).contains(&"المتقارب".to_string()), "{}", p);
+    }
+
+    /// Diagnostic, not an assertion: what the matcher sees.
+    ///
+    ///   cargo test -p kashshaf-lab --lib diagnose -- --nocapture --ignored
+    ///
+    /// Ten first hemistichs whose meter is not in doubt, then real text taken
+    /// from the corpus that clears the vowelling gate. Prints the prosodic
+    /// writing and the meters it scans as, so a failure can be read as feet,
+    /// zihafat or normalisation rather than guessed at.
+    /// Scan every hemistich in a file, one per line, and report the rates.
+    /// Set KASHSHAF_HEMISTICHS to a file written by the extractor in
+    /// dev-docs; skipped without one.
+    ///
+    ///   cargo test -p kashshaf-lab --lib meter_rate -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn meter_rate_over_real_hemistichs() {
+        let Ok(path) = std::env::var("KASHSHAF_HEMISTICHS") else {
+            println!("set KASHSHAF_HEMISTICHS to a file of hemistichs");
+            return;
+        };
+        let text = std::fs::read_to_string(&path).expect("read hemistichs");
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        let mut readable = 0usize;
+        let mut matched = 0usize;
+        let mut by_meter: std::collections::BTreeMap<String, usize> = Default::default();
+        for l in &lines {
+            let Some(p) = prosody(l) else { continue };
+            readable += 1;
+            let ms = scan(&p);
+            if !ms.is_empty() {
+                matched += 1;
+                for m in ms {
+                    *by_meter.entry(m).or_default() += 1;
+                }
+            }
+        }
+        let n = lines.len();
+        println!("
+hemistichs above the vowelling gate: {n}");
+        println!("  produced a prosodic writing : {readable} ({:.1}%)", 100.0 * readable as f64 / n as f64);
+        println!("  matched at least one meter  : {matched} ({:.1}%)", 100.0 * matched as f64 / n as f64);
+        println!("  meters seen:");
+        let mut v: Vec<_> = by_meter.into_iter().collect();
+        v.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+        for (m, c) in v.iter().take(12) {
+            println!("    {m:12} {c}");
+        }
+        println!();
+    }
+
+    #[test]
+    #[ignore]
+    fn diagnose_the_meter_matcher() {
+        let known: Vec<(&str, &str)> = vec![
+            ("الطويل", "قِفَا نَبْكِ مِنْ ذِكْرَى حَبِيبٍ وَمَنْزِلِ"),
+            ("الطويل", "أَلَا أَيُّهَا اللَّيْلُ الطَّوِيلُ أَلَا انْجَلِ"),
+            ("الكامل", "وَإِذَا صَحَوْتُ فَمَا أُقَصِّرُ عَنْ نَدًى"),
+            ("الكامل", "هَلْ غَادَرَ الشُّعَرَاءُ مِنْ مُتَرَدَّمِ"),
+            ("البسيط", "يَا دَارَ مَيَّةَ بِالعَلْيَاءِ فَالسَّنَدِ"),
+            ("البسيط", "إِنَّ الذَّمَانَ عَلَيْنَا مِنْ ذَوِي الحَسَدِ"),
+            ("الوافر", "أَلَا لَا يَجْهَلَنَّ أَحَدٌ عَلَيْنَا"),
+            ("الرجز", "دَارٌ لِسَلْمَى إِذْ سَلَيْمَى جَارَةٌ"),
+            ("الخفيف", "إِنَّ فِي القَلْبِ لَوْعَةً وَغَلِيلَا"),
+            ("المتقارب", "أَلَا يَا سَلَامٌ عَلَيْكُمْ جَمِيعًا"),
+        ];
+        println!("\n--- ten known first hemistichs ---");
+        let mut hit = 0;
+        for (meter, text) in &known {
+            let v = vowelled_share(text);
+            match prosody(text) {
+                None => println!("  {meter:11} vowelled {v:.2}  prosody: NONE (a letter had no reading)"),
+                Some(p) => {
+                    let got = scan(&p);
+                    let ok = got.iter().any(|m| m == meter);
+                    hit += ok as usize;
+                    println!(
+                        "  {:11} vowelled {:.2}  {:<38} -> {:?} {}",
+                        meter, v, p, got, if ok { "ok" } else { "MISS" }
+                    );
+                }
+            }
+        }
+        println!("  {hit}/{} known meters matched", known.len());
+
+        let real: Vec<&str> = vec![
+            "١٨٧ - فَتَنْقَضِي عِدَّةُ مَنْ أَضَلَّتْ",
+            "١ - أَفْضَلُ مَبْدُوءٍ بِهِ فِي الْكُتُبِ",
+            "٦٧ - وَيَرْفَعُ الْأَحْدَاثَ: مَاءُ الْمَطَرِ",
+            "١٤٩ - مَسْحُ الْخِفَافِ جَائِزٌ بِالْخَبَرِ",
+            "٢٢٦ - وَلَيْسَ يُعْفَى فَوْقَ قَدْرِ الدِّرْهَمِ",
+            "٣٣٨ - وَيَسْتَوِي مُكَبِّرًا وَيَسْجُدُ",
+        ];
+        println!("\n--- real corpus hemistichs above the gate ---");
+        for text in &real {
+            let v = vowelled_share(text);
+            match prosody(text) {
+                None => println!("  vowelled {v:.2}  prosody: NONE  {text}"),
+                Some(p) => println!("  vowelled {v:.2}  {:<40} -> {:?}", p, scan(&p)),
+            }
+        }
+        println!();
+    }
+
+    /// A verse in the corpus is almost always numbered, and the number is in
+    /// Arabic-Indic digits. Those sit inside the Arabic block, so the shared
+    /// `is_arabic_letter` called them letters; the prosody then met a letter
+    /// with no vowel and gave up on the whole hemistich. Every candidate in
+    /// a numbered poem scanned as unknown because of it.
+    #[test]
+    fn a_verse_number_does_not_make_a_hemistich_unreadable() {
+        let numbered = "١٨٧ - فَتَنْقَضِي عِدَّةُ مَنْ أَضَلَّتْ";
+        let plain = "فَتَنْقَضِي عِدَّةُ مَنْ أَضَلَّتْ";
+        assert!(prosody(numbered).is_some(), "a numbered hemistich must still scan");
+        assert_eq!(
+            prosody(numbered),
+            prosody(plain),
+            "the number must not change the prosodic writing"
+        );
+        assert!(!scan(&prosody(numbered).unwrap()).is_empty());
+    }
+
+    /// Tanwin fatha is written with a carrier alif. Reading that alif as a
+    /// letter of its own added a second sakin and pushed the last foot out
+    /// of every meter, so a hemistich ending in one never matched.
+    #[test]
+    fn the_carrier_alif_of_tanwin_is_not_a_second_sakin() {
+        let p = prosody("جَمِيعًا").unwrap();
+        assert!(!p.ends_with("oo"), "jami'an scanned as {p}");
+        assert_eq!(
+            scan(&prosody("أَلَا يَا سَلَامٌ عَلَيْكُمْ جَمِيعًا").unwrap())
+                .iter()
+                .any(|m| m == "المتقارب"),
+            true,
+            "a mutaqarib hemistich ending in tanwin alif must match"
+        );
     }
 
     #[test]
