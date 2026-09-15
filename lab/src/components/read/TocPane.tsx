@@ -163,13 +163,10 @@ function Annotations({ notes, pages, onJump }: { notes: Note[]; pages: Pages; on
               data-testid={`annotation-${n.id}`}
             >
               <span className={`mt-1 w-2.5 h-2.5 shrink-0 rounded-sm tok-note tok-note-${noteColor(n.color)}`} aria-hidden="true" />
-              <span className="flex-1 min-w-0">
-                <span className="block font-arabic text-sm leading-snug truncate" dir="rtl">
-                  {n.snapshot}
-                </span>
-                <span className="block text-xs text-app-text-secondary truncate" dir="auto">
-                  {noteFirstLine(n.text, 40)}
-                </span>
+              {/* 10 C: the note, not the words it is on; those are in the
+                  text, one click away. */}
+              <span className="flex-1 min-w-0 text-sm leading-snug truncate" dir="auto">
+                {noteFirstLine(n.text, 60) || '(empty note)'}
               </span>
               <span className="text-[11px] text-app-text-secondary tabular-nums shrink-0 mt-0.5" dir="ltr">
                 {pages.label(n.part_index, n.page_id)}

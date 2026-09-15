@@ -14,7 +14,7 @@ import {
   type TocNode,
   type TocRow,
 } from '../../api/workspace';
-import { noteFirstLine, parseNote, plainNote, toggleMark } from '../../api/noteText';
+import { plainNote, toggleMark } from '../../api/noteText';
 import { searchApi, toTerms, type Hit, type SearchInput, type SearchResults } from '../../api/search';
 import { selectedText, tokenRangeOfSelection } from '../../api/selection';
 import { Reader, type Mark } from '../Reader';
@@ -838,15 +838,6 @@ export function ReadPanel({
               aria-label="Note"
               className="w-full h-32 border border-app-border-medium rounded-lg p-2 text-sm"
             />
-            {editing.text.trim() !== '' && (
-              <p className="mt-2 text-sm whitespace-pre-wrap" data-testid="note-preview">
-                {parseNote(editing.text).map((sp, i) => (
-                  <span key={i} className={`${sp.bold ? 'font-bold' : ''} ${sp.underline ? 'underline' : ''}`}>
-                    {sp.text}
-                  </span>
-                ))}
-              </p>
-            )}
             <div className="flex items-center gap-2 mt-3">
               <button
                 onClick={() => void saveNote()}
@@ -871,22 +862,6 @@ export function ReadPanel({
         </div>
       )}
 
-      {pageNotes.length > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 px-3 py-1 border-t border-app-border-light bg-app-surface text-xs flex flex-wrap gap-2" data-testid="page-notes">
-          {pageNotes.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => openNote(n.id)}
-              className={`px-2 py-0.5 rounded border border-app-border-light hover:border-app-accent max-w-xs truncate tok-note tok-note-${noteColor(
-                n.color
-              )}`}
-              title={plainNote(n.text)}
-            >
-              {noteFirstLine(n.text, 40) || '(empty note)'}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

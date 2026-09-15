@@ -265,9 +265,8 @@ describe('ReadPanel', () => {
     box.setSelectionRange(0, 6);
     fireEvent.click(within(editor).getByLabelText('Bold'));
     await waitFor(() => expect((within(editor).getByLabelText('Note') as HTMLTextAreaElement).value).toBe('**a note**'));
-    // The preview shows what the markup means, not the markup.
-    expect(within(editor).getByTestId('note-preview')).toHaveTextContent('a note');
-    expect(within(editor).getByTestId('note-preview').querySelector('.font-bold')).not.toBeNull();
+    // The note is shown once, in the box being typed into (10 C).
+    expect(within(editor).queryByTestId('note-preview')).not.toBeInTheDocument();
 
     fireEvent.click(within(editor).getByTestId('note-color-blue'));
     fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
@@ -308,12 +307,16 @@ describe('ReadPanel', () => {
 
     fireEvent.click(within(section).getByTestId('annotations-toggle'));
     const list = await within(toc).findByTestId('annotations-list');
-    // Page label by C1, the words annotated, and the note's first line.
+    // The page by the C1 rule and the note's first line, and (10 C) not
+    // the Arabic it sits on, which is in the text.
     expect(list).toHaveTextContent('1:7');
     expect(list).toHaveTextContent('2:3');
     expect(list).toHaveTextContent('first note');
     expect(list).toHaveTextContent('second note');
     expect(list).not.toHaveTextContent('and more');
+    expect(list).not.toHaveTextContent('حدثنا ابو');
+    // And the strip that used to list them over the text is gone.
+    expect(screen.queryByTestId('page-notes')).not.toBeInTheDocument();
 
     // And it navigates.
     fireEvent.click(within(list).getByTestId('annotation-8'));
