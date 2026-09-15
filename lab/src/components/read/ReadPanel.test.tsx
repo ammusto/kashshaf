@@ -354,7 +354,7 @@ describe('ReadPanel', () => {
     expect(within(modal).getByTestId('citation-text')).toHaveTextContent('Al-tawahhum');
 
     // And it copies, plain.
-    const writeText = vi.fn(async () => {});
+    const writeText = vi.fn(async (_text: string) => {});
     Object.assign(navigator, { clipboard: { writeText } });
     fireEvent.click(within(modal).getByTestId('copy-citation'));
     await waitFor(() => expect(writeText).toHaveBeenCalled());

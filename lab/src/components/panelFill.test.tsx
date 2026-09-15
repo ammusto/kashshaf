@@ -20,6 +20,7 @@ const ROOT = join(__dirname);
 
 /** Panel name, file, and the test id its root element carries. */
 const PANELS: Array<[string, string, string]> = [
+  ['Metadata', 'workspace/MetadataPanel.tsx', 'metadata-panel'],
   ['Read', 'read/ReadPanel.tsx', 'read-panel'],
   ['Stats', 'stats/StatsPanel.tsx', 'stats-panel'],
   ['Isnād', 'isnad/IsnadWorkbench.tsx', 'isnad-panel'],

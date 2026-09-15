@@ -7,6 +7,7 @@ import { UnavailableNotice } from './components/ModeBadge';
 import { MenuBar } from './components/MenuBar';
 import { PanelBoundary } from './components/ui/PanelBoundary';
 import { WorkspaceView } from './components/workspace/WorkspaceView';
+import { MetadataPanel } from './components/workspace/MetadataPanel';
 import { ReadPanel } from './components/read/ReadPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StatsPanel, type HitRef } from './components/stats/StatsPanel';
@@ -26,6 +27,7 @@ import { PoetryPanel } from './components/poetry/PoetryPanel';
  */
 
 const PANELS = [
+  { id: 'metadata', label: 'Metadata' },
   { id: 'read', label: 'Read' },
   { id: 'stats', label: 'Stats' },
   { id: 'isnad', label: 'Isnād' },
@@ -233,6 +235,13 @@ export default function App() {
       );
     }
     switch (panel) {
+      case 'metadata':
+        // 9 D: the workspace browser's detail view, read-only.
+        return current ? (
+          <MetadataPanel book={current} authorName={authors.get(current.author_id ?? -1)} genreName={genres.get(current.genre_id ?? -1)} />
+        ) : (
+          <div className="flex-1 p-6 text-sm text-app-text-secondary">Open a text from the workspace first.</div>
+        );
       case 'read':
         return (
           <ReadPanel
