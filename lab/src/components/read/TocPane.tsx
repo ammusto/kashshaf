@@ -3,12 +3,15 @@ import type { TocNode } from '../../api/workspace';
 import type { Pages } from '../../api/pages';
 
 /**
- * The table of contents (spec 1.5 §B2, §C3).
+ * The table of contents (spec 1.5 §B2, §C3; Phase 8 B).
  *
  * Nested by the `parent` the heading markup carries, not flattened: a chapter
  * and the sections under it are one thing in the book and one thing here.
- * Clicking an entry jumps to its page; whichever entry the reader is inside
- * stays highlighted as they page through.
+ * Only the top level opens by default, because a long book's full tree is
+ * thousands of entries and none of them are the one being looked for.
+ *
+ * A row is two controls, not one. The triangle opens the subtree and the
+ * title jumps to the page; neither does the other's job.
  */
 
 export function TocPane({
@@ -30,16 +33,39 @@ export function TocPane({
   error: string | null;
 }) {
   const [filter, setFilter] = useState('');
+  const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set<number>());
   const currentRef = useRef<HTMLButtonElement | null>(null);
 
-  // Follow the reader: when the page moves into another section, bring that
-  // entry into view rather than leaving the pane where it was.
+  const ancestors = useMemo(() => ancestorsOf(tree), [tree]);
+
+  // Follow the reader into a closed subtree. A highlight on a hidden entry
+  // marks nothing, so paging into a section opens the path down to it.
+  useEffect(() => {
+    if (currentId == null) return;
+    const path = ancestors.get(currentId);
+    if (!path || path.length === 0) return;
+    setOpen((prev) => {
+      if (path.every((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      for (const id of path) next.add(id);
+      return next;
+    });
+  }, [currentId, ancestors]);
+
+  // And bring it into view once it is on screen.
   useEffect(() => {
     const el = currentRef.current;
     // jsdom has no scrollIntoView, and a pane that throws here would take the
     // reader down with it.
     if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
-  }, [currentId]);
+  }, [currentId, open]);
+
+  const toggle = (id: number) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   const needle = filter.trim();
   const shown = useMemo(() => (needle ? prune(tree, needle) : tree), [tree, needle]);
@@ -77,7 +103,19 @@ export function TocPane({
           <p className="px-3 py-2 text-xs text-app-text-secondary">This text has no headings in the corpus.</p>
         )}
         {shown.map((n) => (
-          <Entry key={`${n.id}-${n.part_index}-${n.page_id}`} node={n} pages={pages} currentId={currentId} onJump={onJump} currentRef={currentRef} />
+          <Entry
+            key={`${n.id}-${n.part_index}-${n.page_id}`}
+            node={n}
+            pages={pages}
+            currentId={currentId}
+            onJump={onJump}
+            currentRef={currentRef}
+            open={open}
+            toggle={toggle}
+            /* A filtered tree is already the answer; hiding half of it again
+               would mean opening the entries that the filter just found. */
+            forceOpen={needle !== ''}
+          />
         ))}
       </div>
     </aside>
@@ -90,37 +128,94 @@ function Entry({
   currentId,
   onJump,
   currentRef,
+  open,
+  toggle,
+  forceOpen,
 }: {
   node: TocNode;
   pages: Pages;
   currentId: number | null;
   onJump: (n: TocNode) => void;
   currentRef: React.MutableRefObject<HTMLButtonElement | null>;
+  open: ReadonlySet<number>;
+  toggle: (id: number) => void;
+  forceOpen: boolean;
 }) {
   const isCurrent = node.id === currentId;
+  const hasChildren = node.children.length > 0;
+  const expanded = forceOpen || open.has(node.id);
+
   return (
     <>
-      <button
-        ref={(el) => {
-          if (isCurrent) currentRef.current = el;
-        }}
-        onClick={() => onJump(node)}
-        aria-current={isCurrent ? 'true' : undefined}
-        className={`w-full flex items-baseline gap-2 px-3 py-1 text-right hover:bg-app-surface-variant ${
-          isCurrent ? 'bg-app-accent-light text-app-accent' : ''
-        }`}
+      <div
+        dir="rtl"
+        className={`flex items-baseline hover:bg-app-surface-variant ${isCurrent ? 'bg-app-accent-light text-app-accent' : ''}`}
         style={{ paddingRight: `${0.75 + node.depth * 0.75}rem` }}
       >
-        <span className="flex-1 min-w-0 font-arabic text-sm leading-snug truncate" dir="rtl" title={node.title}>
-          {node.title}
-        </span>
-        <span className="text-[11px] text-app-text-secondary tabular-nums shrink-0">{pages.label(node.part_index, node.page_id)}</span>
-      </button>
-      {node.children.map((c) => (
-        <Entry key={`${c.id}-${c.part_index}-${c.page_id}`} node={c} pages={pages} currentId={currentId} onJump={onJump} currentRef={currentRef} />
-      ))}
+        {hasChildren ? (
+          <button
+            onClick={() => toggle(node.id)}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.title}`}
+            data-testid={`toc-toggle-${node.id}`}
+            className="w-5 shrink-0 py-1 text-[10px] leading-none text-app-text-secondary hover:text-app-text-primary"
+          >
+            <span className={`inline-block transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} aria-hidden="true">
+              ▸
+            </span>
+          </button>
+        ) : (
+          /* Leaves get no triangle, but they keep the column, so titles at one
+             depth line up whether or not they have children. */
+          <span className="w-5 shrink-0" aria-hidden="true" />
+        )}
+
+        <button
+          ref={(el) => {
+            if (isCurrent) currentRef.current = el;
+          }}
+          onClick={() => onJump(node)}
+          aria-current={isCurrent ? 'true' : undefined}
+          className="flex-1 min-w-0 flex items-baseline gap-2 py-1 pl-3 text-right"
+        >
+          <span className="flex-1 min-w-0 font-arabic text-sm leading-snug truncate" title={node.title}>
+            {node.title}
+          </span>
+          <span dir="ltr" className="text-[11px] text-app-text-secondary tabular-nums shrink-0">
+            {pages.label(node.part_index, node.page_id)}
+          </span>
+        </button>
+      </div>
+
+      {expanded &&
+        node.children.map((c) => (
+          <Entry
+            key={`${c.id}-${c.part_index}-${c.page_id}`}
+            node={c}
+            pages={pages}
+            currentId={currentId}
+            onJump={onJump}
+            currentRef={currentRef}
+            open={open}
+            toggle={toggle}
+            forceOpen={forceOpen}
+          />
+        ))}
     </>
   );
+}
+
+/** Every entry's line of ancestors, so the pane can open the path to one. */
+export function ancestorsOf(tree: TocNode[]): Map<number, number[]> {
+  const out = new Map<number, number[]>();
+  const walk = (nodes: TocNode[], path: number[]) => {
+    for (const n of nodes) {
+      out.set(n.id, path);
+      walk(n.children, [...path, n.id]);
+    }
+  };
+  walk(tree, []);
+  return out;
 }
 
 /**

@@ -140,14 +140,27 @@ describe('ReadPanel', () => {
     await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:7'));
   });
 
-  it('nests the contents, jumps to an entry, and toggles with Ctrl+T', async () => {
+  it('opens subtrees on the triangle, jumps on the title, and toggles with Ctrl+T (8 B)', async () => {
     render(<ReadPanel book={book} />);
     const toc = await screen.findByTestId('toc-pane');
-    // The child entry is indented under its parent, and labelled by §C1.
-    const child = within(toc).getByText('باب التواضع');
-    expect(child).toBeInTheDocument();
+    // Only the top level to begin with.
+    expect(within(toc).getByText('كتاب الزهد')).toBeInTheDocument();
+    expect(within(toc).queryByText('باب التواضع')).not.toBeInTheDocument();
+
+    // The triangle opens the subtree and does not turn a page.
+    const triangle = within(toc).getByTestId('toc-toggle-1');
+    expect(triangle).toHaveAttribute('aria-expanded', 'false');
+    const pagesBefore = api.lab.getPage.mock.calls.length;
+    fireEvent.click(triangle);
+
+    const child = await within(toc).findByText('باب التواضع');
+    expect(api.lab.getPage.mock.calls.length).toBe(pagesBefore);
+    expect(triangle).toHaveAttribute('aria-expanded', 'true');
+    // A leaf gets no triangle, and the entry is labelled by §C1.
+    expect(within(toc).queryByTestId('toc-toggle-2')).not.toBeInTheDocument();
     expect(toc).toHaveTextContent('2:3');
 
+    // The title does turn the page.
     fireEvent.click(child);
     await waitFor(() => expect(api.lab.getPage).toHaveBeenCalledWith(527, 1, 1));
     // The entry the reader is now inside is the one marked.
@@ -155,6 +168,12 @@ describe('ReadPanel', () => {
 
     fireEvent.keyDown(window, { key: 't', ctrlKey: true });
     await waitFor(() => expect(screen.queryByTestId('toc-pane')).not.toBeInTheDocument());
+
+    // Re-opened from scratch, the path down to the section being read opens
+    // itself, or the highlight would mark a hidden entry.
+    fireEvent.keyDown(window, { key: 't', ctrlKey: true });
+    const again = await screen.findByTestId('toc-pane');
+    await waitFor(() => expect(within(again).getByText('باب التواضع')).toBeInTheDocument());
   });
 
   it('selects like ordinary text, and annotates what was selected (7 B)', async () => {
