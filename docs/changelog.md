@@ -3,6 +3,103 @@
 All notable changes to the Kashshaf desktop app, API server, and data pipeline, and to Kashshaf Lab. The two products are released separately: `## [X.Y.Z]` sections are Kashshaf, `## [lab X.Y.Z]` sections are Lab. Format loosely follows Keep a Changelog. Dates are build dates; nothing below has been tagged or published yet.
 
 ---
+## [lab 0.6.0] — 2026-09-14
+
+A week of use, and the answer was mostly that the app was arranged around
+its features rather than around a text. This release rearranges it around
+the text, and fixes what got in the way of reading one.
+
+**The workspace**
+
+- **Lab opens on a workspace, not on a panel.** The texts you are working
+  on are listed down the left, by name or by when you last opened one; the
+  whole corpus is searchable down the right, reproducing Kashshaf's Text
+  Selection view — title and author search that ignores how the hamza was
+  written, a death-year range, genre and corpus filters, sortable columns.
+  Clicking a text shows its metadata with one added button, **Add to
+  Workspace**.
+- **A text in the workspace has a folder on disk**, under
+  `KashshafLab/workspace/<book id>/`: its metadata, the isnāds you
+  confirmed and their transmitters, the ones you rejected, your reuse and
+  Qurʾān verdicts, your notes, and where you were reading. Every decision
+  writes the file it belongs to as you make it; **Ctrl+S** writes all of
+  them. Opening a text whose folder holds something the database does not
+  reads it back in, re-anchoring spans whose page has moved. Settings has
+  **Open workspace folder**. Removing a text deletes its folder after
+  asking, and leaves what you found in the database.
+- **Ctrl+W** returns to the workspace. Settings and About moved to a menu
+  bar at the top; the left rail is now only what you can do to the open
+  text: Read · Search · Stats · Isnād · Reuse · Qurʾān · Network · Poetry.
+
+**Reading**
+
+- **A Read panel.** The page you are on is named the way the book names it:
+  `24` in a one-part text, `1:24` in a multi-part one — the number printed
+  on the page and the part counted from one. Never `0:24`, never the
+  corpus's internal page id, never "page 20 of 405". The same rule is now
+  used by every table in the app.
+- Type a part and a page and press Go; ← and → turn the page (→ goes back,
+  as the text reads).
+- **A table of contents**, nested as the headings nest, on **Ctrl+T**.
+  Clicking an entry jumps there; the entry you are inside stays marked as
+  you read. It comes from a new `toc.db` shipped with the corpus: 2.4
+  million headings over 6,083 of the 7,199 books.
+- **Select a passage and annotate it.** Notes are kept with the text, drawn
+  where they sit in it, and written to the workspace folder.
+- **Search this text**: Kashshaf's boolean search narrowed to the open
+  book, with the same surface, lemma and root modes and the same clitic
+  handling, and results that lead back into the reader at the page.
+
+**Reuse**
+
+- The left half is now the reader itself, with its navigation and its
+  contents, so finding reuse is something you do while reading.
+- The results answer one question: who else has this passage. One row per
+  match — whose book and when they died, the words themselves with what
+  surrounds them, the page — ordered by how good the match is. Clicking a
+  row opens that page in the other book, with a way back; the aligned
+  side-by-side view is a toggle there.
+- The thresholds, the banality scale, the kinds of match and "exclude this
+  book" moved behind a gear, and **Analyse section** sits beside Analyse
+  whole text.
+
+**Statistics**
+
+- The Sections tab is gone. What it was for — looking at one section — every
+  tab now does, because Layer, Stop words and Section moved out of the tab
+  bar to sit with the statistic they qualify.
+- The concordance fills the pane and reads right to left: the words before
+  the hit to its right, the words after it to its left.
+- A root can be typed bare (`قول`) or in the form results show it
+  (`ق.#.ل`); both find the same word, in the concordance and in dispersion.
+- Arabic input boxes are set at a size the script can be read at.
+
+**Isnād, Qurʾān, network**
+
+- **A bare عن opens a chain.** A page that carries on from the chain before
+  it, with no reporting verb in front, was invisible to the extractor.
+- Extraction can be limited to **the whole text, one section, or a range of
+  printed pages**, and its results appear as pages finish rather than in
+  one lump at the end.
+- **Qurʾān quotations list in the order the book reads**, page by page.
+- **The network draws what you have confirmed**, and redraws as you confirm
+  more. A transmitter you have not linked to a person is a node of its own,
+  drawn hollow, labelled with the form as written; linking it merges it
+  into the person. One confirmed chain is enough. With none, the panel says
+  so and shows nothing else.
+
+**Long operations**
+
+- A run shows a bar with its progress, **Pause** and **Cancel**. The bar
+  goes when the run ends; a cancelled run leaves a line saying how far it
+  got, and everything it found is kept.
+- A run that would read more than 300,000 words or 2,000 pages asks first,
+  showing what it will read. Both numbers are in Settings.
+
+**Requires** corpus 4.2.0 for the table of contents. Lab opens an older
+corpus and works, and says where the contents would have been.
+
+---
 ## [lab 0.5.0] — 2026-09-14
 
 Two days of real use turned up six things that distorted results; they come

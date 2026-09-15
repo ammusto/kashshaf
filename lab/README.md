@@ -11,17 +11,21 @@ download code (`common/`) and the frontend utilities
 namespace (`lab-vX.Y.Z`), its own release workflow and its own update manifest.
 Releasing one does not release the other.
 
-**The specification is `dev-docs/KASHSHAF_LAB_SPEC.md`** (version 1.3). It is
+**The specification is `dev-docs/KASHSHAF_LAB_SPEC.md`** (version 1.5). It is
 the contract: what Lab must do, in what order, with which formulae and
 thresholds. That directory is gitignored, so the spec is not in the
 repository — this README refers to it by path. Read §1 for the phase order and
 §2 for the architecture before changing anything here.
 
-Current status: **Phase 2** — isnād extraction (§4.2), the annotation
-workbench and authority file (§6.2, §6.3, §7.4), the lexicon (§6.5) and the
-isnād/authority exports (§6.6), on top of Phase 1's statistics and Phase 0's
-scaffolding. Version `0.3.0`. Nothing has been tagged, built as an installer,
+Current status: **Phase 5** — the workspace, the Read panel, in-text search
+and the restructure the spec's §A–§K describe, on top of Phase 4's network
+and poetry, Phase 3's reuse and Qurʾān, Phase 2's isnāds and Phase 1's
+statistics. Version `0.6.0`. Nothing has been tagged, built as an installer,
 or published.
+
+**Lab wants corpus 4.2.0**, the first to ship `toc.db`. An older corpus opens
+and works; the table of contents, the section scopes and Analyse section then
+say which corpus they need instead of failing silently.
 
 ---
 
@@ -47,10 +51,18 @@ lab/
 │       ├── store.rs      analysis.db and its migrations (§6)
 │       └── bin/          lab-bench (§8 targets); lab-cli (reuse-eval, reuse-find, quran-scan)
 └── src/                  React 18 + TypeScript + Tailwind v4 frontend
+    ├── api/pages.ts      the page-label rule and the `Pages` lookup (1.5 §C1)
+    ├── components/workspace/ the startup view: the workspace list, the text
+    │                     browser, a text's metadata (1.5 §A1)
+    ├── components/read/  the Read panel and the table-of-contents pane (1.5 §C)
+    ├── components/search/ search within the open text (1.5 §D)
+    ├── components/ui/    the loading overlay, the run strip, the size warning,
+    │                     the scope picker (1.5 §F, §G)
     ├── components/stats/ the Stats panel (§7.3) and its virtualised table
     ├── components/isnad/ the isnād workbench (§7.4)
     ├── components/reuse/ the reuse panel (§7.5)
-    └── components/quran/ the Qurʾān panel (§7.6)
+    ├── components/quran/ the Qurʾān panel (§7.6)
+    └── components/network/ the transmission network (§7.7)
 ```
 
 Shared with Kashshaf, and changed with care because two apps depend on it:
@@ -64,7 +76,73 @@ Shared with Kashshaf, and changed with care because two apps depend on it:
 - `packages/kashshaf-shared/` (`@kashshaf/shared`) — the tokenizer, the
   sanitizer, citation formatting, `TokenPopup`, and the types the bridge
   returns.
-- `api/` — `GET /book/{id}/tokens` (§5.1) and `bulk_tokens` in `/health`.
+- `api/` — `GET /book/{id}/tokens` (§5.1), `GET /book/{id}/toc` (1.5 §B2),
+  `/authors`, `/genres`, and `bulk_tokens` / `toc` in `/health`.
+
+## The workspace
+
+Lab opens on the workspace (spec 1.5 §A1): the texts you are working on, and
+the corpus to find more in. A text is added to it deliberately, and adding one
+creates its folder under the workspace root:
+
+```
+<data dir>/KashshafLab/workspace/<book id>/
+├── metadata.json          the book's row, as the corpus has it
+├── isnads/
+│   ├── confirmed.csv      one row per confirmed chain
+│   ├── transmitters.csv   their transmitters, with the person each is linked to
+│   └── rejected.csv       what you rejected, so a re-run does not offer it again
+├── reuse/verdicts.csv     confirmed and rejected matches
+├── quran/verdicts.csv     confirmed and rejected quotations
+├── notes.json             your annotations, with the words they were anchored to
+└── state.json             where you were reading, and each panel's settings
+```
+
+Every action that changes one of these writes the database **and** rewrites
+the file, so the folder is never behind. `Ctrl+S` rewrites all of them.
+Opening a text whose folder holds rows the database does not reads them back
+in, re-anchoring each span by its stored snapshot when the page has moved
+(§6.1). Settings has **Open workspace folder**. Removing a text from the
+workspace deletes its folder after asking; the database keeps what you found,
+so adding the text again brings it back.
+
+`dirs::data_dir()` is `%APPDATA%` on Windows, `~/Library/Application Support`
+on macOS, `~/.local/share` on Linux.
+
+## How a page is named
+
+One rule, one helper, everywhere (spec 1.5 §C1): `lab/src/api/pages.ts`.
+
+- A single-part text prints the page number alone: `24`.
+- A multi-part text prints part and page: `1:24`, the part counted from one.
+- The number is the one **printed on the page**, not the corpus's `page_id`,
+  which is why the reader fetches a page list (`list_pages`) when it opens a
+  text: the printed numbers live in the index, not in `page_tokens`.
+- Never `0:24`, never `:24`, never "Page 20 of 405".
+
+Every table that shows a page goes through `Pages.label`: the concordance, the
+dispersion strip, the isnād list and its transmitter table, the reuse rows,
+the Qurʾān list, the poetry list, the network's transmitter rows, the table of
+contents, the search results and the reader's own locator.
+
+## The table of contents
+
+`toc.db` ships beside `corpus.db` from corpus 4.2.0. It is built by
+`kashshaf-data-clean/build_toc.py` from the `<title id=N parent=M>` markup the
+pipeline keeps in each page body, and holds one row per heading:
+
+```
+toc(book_id, id, parent, title, part_index, page_id, page_number)
+```
+
+The whole corpus is 2,384,556 headings over 6,083 of 7,199 books, 242 MB. The
+1,116 books without one have no heading markup in the source.
+
+`BookSource::toc` returns it as a tree; api mode fetches `GET /book/{id}/toc`.
+Lab's floor for it is `MIN_TOC_CORPUS_VERSION` in `lab/src-tauri/src/lib.rs`,
+separate from `MIN_CORPUS_VERSION` on purpose: a corpus without a table of
+contents is still fully readable, so Lab opens it and reports the absence
+through `lab_status` rather than refusing to start.
 
 ## Build and run
 

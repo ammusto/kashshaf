@@ -107,7 +107,7 @@ describe('QuranPanel', () => {
     // the token/agreement/cue values live in the detail view, not the table.
     expect(table).not.toHaveTextContent('0:169');
     expect(table).not.toHaveTextContent('قال تعالى');
-    expect(screen.getByRole('status')).toHaveTextContent('553/553 pages · 2 quotations found');
+    expect(screen.getByRole('status')).toHaveTextContent('2 quotations over 553 pages');
     fireEvent.click(screen.getByLabelText('Details of quotation 1'));
     const detail = await screen.findByTestId('quran-detail');
     expect(detail).toHaveTextContent('قال تعالى');

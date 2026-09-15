@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
 import { labApi, type Page, type PageRef } from '../../api/lab';
 import { usePages } from '../../api/pages';
+import { useHeavyLimits } from '../../api/settings';
+import { HeavyRunModal, IDLE_RUN, RunBar, isHeavy, type RunState } from '../ui/Running';
 import { DEFAULT_QURAN_PARAMS, fmtDuration, quranApi, type AyaContext, type QuranMatchRow, type QuranParams, type QuranProgress, type QuranRunSummary, type QuranStatus } from '../../api/reuse';
 import { Reader } from '../Reader';
 import { GearButton, SettingsModal } from '../SettingsModal';
@@ -36,6 +38,9 @@ export function QuranPanel({ book, onChanged }: Props) {
   const [rows, setRows] = useState<QuranMatchRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<QuranProgress | null>(null);
+  const [run$, setRun$] = useState<RunState>(IDLE_RUN);
+  const [pending, setPending] = useState<{ pages: number; tokens: number } | null>(null);
+  const { limits } = useHeavyLimits();
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'cued' | 'uncued' | 'confirmed' | 'open' | 'ambiguous'>('all');
@@ -129,21 +134,51 @@ export function QuranPanel({ book, onChanged }: Props) {
     };
   }, [detail]);
 
+  /** Ask before a run over the Settings thresholds (spec 1.5 F4). */
+  const propose = async () => {
+    if (bookId == null) return;
+    setError(null);
+    try {
+      const size = await labApi.runSize(bookId, null);
+      if (isHeavy(size, limits)) {
+        setPending({ pages: size.pages, tokens: size.tokens });
+        return;
+      }
+    } catch (e) {
+      // A size we cannot work out is not a reason to refuse the run.
+      console.error('run_size failed', e);
+    }
+    void run();
+  };
+
   const run = async () => {
     if (bookId == null) return;
+    setPending(null);
     setBusy(true);
+    setRun$({ running: true, paused: false, cancelledAt: null });
     setError(null);
     setMessage(null);
     setProgress(null);
     try {
       const s: QuranRunSummary = await quranApi.run(bookId, params);
-      setMessage(`${s.pages_done}/${s.pages} pages · ${s.hits} quotations found · ${s.kept_judged} judged rows kept · ${fmtDuration(s.elapsed_ms)}${s.cancelled ? ' · cancelled, completed pages kept' : ''}`);
+      setMessage(`${s.hits} quotations over ${s.pages_done.toLocaleString()} pages · ${s.kept_judged} judged rows kept · ${fmtDuration(s.elapsed_ms)}`);
+      setRun$(
+        s.cancelled
+          ? { running: false, paused: false, cancelledAt: `${s.pages_done.toLocaleString()} of ${s.pages.toLocaleString()} pages, ${s.hits} quotations kept` }
+          : IDLE_RUN
+      );
       await reload();
     } catch (e) {
       setError(String(e));
+      setRun$(IDLE_RUN);
     } finally {
       setBusy(false);
     }
+  };
+
+  const pause = (paused: boolean) => {
+    setRun$((r) => ({ ...r, paused }));
+    void labApi.statsPause(paused);
   };
 
   const applySettings = async () => {
@@ -299,15 +334,10 @@ export function QuranPanel({ book, onChanged }: Props) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="px-3 py-2 border-b border-app-border-light bg-app-surface flex items-center gap-2 flex-wrap text-xs">
-        <button onClick={run} disabled={busy || !status?.available} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40" title="Whole-book run (§4.4)">
+        <button onClick={() => void propose()} disabled={busy || !status?.available} className="px-3 py-1 text-sm bg-app-accent text-white rounded disabled:opacity-40" title="Whole-book run (§4.4)">
           {busy ? 'Detecting…' : 'Detect quotations'}
         </button>
         <GearButton onClick={() => { setDraft(params); setSettingsOpen(true); }} label="Detection settings" />
-        {busy && (
-          <button onClick={() => void labApi.statsCancel()} className="px-2 py-1 border border-app-border-medium rounded">
-            Cancel
-          </button>
-        )}
         <select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)} className="border border-app-border-medium rounded px-1" aria-label="Filter">
           <option value="all">all</option>
           <option value="cued">cued</option>
@@ -352,11 +382,25 @@ export function QuranPanel({ book, onChanged }: Props) {
         <p className="text-xs text-app-text-tertiary">Defaults are the spec's (§4.4). Applied to the next run; kept between sessions.</p>
       </SettingsModal>
 
-      {progress && busy && (
-        <div className="px-3 py-1 text-xs bg-app-surface-variant border-b border-app-border-light" role="status">
-          page {progress.done}/{progress.total} · {progress.found} quotations{progress.estimate_ms != null && ` · about ${fmtDuration(progress.estimate_ms)}`}
-        </div>
-      )}
+      <RunBar
+        run={run$}
+        done={progress?.done ?? 0}
+        total={progress?.total ?? 0}
+        found={progress?.found}
+        foundLabel="quotations"
+        estimateMs={progress?.estimate_ms ?? null}
+        onPause={pause}
+        onCancel={() => void labApi.statsCancel()}
+      />
+
+      <HeavyRunModal
+        open={!!pending}
+        what="Detect Qurʾān quotations"
+        pages={pending?.pages ?? 0}
+        tokens={pending?.tokens ?? 0}
+        onContinue={() => void run()}
+        onCancel={() => setPending(null)}
+      />
       {(error || message) && (
         <div className={`px-3 py-1 text-xs border-b border-app-border-light ${error ? 'text-app-error' : 'text-app-text-secondary'}`} role={error ? 'alert' : 'status'}>
           {error ?? message}
