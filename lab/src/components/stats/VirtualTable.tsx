@@ -43,6 +43,7 @@ export function VirtualTable<T>({
   dir,
   emptyText = 'Nothing to show.',
   testId,
+  centerHeaders = false,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -60,6 +61,8 @@ export function VirtualTable<T>({
    */
   dir?: 'ltr' | 'rtl';
   emptyText?: string;
+  /** Centre the column headings over their columns (10 F). */
+  centerHeaders?: boolean;
   testId?: string;
 }) {
   const initial = columns.find((c) => c.defaultSort);
@@ -136,7 +139,9 @@ export function VirtualTable<T>({
             key={c.key}
             role="columnheader"
             onClick={() => toggle(c.key)}
-            className={`px-2 py-1.5 truncate hover:bg-app-border-light ${c.align === 'right' ? 'text-right' : 'text-left'}`}
+            className={`px-2 py-1.5 truncate hover:bg-app-border-light ${
+              centerHeaders ? 'text-center' : c.align === 'right' ? 'text-right' : 'text-left'
+            }`}
             dir={dir}
             title={`Sort by ${c.label}`}
           >

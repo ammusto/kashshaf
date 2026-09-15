@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { BookMetadata } from '@kashshaf/shared';
 
 /**
@@ -110,6 +110,62 @@ describe('StatsPanel', () => {
     await waitFor(() =>
       expect(api.statsFrequencies).toHaveBeenLastCalledWith({ book_id: 42, layer: 'root', stop: false, section: 2 })
     );
+  });
+
+  it('lets the context hug the hit, and centres the headings (10 F)', async () => {
+    // jsdom applies no stylesheet of its own, so the three alignment rules
+    // are declared here and the assertion is on the computed alignment, not
+    // on a class name.
+    const style = document.createElement('style');
+    style.textContent = '.text-left{text-align:left}.text-right{text-align:right}.text-center{text-align:center}';
+    document.head.appendChild(style);
+
+    api.statsConcordance.mockResolvedValue({
+      total: 1,
+      offset: 0,
+      lines: [
+        {
+          page: 1,
+          part_index: 0,
+          page_id: 2,
+          part_label: 'ج١',
+          page_number: '2',
+          tok_start: 5,
+          tok_end: 6,
+          global: 35,
+          left: ['قال', 'الرجل'],
+          node: ['الله'],
+          right: ['في', 'الكتاب'],
+        },
+      ],
+    });
+    render(<StatsPanel book={book} onShowHit={vi.fn()} />);
+    await screen.findByTestId('stats-summary');
+    fireEvent.click(screen.getByRole('tab', { name: 'Concordance' }));
+    fireEvent.change(screen.getByLabelText('Query'), { target: { value: 'الله' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    const table = await screen.findByTestId('conc-table');
+    await waitFor(() => expect(within(table).getAllByRole('cell').length).toBeGreaterThan(0));
+    const cells = within(table).getAllByRole('cell');
+
+    // The row is laid out right to left, so the first cell is the rightmost
+    // one: the words before the hit.
+    expect(within(table).getAllByRole('row')[1]).toHaveAttribute('dir', 'rtl');
+    expect(cells[0]).toHaveTextContent('قال الرجل');
+    expect(cells[1]).toHaveTextContent('الله');
+    expect(cells[2]).toHaveTextContent('في الكتاب');
+
+    // Preceding sits right of the hit, so its words run to its left edge;
+    // following sits left of it, so they run to its right edge. Either way
+    // the context meets the hit instead of drifting to the outside.
+    expect(getComputedStyle(cells[0]).textAlign).toBe('left');
+    expect(getComputedStyle(cells[2]).textAlign).toBe('right');
+
+    for (const h of within(table).getAllByRole('columnheader')) {
+      expect(getComputedStyle(h).textAlign).toBe('center');
+    }
+    style.remove();
   });
 
   it('runs a concordance and clicks a hit through with its coordinates', async () => {

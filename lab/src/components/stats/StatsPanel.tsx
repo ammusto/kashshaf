@@ -452,7 +452,9 @@ function ConcordanceTab({
       rtl: true,
       render: (l) => l.left.join(' '),
       width: 'minmax(0, 1fr)',
-      align: 'right',
+      // The row reads right to left, so this column sits to the *right* of
+      // the hit and its words must run to its left edge to meet it (10 F).
+      align: 'left',
     },
     {
       key: 'node',
@@ -469,7 +471,9 @@ function ConcordanceTab({
       rtl: true,
       render: (l) => l.right.join(' '),
       width: 'minmax(0, 1fr)',
-      align: 'left',
+      // And this one sits to the left of the hit, so its words run to its
+      // right edge.
+      align: 'right',
     },
     { key: 'loc', label: 'Page', sortValue: (l) => l.global, render: (l) => pages.label(l.part_index, l.page_id), width: '90px', align: 'right' },
   ];
@@ -544,6 +548,7 @@ function ConcordanceTab({
           onRowClick={(l) => onShowHit({ part_index: l.part_index, page_id: l.page_id, tok_start: l.tok_start, tok_end: l.tok_end })}
           height="fill"
           dir="rtl"
+          centerHeaders
           emptyText={query.trim() ? (total === 0 ? 'No hits.' : 'Press Search.') : 'Type a query.'}
           testId="conc-table"
         />
