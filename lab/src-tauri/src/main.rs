@@ -52,15 +52,20 @@ fn main() {
             commands::corpus::start_corpus_download,
             commands::corpus::cancel_corpus_download,
             commands::corpus::open_lab_directory,
+            // Search within the text (spec 1.5 D)
+            commands::search::search_book,
             // Book browser and reader
             commands::books::list_books,
             commands::books::get_book,
             commands::books::list_page_refs,
+            commands::books::list_pages,
+            commands::books::run_size,
             commands::books::get_page,
             commands::books::open_book,
             // Stats (§4.1, §7.3)
             commands::stats::stats_load_book,
             commands::stats::stats_cancel,
+            commands::stats::stats_pause,
             commands::stats::stats_page_labels,
             commands::stats::stats_frequencies,
             commands::stats::stats_concordance,
@@ -114,6 +119,7 @@ fn main() {
             // Network (§4.5, §7.7)
             commands::network::network_graph,
             commands::network::network_ego,
+            commands::network::network_node_rows,
             commands::network::network_sources,
             commands::network::network_export,
             // Poetry (§4.6, experimental)

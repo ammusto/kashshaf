@@ -130,6 +130,11 @@ pub fn cancel_corpus_download() -> Result<(), LabError> {
 #[tauri::command]
 pub fn open_lab_directory() -> Result<(), LabError> {
     let dir = kashshaf_common::lab_data_dir().map_err(|e| LabError::Other(e.to_string()))?;
+    reveal(&dir)
+}
+
+/// Show a directory in the platform's file manager.
+pub fn reveal(dir: &std::path::Path) -> Result<(), LabError> {
     #[cfg(target_os = "windows")]
     let status = std::process::Command::new("explorer").arg(&dir).status();
     #[cfg(target_os = "macos")]

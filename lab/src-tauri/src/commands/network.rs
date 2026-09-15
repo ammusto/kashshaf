@@ -4,7 +4,8 @@
 //! with a `person_id` in `isnad` rows with `status = 'confirmed'` for one
 //! book; names from `person`. Exports go to `<lab dir>/exports/`.
 
-use crate::analysis::network::{self, Graph, Link, Source};
+use crate::analysis::network::{self, Graph, Link, NodeId, Source};
+use crate::analysis::names;
 use crate::commands::isnad::{db, dberr};
 use crate::error::LabError;
 use crate::state::{handles, Handles, ManagedLabState};
@@ -16,17 +17,26 @@ fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, LabError> + Send + 
     async move { tokio::task::spawn_blocking(f).await.map_err(|e| LabError::Other(format!("task failed: {}", e)))? }
 }
 
-/// Linked transmitters of confirmed isnāds, and the names of every person
-/// they point at.
+/// Every transmitter of every confirmed isnād, linked or not (spec 1.5
+/// J1, J2), and the names of the persons they point at.
 fn links(conn: &Connection, book_id: u64) -> Result<(Vec<Link>, HashMap<i64, String>), LabError> {
     let mut stmt = conn
         .prepare(
-            "SELECT t.isnad_id, t.position, t.person_id FROM transmitter t JOIN isnad i ON i.id = t.isnad_id \
-             WHERE i.book_id = ?1 AND i.status = 'confirmed' AND t.person_id IS NOT NULL ORDER BY t.isnad_id, t.position",
+            "SELECT t.isnad_id, t.position, t.person_id, t.raw FROM transmitter t JOIN isnad i ON i.id = t.isnad_id \
+             WHERE i.book_id = ?1 AND i.status = 'confirmed' ORDER BY t.isnad_id, t.position",
         )
         .map_err(dberr)?;
     let links = stmt
-        .query_map(params![book_id as i64], |r| Ok(Link { isnad_id: r.get(0)?, position: r.get::<_, i64>(1)? as usize, person_id: r.get(2)? }))
+        .query_map(params![book_id as i64], |r| {
+            let raw: String = r.get(3)?;
+            Ok(Link {
+                isnad_id: r.get(0)?,
+                position: r.get::<_, i64>(1)? as usize,
+                person_id: r.get(2)?,
+                form_norm: names::form_norm(&raw),
+                raw,
+            })
+        })
         .map_err(dberr)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(dberr)?;
@@ -59,12 +69,30 @@ pub async fn network_graph(state: State<'_, ManagedLabState>, book_id: u64, min_
 
 /// One person's ego graph, at the given minimum edge weight, uncapped.
 #[tauri::command]
-pub async fn network_ego(state: State<'_, ManagedLabState>, book_id: u64, person_id: i64, min_weight: Option<usize>) -> Result<Graph, LabError> {
+pub async fn network_ego(state: State<'_, ManagedLabState>, book_id: u64, node: NodeId, min_weight: Option<usize>) -> Result<Graph, LabError> {
     let h = handles(&state)?;
     blocking(move || {
         let (g, _, _) = whole(&h, book_id)?;
         let f = network::filter(&g, min_weight.unwrap_or(1), usize::MAX);
-        Ok(network::ego(&f, person_id))
+        Ok(network::ego(&f, &node))
+    })
+    .await
+}
+
+/// The transmitter rows behind one node (spec 1.5 J2): a person's, or every
+/// occurrence of a bare name form.
+#[tauri::command]
+pub async fn network_node_rows(state: State<'_, ManagedLabState>, book_id: u64, node: NodeId) -> Result<Vec<crate::commands::isnad::TransmitterListRow>, LabError> {
+    let h = handles(&state)?;
+    blocking(move || {
+        let rows = crate::commands::isnad::transmitters_of(&h, book_id, true)?;
+        Ok(rows
+            .into_iter()
+            .filter(|r| match &node {
+                NodeId::Person(p) => r.row.person_id == Some(*p),
+                NodeId::Form(f) => r.row.person_id.is_none() && &r.row.form_norm == f,
+            })
+            .collect())
     })
     .await
 }

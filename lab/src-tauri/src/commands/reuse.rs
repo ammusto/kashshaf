@@ -381,7 +381,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             emit(&window, "align", d, 0, 0, started);
             cache.get(r)
         };
-        let cancel = || h.cancel.load(Ordering::SeqCst);
+        let cancel = || h.should_stop();
         emit(&window, "candidates", 0, 0, 0, started);
         let run = reuse::passage(
             h.source.as_ref(),
@@ -579,14 +579,23 @@ fn book_windows(book: &crate::state::LoadedBook, p: &Params) -> Vec<(usize, std:
 
 /// A 20-window trial for the time estimate shown before a book run.
 #[tauri::command]
-pub async fn reuse_estimate(window: Window, state: State<'_, ManagedLabState>, book_id: u64, params: Option<Params>) -> Result<Estimate, LabError> {
+pub async fn reuse_estimate(
+    window: Window,
+    state: State<'_, ManagedLabState>,
+    book_id: u64,
+    params: Option<Params>,
+    span: Option<crate::commands::books::PageSpan>,
+) -> Result<Estimate, LabError> {
     let h = handles(&state)?;
     blocking(move || {
         require_local(&h)?;
         let conn = db(&h)?;
         let s = setup(&h, &conn, params, Some(&window))?;
         let book = crate::commands::stats::load_book(&h, Some(&window), book_id)?;
-        let windows = book_windows(&book, &s.params);
+        let windows: Vec<(usize, std::ops::Range<usize>)> = book_windows(&book, &s.params)
+            .into_iter()
+            .filter(|(pi, _)| span.map(|sp| sp.contains(book.pages[*pi].part_index, book.pages[*pi].page_id)).unwrap_or(true))
+            .collect();
         // Sample from the middle of the book: front matter is atypical.
         let n = windows.len();
         let sample: Vec<&(usize, std::ops::Range<usize>)> = if n <= 20 { windows.iter().collect() } else { windows.iter().skip(n / 2 - 10).take(20).collect() };
@@ -646,7 +655,13 @@ pub struct BookRunSummary {
 /// procedure, overlapping matches merged per target, aggregated per target
 /// book. Streams progress per page; cancel keeps completed pages.
 #[tauri::command]
-pub async fn reuse_book(window: Window, state: State<'_, ManagedLabState>, book_id: u64, params: Option<Params>) -> Result<BookRunSummary, LabError> {
+pub async fn reuse_book(
+    window: Window,
+    state: State<'_, ManagedLabState>,
+    book_id: u64,
+    params: Option<Params>,
+    span: Option<crate::commands::books::PageSpan>,
+) -> Result<BookRunSummary, LabError> {
     let h = handles(&state)?;
     blocking(move || {
         require_local(&h)?;
@@ -654,7 +669,10 @@ pub async fn reuse_book(window: Window, state: State<'_, ManagedLabState>, book_
         let conn = db(&h)?;
         let s = setup(&h, &conn, params, Some(&window))?;
         let book = crate::commands::stats::load_book(&h, Some(&window), book_id)?;
-        let windows = book_windows(&book, &s.params);
+        let windows: Vec<(usize, std::ops::Range<usize>)> = book_windows(&book, &s.params)
+            .into_iter()
+            .filter(|(pi, _)| span.map(|sp| sp.contains(book.pages[*pi].part_index, book.pages[*pi].page_id)).unwrap_or(true))
+            .collect();
         h.cancel.store(false, Ordering::SeqCst);
         let run_id = insert_run(&conn, h.source.corpus_version(), book_id, "book", &s.params)?;
         let cache = PageCache::new(h.source.as_ref());
@@ -668,23 +686,29 @@ pub async fn reuse_book(window: Window, state: State<'_, ManagedLabState>, book_
         let mut cancelled = false;
         let mut wi = 0usize;
         for (pi, page) in book.pages.iter().enumerate() {
-            if h.cancel.load(Ordering::SeqCst) {
+            if !windows.iter().any(|(w, _)| *w == pi) {
+                continue;
+            }
+            if h.should_stop() {
                 cancelled = true;
                 break;
             }
             let zones = zones_for(&conn, &s, page)?;
             let mut page_matches: Vec<(PageRef, Match)> = Vec::new();
             let qref = PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id };
+            while wi < windows.len() && windows[wi].0 < pi {
+                wi += 1;
+            }
             while wi < windows.len() && windows[wi].0 == pi {
                 let w = windows[wi].1.clone();
-                let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w, &zones, Some(book_id), &count, &load, &|| h.cancel.load(Ordering::SeqCst))
+                let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w, &zones, Some(book_id), &count, &load, &|| h.should_stop())
                     .map_err(|e| LabError::Source(e.to_string()))?;
                 for m in run.matches {
                     page_matches.push((qref.clone(), m));
                 }
                 wi += 1;
                 windows_done += 1;
-                if h.cancel.load(Ordering::SeqCst) {
+                if h.should_stop() {
                     cancelled = true;
                     break;
                 }

@@ -10,5 +10,7 @@ pub mod isnad;
 pub mod network;
 pub mod poetry;
 pub mod quran;
+pub mod search;
 pub mod reuse;
 pub mod stats;
+pub mod workspace;

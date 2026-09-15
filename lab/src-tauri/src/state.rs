@@ -85,6 +85,9 @@ pub struct LabState {
     /// Set by the Cancel button; polled by every batch operation (ground
     /// rule 6). Cleared when an operation starts.
     pub cancel: Arc<AtomicBool>,
+    /// Set by the Pause button (spec 1.5 F3). A paused run holds its place
+    /// and keeps everything it has done; Resume clears it.
+    pub paused: Arc<AtomicBool>,
     /// The Qurʾān and its index (§4.4).
     pub quran: QuranCell,
 }
@@ -114,6 +117,7 @@ impl LabState {
             store,
             loaded: Arc::new(Mutex::new(None)),
             cancel: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
             quran: Arc::new(OnceLock::new()),
         }
     }
@@ -142,8 +146,22 @@ pub struct Handles {
     pub source: Arc<dyn BookSource>,
     pub loaded: Arc<Mutex<Option<Arc<LoadedBook>>>>,
     pub cancel: Arc<AtomicBool>,
+    pub paused: Arc<AtomicBool>,
     pub store: Option<Arc<Store>>,
     pub quran: QuranCell,
+}
+
+impl Handles {
+    /// Block while the run is paused (spec 1.5 F3), then say whether it
+    /// should stop. Every streaming loop calls this once per page: a paused
+    /// run costs nothing, and Cancel still ends it while paused.
+    pub fn should_stop(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        while self.paused.load(Ordering::SeqCst) && !self.cancel.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+        self.cancel.load(Ordering::SeqCst)
+    }
 }
 
 pub fn handles(state: &ManagedLabState) -> Result<Handles, LabError> {
@@ -152,6 +170,7 @@ pub fn handles(state: &ManagedLabState) -> Result<Handles, LabError> {
         source: guard.require_source()?,
         loaded: Arc::clone(&guard.loaded),
         cancel: Arc::clone(&guard.cancel),
+        paused: Arc::clone(&guard.paused),
         store: guard.store.clone(),
         quran: Arc::clone(&guard.quran),
     })

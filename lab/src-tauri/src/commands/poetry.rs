@@ -56,7 +56,7 @@ pub async fn poetry_scan(window: Window, state: State<'_, ManagedLabState>, book
         let mut pages_done = 0usize;
         let mut cancelled = false;
         for (i, page) in book.pages.iter().enumerate() {
-            if h.cancel.load(Ordering::SeqCst) {
+            if h.should_stop() {
                 cancelled = true;
                 break;
             }

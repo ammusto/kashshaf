@@ -1257,6 +1257,13 @@ mod tests {
         fn freq_table(&self, _layer: FreqLayer) -> Result<Arc<FreqTable>> {
             unimplemented!()
         }
+        fn page_entries(&self, _id: u64) -> anyhow::Result<Vec<crate::source::PageEntry>> { Ok(vec![]) }
+        fn search_book(&self, _b: u64, _a: &[crate::commands::search::Term], _o: &[crate::commands::search::Term], _l: usize, _f: usize) -> anyhow::Result<crate::commands::search::SearchResults> {
+            Ok(crate::commands::search::SearchResults { hits: vec![], total: 0, elapsed_ms: 0, capped: false })
+        }
+        fn toc(&self, _id: u64) -> anyhow::Result<Vec<crate::source::TocNode>> { Ok(vec![]) }
+        fn toc_rows(&self, _id: u64) -> anyhow::Result<Vec<crate::source::TocRow>> { Ok(vec![]) }
+        fn toc_status(&self) -> anyhow::Result<()> { Ok(()) }
         fn find_pages(&self, q: &CandidateQuery) -> Result<Hits> {
             self.calls.lock().unwrap().push(q.terms.clone());
             let pages: Vec<PageRef> = self

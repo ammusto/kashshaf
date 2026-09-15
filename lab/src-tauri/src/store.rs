@@ -9,6 +9,7 @@
 //!   run and re-synced on every start without touching user rows or
 //!   user-disabled shipped rows.
 //! - Migration 3 (Phase 3): text reuse and Qurʾān quotation tables (§6.4).
+//! - Migration 5 (Phase 5, spec 1.5): `note` — the reader's annotations.
 //! - Migration 4 (Phase 4, amendment 1.4): spans that cross a page break —
 //!   end-page columns on `isnad` (chain and matn), a page and a place on
 //!   `transmitter`; `ayas_json` on `quran_match` for ambiguous hits.
@@ -181,6 +182,24 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE transmitter ADD COLUMN page_id INTEGER;
         ALTER TABLE transmitter ADD COLUMN place TEXT;
         ALTER TABLE quran_match ADD COLUMN ayas_json TEXT;
+    "#,
+    },
+    Migration {
+        version: 5,
+        name: "note",
+        // Annotations on a token range (spec 1.5 C4). Anchored like every
+        // other span so re-anchoring (6.1) moves them with the corpus, and
+        // mirrored into the workspace's notes.json.
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS note (
+            id INTEGER PRIMARY KEY,
+            @ANCHOR@
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            reanchored_from_version TEXT
+        );
+        CREATE INDEX IF NOT EXISTS note_page ON note(book_id, part_index, page_id);
     "#,
     },
 ];
@@ -435,6 +454,44 @@ mod tests {
         assert_eq!(end, None, "an old row's end is its start page");
         assert_eq!(place, None);
         conn.execute("UPDATE isnad SET end_part_index = 0, end_page_id = 2 WHERE id = 1", []).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Spec 1.5 C4: notes are anchored like every other span, and a
+    /// database from Phase 4 gains the table with its rows intact.
+    #[test]
+    fn a_phase_4_database_gains_the_note_table() {
+        let dir = temp("from-v4");
+        let path = dir.join("analysis.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..4] {
+                conn.execute_batch(&migration_sql(m)).unwrap();
+            }
+            conn.execute("INSERT INTO lab_info (key, value) VALUES ('schema_version', '4')", []).unwrap();
+            conn.execute(
+                "INSERT INTO isnad (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
+                 kind, links, confidence, confidence_json, status, created_at, updated_at, extractor_version, lexicon_hash) \
+                 VALUES ('4.1.0', 1, 0, 1, 0, 5, 'x', 'h', 'isnad', 2, 0.5, '{}', 'confirmed', 't', 't', 'v', 'l')",
+                [],
+            )
+            .unwrap();
+            assert!(!tables(&conn).contains(&"note".to_string()));
+        }
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.schema_version().unwrap(), target_schema_version());
+        let conn = store.connect().unwrap();
+        assert!(tables(&conn).contains(&"note".to_string()));
+        let status: String = conn.query_row("SELECT status FROM isnad WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "confirmed", "the Phase 4 isnad survives");
+        conn.execute(
+            "INSERT INTO note (corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
+             text, created_at, updated_at) VALUES ('4.1.0', 1, 0, 1, 3, 7, 's', 'h', 'a note', 't', 't')",
+            [],
+        )
+        .unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM note WHERE book_id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -314,6 +314,10 @@ struct RunProgress {
     total: u64,
     found: u64,
     estimate_ms: Option<u64>,
+    /// The candidates this page produced, so the workbench fills as the run
+    /// goes and the user can start confirming (spec 1.5 G).
+    #[serde(default)]
+    rows: Vec<IsnadRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -334,7 +338,13 @@ pub struct RunSummary {
 /// rejected and orphaned rows — the user's decisions — are kept, and a new
 /// candidate overlapping a kept row is not inserted.
 #[tauri::command]
-pub async fn isnad_run(window: Window, state: State<'_, ManagedLabState>, book_id: u64, params: Option<Params>) -> Result<RunSummary, LabError> {
+pub async fn isnad_run(
+    window: Window,
+    state: State<'_, ManagedLabState>,
+    book_id: u64,
+    params: Option<Params>,
+    span: Option<crate::commands::books::PageSpan>,
+) -> Result<RunSummary, LabError> {
     let h = handles(&state)?;
     tokio::task::spawn_blocking(move || {
         let book = crate::commands::stats::load_book(&h, Some(&window), book_id)?;
@@ -345,7 +355,30 @@ pub async fn isnad_run(window: Window, state: State<'_, ManagedLabState>, book_i
         h.cancel.store(false, Ordering::SeqCst);
         let started = std::time::Instant::now();
 
-        conn.execute("DELETE FROM isnad WHERE book_id = ?1 AND status = 'candidate'", [book_id as i64]).map_err(dberr)?;
+        // A scoped run replaces only the candidates inside its scope, so a
+        // second pass over one section leaves the rest of the book alone.
+        match span {
+            None => {
+                conn.execute("DELETE FROM isnad WHERE book_id = ?1 AND status = 'candidate'", [book_id as i64]).map_err(dberr)?;
+            }
+            Some(sp) => {
+                let mut stmt = conn
+                    .prepare("SELECT id, part_index, page_id FROM isnad WHERE book_id = ?1 AND status = 'candidate'")
+                    .map_err(dberr)?;
+                let doomed: Vec<i64> = stmt
+                    .query_map([book_id as i64], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as u32, r.get::<_, i64>(2)? as u64)))
+                    .map_err(dberr)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(dberr)?
+                    .into_iter()
+                    .filter(|(_, p, g)| sp.contains(*p, *g))
+                    .map(|(id, _, _)| id)
+                    .collect();
+                for id in doomed {
+                    conn.execute("DELETE FROM isnad WHERE id = ?1", [id]).map_err(dberr)?;
+                }
+            }
+        }
         let kept: Vec<(i64, i64, i64, i64)> = {
             let mut stmt = conn.prepare("SELECT part_index, page_id, tok_start, tok_end FROM isnad WHERE book_id = ?1").map_err(dberr)?;
             let v = stmt.query_map([book_id as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(dberr)?.collect::<Result<Vec<_>, _>>().map_err(dberr)?;
@@ -353,16 +386,23 @@ pub async fn isnad_run(window: Window, state: State<'_, ManagedLabState>, book_i
         };
         let kept_count = kept.len();
 
-        let total = book.pages.len() as u64;
+        // Only the pages in scope are scanned; the window still reaches past
+        // the last of them, so a chain that starts there keeps its matn.
+        let in_scope: Vec<usize> = (0..book.pages.len())
+            .filter(|&i| span.map(|s| s.contains(book.pages[i].part_index, book.pages[i].page_id)).unwrap_or(true))
+            .collect();
+        let total = in_scope.len() as u64;
         let mut found = 0u64;
         let no_overrides = HashMap::new();
-        for (i, page) in book.pages.iter().enumerate() {
-            if h.cancel.load(Ordering::SeqCst) {
+        for (n, &i) in in_scope.iter().enumerate() {
+            let page = &book.pages[i];
+            if h.should_stop() {
                 break;
             }
             // The book as one stream (amendment 1.4): this page plus the
             // pages a chain or matn may run on to; only chains that start
             // here are kept, so nothing is emitted twice.
+            let mut new_ids: Vec<i64> = Vec::new();
             let win_pages: Vec<&Page> = book.pages[i..(i + 1 + MATN_MAX_PAGES).min(book.pages.len())].iter().collect();
             let cands = isnad::extract_stream(&window_refs(&win_pages), &lex, &params, &no_overrides);
             conn.execute_batch("BEGIN").map_err(dberr)?;
@@ -373,20 +413,30 @@ pub async fn isnad_run(window: Window, state: State<'_, ManagedLabState>, book_i
                 if overlaps_kept {
                     continue;
                 }
-                insert_candidate(&conn, &corpus_version, &win_pages, c, &lex.hash, &no_overrides)?;
+                let id = insert_candidate(&conn, &corpus_version, &win_pages, c, &lex.hash, &no_overrides)?;
+                new_ids.push(id);
                 found += 1;
             }
             conn.execute_batch("COMMIT").map_err(dberr)?;
             let elapsed = started.elapsed().as_millis() as u64;
-            let done = i as u64 + 1;
+            let done = n as u64 + 1;
+            // The rows this page produced travel with the progress event, so
+            // the workbench fills as the run goes (spec 1.5 G).
+            let rows: Vec<IsnadRow> = new_ids.iter().filter_map(|id| read_isnad(&conn, *id).ok()).collect();
             let _ = window.emit(
                 "isnad-progress",
-                RunProgress { done, total, found, estimate_ms: if done >= 20 { Some(elapsed * total / done) } else { None } },
+                RunProgress {
+                    done,
+                    total,
+                    found,
+                    estimate_ms: if done >= 20 { Some(elapsed * total / done) } else { None },
+                    rows,
+                },
             );
         }
         Ok(RunSummary {
             book_id,
-            pages: book.pages.len(),
+            pages: total as usize,
             candidates: found as usize,
             kept_confirmed: kept_count,
             elapsed_ms: started.elapsed().as_millis() as u64,
@@ -938,10 +988,26 @@ fn manual_candidate(page: &Page, lex: &lexicon::Lexicon, start: usize, end: usiz
     }
 }
 
+/// Which book a workspace mirror should rewrite after an op: the one the
+/// workbench has open. A person-level edit can touch other books' exports
+/// too; those are rewritten the next time each is opened or saved.
+fn loaded_book(h: &Handles) -> Option<u64> {
+    h.loaded.lock().ok().and_then(|g| g.as_ref().map(|b| b.id))
+}
+
 #[tauri::command]
 pub async fn isnad_apply(state: State<'_, ManagedLabState>, op: Op) -> Result<Applied, LabError> {
     let h = handles(&state)?;
-    tokio::task::spawn_blocking(move || apply(&db(&h)?, &h, &op)).await.map_err(|e| LabError::Other(format!("task failed: {}", e)))?
+    tokio::task::spawn_blocking(move || {
+        let applied = apply(&db(&h)?, &h, &op)?;
+        // The workspace mirrors every decision (spec 1.5 A2).
+        if let Some(book) = loaded_book(&h) {
+            crate::commands::workspace::mirror(&h, book, crate::workspace::Part::Isnads);
+        }
+        Ok(applied)
+    })
+    .await
+    .map_err(|e| LabError::Other(format!("task failed: {}", e)))?
 }
 
 // -------------------------------------------------------- transmitters ---
@@ -964,8 +1030,16 @@ pub struct TransmitterListRow {
 #[tauri::command]
 pub async fn transmitters_list(state: State<'_, ManagedLabState>, book_id: u64, confirmed_only: bool) -> Result<Vec<TransmitterListRow>, LabError> {
     let h = handles(&state)?;
-    tokio::task::spawn_blocking(move || {
-        let conn = db(&h)?;
+    tokio::task::spawn_blocking(move || transmitters_of(&h, book_id, confirmed_only))
+        .await
+        .map_err(|e| LabError::Other(format!("task failed: {}", e)))?
+}
+
+/// The same list, callable from another command's blocking task.
+pub(crate) fn transmitters_of(h: &Handles, book_id: u64, confirmed_only: bool) -> Result<Vec<TransmitterListRow>, LabError> {
+    {
+        let h = h;
+        let conn = db(h)?;
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, i.id, COALESCE(t.part_index, i.part_index), COALESCE(t.page_id, i.page_id), i.status FROM transmitter t JOIN isnad i ON i.id = t.isnad_id \
@@ -1015,9 +1089,7 @@ pub async fn transmitters_list(state: State<'_, ManagedLabState>, book_id: u64, 
             }
         }
         Ok(out)
-    })
-    .await
-    .map_err(|e| LabError::Other(format!("task failed: {}", e)))?
+    }
 }
 
 #[tauri::command]
@@ -1259,6 +1331,13 @@ mod tests {
         fn book_pages(&self, id: u64, _: &dyn Fn(u64, u64)) -> anyhow::Result<Vec<Page>> { Ok(self.0.iter().filter(|p| p.book_id == id).cloned().collect()) }
         fn page(&self, id: u64, part: u32, page: u64) -> anyhow::Result<Option<Page>> { Ok(self.0.iter().find(|p| p.book_id == id && p.part_index == part && p.page_id == page).cloned()) }
         fn freq_table(&self, _: FreqLayer) -> anyhow::Result<Arc<FreqTable>> { anyhow::bail!("none") }
+        fn page_entries(&self, _id: u64) -> anyhow::Result<Vec<crate::source::PageEntry>> { Ok(vec![]) }
+        fn search_book(&self, _b: u64, _a: &[crate::commands::search::Term], _o: &[crate::commands::search::Term], _l: usize, _f: usize) -> anyhow::Result<crate::commands::search::SearchResults> {
+            Ok(crate::commands::search::SearchResults { hits: vec![], total: 0, elapsed_ms: 0, capped: false })
+        }
+        fn toc(&self, _id: u64) -> anyhow::Result<Vec<crate::source::TocNode>> { Ok(vec![]) }
+        fn toc_rows(&self, _id: u64) -> anyhow::Result<Vec<crate::source::TocRow>> { Ok(vec![]) }
+        fn toc_status(&self) -> anyhow::Result<()> { Ok(()) }
         fn find_pages(&self, _: &CandidateQuery) -> anyhow::Result<crate::source::Hits> { Ok(crate::source::Hits::default()) }
     }
     fn setup() -> (Handles, Connection, Page) {
@@ -1276,6 +1355,7 @@ mod tests {
             source: Arc::new(Fake(vec![page.clone()])),
             loaded: Arc::new(std::sync::Mutex::new(None)),
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             store: Some(Arc::clone(&store)), quran: Arc::new(std::sync::OnceLock::new()) };
         let conn = store.connect().unwrap();
         (h, conn, page)

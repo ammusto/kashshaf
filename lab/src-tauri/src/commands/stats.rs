@@ -127,6 +127,16 @@ pub async fn stats_load_book(window: Window, state: State<'_, ManagedLabState>, 
 pub fn stats_cancel(state: State<'_, ManagedLabState>) -> Result<(), LabError> {
     let guard = state.read().map_err(|_| LabError::Other("Lab state lock poisoned".into()))?;
     guard.cancel.store(true, Ordering::SeqCst);
+    // A cancelled run must not sit paused waiting to be resumed.
+    guard.paused.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Pause or resume the running operation (spec 1.5 F3).
+#[tauri::command]
+pub fn stats_pause(state: State<'_, ManagedLabState>, paused: bool) -> Result<(), LabError> {
+    let guard = state.read().map_err(|_| LabError::Other("Lab state lock poisoned".into()))?;
+    guard.paused.store(paused, Ordering::SeqCst);
     Ok(())
 }
 
