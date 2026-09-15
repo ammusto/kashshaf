@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookMetadata } from '@kashshaf/shared';
 import { labApi, type Page, type PageRef, type PageSpan } from '../../api/lab';
 import { useHeavyLimits } from '../../api/settings';
-import { usePages } from '../../api/pages';
+import { Pages, usePages } from '../../api/pages';
 import {
   applyTracked,
   DEFAULT_PARAMS,
@@ -842,7 +842,7 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
         )}
 
         {personMenu != null && (
-          <PersonEditor person={persons.find((p) => p.id === personMenu) ?? null} table={table} onClose={() => setPersonMenu(null)} onOp={(op) => doOp(op, { whole: true })} />
+          <PersonEditor person={persons.find((p) => p.id === personMenu) ?? null} table={table} labels={labels} onClose={() => setPersonMenu(null)} onOp={(op) => doOp(op, { whole: true })} />
         )}
 
         {occurrences && (
@@ -890,7 +890,7 @@ function safeConf(json: string): Confidence | null {
 }
 
 /** Rename, death year, notes, split (spec §7.4 "Right-click a person"). */
-function PersonEditor({ person, table, onClose, onOp }: { person: PersonRow | null; table: TransmitterListRow[]; onClose: () => void; onOp: (op: Op) => Promise<void> }) {
+function PersonEditor({ person, table, labels, onClose, onOp }: { person: PersonRow | null; table: TransmitterListRow[]; labels: Pages; onClose: () => void; onOp: (op: Op) => Promise<void> }) {
   const [name, setName] = useState(person?.canonical_name ?? '');
   const [death, setDeath] = useState(person?.death_ah?.toString() ?? '');
   const [notes, setNotes] = useState(person?.notes ?? '');
@@ -922,7 +922,7 @@ function PersonEditor({ person, table, onClose, onOp }: { person: PersonRow | nu
           {mine.map((t) => (
             <label key={t.id} className="font-arabic flex items-center gap-1" dir="rtl">
               <input type="checkbox" checked={splitIds.includes(t.id)} onChange={(e) => setSplitIds(e.target.checked ? [...splitIds, t.id] : splitIds.filter((x) => x !== t.id))} />
-              {t.raw} <span className="text-app-text-tertiary font-ui" dir="ltr">{t.part_index}:{t.page_id}</span>
+              {t.raw} <span className="text-app-text-tertiary font-ui" dir="ltr">{labels.label(t.part_index, t.page_id)}</span>
             </label>
           ))}
         </div>

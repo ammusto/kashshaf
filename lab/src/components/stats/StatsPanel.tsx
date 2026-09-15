@@ -19,7 +19,7 @@ import {
 } from '../../api/lab';
 import { exportTable, type ExportColumn, type ExportFormat } from '../../utils/exportTable';
 import { VirtualTable, fmt, type Column } from './VirtualTable';
-import { usePages } from '../../api/pages';
+import { Pages, usePages } from '../../api/pages';
 
 /**
  * The Stats panel (spec §7.3): six tabs over the current book, each with a
@@ -665,6 +665,7 @@ function DispersionTab({
   onTerm: (t: string) => void;
   onShowHit: (hit: HitRef) => void;
 }) {
+  const pages = usePages(book.id, book.parts);
   const [data, setData] = useState<DispersionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -720,14 +721,14 @@ function DispersionTab({
         </span>
       </form>
       <ErrorLine error={error} />
-      {d && data && <StripPlot data={data} onShowHit={onShowHit} />}
+      {d && data && <StripPlot data={data} pages={pages} onShowHit={onShowHit} />}
       {data && <VirtualTable columns={columns} rows={bySection} rowKey={([s]) => s.id} height={260} emptyText="This book has no <title> sections." />}
     </div>
   );
 }
 
 /** Occurrences along the book, one tick per hit, page axis labelled by part/page. */
-function StripPlot({ data, onShowHit }: { data: DispersionResponse; onShowHit: (hit: HitRef) => void }) {
+function StripPlot({ data, pages, onShowHit }: { data: DispersionResponse; pages: Pages; onShowHit: (hit: HitRef) => void }) {
   const total = Math.max(1, data.dispersion.total);
   const starts = useMemo(() => {
     const s: number[] = [];
@@ -743,7 +744,9 @@ function StripPlot({ data, onShowHit }: { data: DispersionResponse; onShowHit: (
     let last: number | null = null;
     data.pages.forEach((p, i) => {
       if (p.part_index !== last) {
-        t.push({ x: (starts[i] / total) * 100, label: p.part_label || `Part ${p.part_index}` });
+        // Parts are counted from one for the reader, whatever the corpus
+        // calls them (spec 1.5 §C1).
+        t.push({ x: (starts[i] / total) * 100, label: p.part_label || `${p.part_index + 1}` });
         last = p.part_index;
       }
     });
@@ -759,7 +762,7 @@ function StripPlot({ data, onShowHit }: { data: DispersionResponse; onShowHit: (
           return (
             <button
               key={i}
-              title={`${p.part_label}:${p.page_number} token ${pos.idx}`}
+              title={`${pages.label(p.part_index, p.page_id)} · word ${pos.idx}`}
               onClick={() => onShowHit({ part_index: p.part_index, page_id: p.page_id, tok_start: pos.idx, tok_end: pos.idx + 1 })}
               className="absolute top-1 bottom-1 w-px bg-app-accent hover:w-0.5"
               style={{ left: `${(g / total) * 100}%` }}
