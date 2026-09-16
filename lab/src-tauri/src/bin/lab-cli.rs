@@ -5,6 +5,8 @@
 //! lab-cli reuse-eval  [--corpus DIR] [--gold FILE] [--threshold 0.35]
 //! lab-cli reuse-find  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--min-score 0.35]
 //!                     [--target-book ID] [--jsonl FILE]
+//!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
+//!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
 //! ```
 //!
@@ -110,6 +112,19 @@ impl Ctx {
         }
         if let Some(r) = arg(args, "--rare-df") {
             params.rare_df = r.parse().context("--rare-df")?;
+        }
+        // The four book-mode settings, so each can be moved on its own.
+        if let Some(r) = arg(args, "--window") {
+            params.window = r.parse().context("--window")?;
+        }
+        if let Some(r) = arg(args, "--stride") {
+            params.stride = r.parse().context("--stride")?;
+        }
+        if let Some(r) = arg(args, "--min-aligned") {
+            params.min_aligned = r.parse().context("--min-aligned")?;
+        }
+        if let Some(r) = arg(args, "--fallback-max-tokens") {
+            params.fallback_max_tokens = r.parse().context("--fallback-max-tokens")?;
         }
         params.banality_baseline = Some(reuse::corpus_banal_share(&freq, params.banality_rank));
         let lab_dir = kashshaf_common::lab_data_dir()?;
@@ -272,6 +287,7 @@ fn reuse_find(args: &[String]) -> Result<()> {
     // pretending otherwise would flatter its running time -- but only the
     // matches landing in this book are reported.
     let only: Option<u64> = arg(args, "--target-book").map(|s| s.parse()).transpose()?;
+    let keep_formulaic = args.iter().any(|a| a == "--include-formulaic");
     let mut jsonl = match arg(args, "--jsonl") {
         Some(path) => Some(std::io::BufWriter::new(std::fs::File::create(path)?)),
         None => None,
@@ -286,7 +302,14 @@ fn reuse_find(args: &[String]) -> Result<()> {
             for m in run
                 .matches
                 .iter()
-                .filter(|m| m.score >= p.threshold && only.map_or(true, |t| m.target.book_id == t))
+                .filter(|m| {
+                    m.score >= p.threshold
+                        && only.map_or(true, |t| m.target.book_id == t)
+                        // Formulaic is recorded, not reported -- the panel's
+                        // type filter leaves it out by default, and a report
+                        // that included it would not be the one a reader sees.
+                        && (keep_formulaic || m.kind != reuse::MatchType::Formulaic)
+                })
                 .take(limit)
             {
                 found += 1;

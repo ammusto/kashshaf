@@ -529,21 +529,49 @@ pub fn smith_waterman(q: &Seq, t: &Seq, t_range: Range<usize>, q_mask: &[bool], 
 pub fn align_page(q: &Seq, t: &Seq, p: &Params) -> Option<Aligned> {
     let mut q_mask = vec![false; q.len()];
     let mut t_mask = vec![false; t.len()];
-    let first = smith_waterman(q, t, 0..t.len(), &q_mask, &t_mask, p)?;
+    align_one(q, t, &mut q_mask, &mut t_mask, p)
+}
+
+/// At most this many passages are reported from one candidate page. A page
+/// that aligns eight separate times is either a table of contents or a
+/// disaster, and either way the ninth adds nothing.
+pub const MAX_ALIGNMENTS_PER_PAGE: usize = 8;
+
+/// Every passage this page shares with the query region, best first.
+///
+/// Retrieval found the page; this finds what is on it. Each alignment is
+/// masked out before the next is sought, so two quotations from different
+/// parts of the same page come back as two matches instead of one span
+/// stretched across the gap between them.
+pub fn align_all(q: &Seq, t: &Seq, p: &Params) -> Vec<Aligned> {
+    let mut q_mask = vec![false; q.len()];
+    let mut t_mask = vec![false; t.len()];
+    let mut out = Vec::new();
+    while out.len() < MAX_ALIGNMENTS_PER_PAGE {
+        let Some(a) = align_one(q, t, &mut q_mask, &mut t_mask, p) else { break };
+        out.push(a);
+    }
+    out
+}
+
+/// One passage: the best local alignment left, with the fragments near it
+/// that belong to the same passage folded in.
+fn align_one(q: &Seq, t: &Seq, q_mask: &mut [bool], t_mask: &mut [bool], p: &Params) -> Option<Aligned> {
+    let first = smith_waterman(q, t, 0..t.len(), q_mask, t_mask, p)?;
     if first.pairs.len() < p.min_aligned {
         return None;
+    }
+    for (a, b) in &first.pairs {
+        q_mask[*a] = true;
+        t_mask[*b] = true;
     }
     let mut all = first.clone();
     if p.proximity {
         let t_first = first.pairs[0].1;
         let lo = t_first.saturating_sub(p.proximity_window);
         let hi = (first.pairs.last().unwrap().1 + 1 + p.proximity_window).min(t.len());
-        for (a, b) in &first.pairs {
-            q_mask[*a] = true;
-            t_mask[*b] = true;
-        }
         for _ in 0..8 {
-            let Some(next) = smith_waterman(q, t, lo..hi, &q_mask, &t_mask, p) else { break };
+            let Some(next) = smith_waterman(q, t, lo..hi, q_mask, t_mask, p) else { break };
             // A fragment: at least half the minimum, so an inflected tail
             // after a gap still counts, but not a chance bigram.
             if next.pairs.len() < (p.min_aligned / 2).max(2) || next.pairs[0].1.abs_diff(t_first) > p.proximity_window {
@@ -684,6 +712,21 @@ pub fn match_type(c: &Components) -> MatchType {
     } else {
         MatchType::Weak
     }
+}
+
+/// The type, knowing where the match sits.
+///
+/// A short alignment lying in an isnād is a chain, not a quotation: two
+/// unrelated hadiths share `فلان عن فلان عن فلان` for six or eight tokens
+/// and nothing else. Those are typed formulaic, which is what keeps them
+/// out of the default report rather than out of the record. A long
+/// alignment inside an isnād is a different thing -- the whole chain
+/// genuinely copied -- and keeps its own type.
+pub fn match_type_in(c: &Components, zone: Option<Zone>, p: &Params) -> MatchType {
+    if zone == Some(Zone::Isnad) && c.aligned < p.min_aligned * 2 {
+        return MatchType::Formulaic;
+    }
+    match_type(c)
 }
 
 /// Recompute what the banality scale, weights and threshold affect from the
@@ -841,34 +884,48 @@ pub fn passage(
         }
         let Some(tp) = load(&c.page)? else { continue };
         let t = Seq::build(&tp.tokens, &mut intern, freq, params, banal_phrases, &[]);
-        let Some(al) = align_page(&q, &t, params) else { continue };
-        let mut comp = components(&q, &t, &al.pairs, non_banal, params);
-        if tokens.len() < params.fallback_max_tokens || anchors.is_empty() {
-            // The user chose this short passage whole: the banality penalty,
-            // meant for chance overlaps of common words in a long window,
-            // would hide exactly what was asked for (amendment 1.4).
-            comp.banality_factor = 1.0;
+        for al in align_all(&q, &t, params) {
+            // Each alignment is scored on itself, not on the window that
+            // retrieved it. A window is a retrieval device: it decides which
+            // pages are worth reading, and has no business in the score. Six
+            // words quoted exactly are six words quoted exactly whether they
+            // were found inside a window of sixty or of six hundred, and
+            // dividing by the window is what made a short quotation score
+            // near zero and disappear.
+            let q_lo = al.pairs.iter().map(|p| p.0).min().unwrap();
+            let q_hi = al.pairs.iter().map(|p| p.0).max().unwrap() + 1;
+            let non_banal_span = q.banal[q_lo..q_hi].iter().filter(|b| !**b).count().max(1);
+            let mut comp = components(&q, &t, &al.pairs, non_banal_span, params);
+            if tokens.len() < params.fallback_max_tokens || anchors.is_empty() {
+                // The user chose this short passage whole: the banality
+                // penalty, meant for chance overlaps of common words in a
+                // long window, would hide exactly what was asked for
+                // (amendment 1.4).
+                comp.banality_factor = 1.0;
+            }
+            let s = score(&comp, params);
+            let zone = zone_of(&q, &al.pairs);
+            let pairs: Vec<(usize, usize)> = al.pairs.iter().map(|(i, j)| (i + range.start, *j)).collect();
+            matches.push(Match {
+                target: c.page.clone(),
+                q_start: q_lo + range.start,
+                q_end: q_hi + range.start,
+                t_start: al.pairs.iter().map(|p| p.1).min().unwrap(),
+                t_end: al.pairs.iter().map(|p| p.1).max().unwrap() + 1,
+                zone,
+                pairs,
+                components: comp,
+                score: s,
+                kind: match_type_in(&comp, zone, params),
+                anchor_hits: c.hits,
+            });
         }
-        let s = score(&comp, params);
-        let pairs: Vec<(usize, usize)> = al.pairs.iter().map(|(i, j)| (i + range.start, *j)).collect();
-        let q_start = pairs.iter().map(|p| p.0).min().unwrap();
-        let q_end = pairs.iter().map(|p| p.0).max().unwrap() + 1;
-        let t_start = pairs.iter().map(|p| p.1).min().unwrap();
-        let t_end = pairs.iter().map(|p| p.1).max().unwrap() + 1;
-        matches.push(Match {
-            target: c.page.clone(),
-            q_start,
-            q_end,
-            t_start,
-            t_end,
-            zone: zone_of(&q, &al.pairs),
-            pairs,
-            components: comp,
-            score: s,
-            kind: match_type(&comp),
-            anchor_hits: c.hits,
-        });
     }
+    // Two alignments that overlap are one passage seen twice.
+    matches = merge_overlapping(matches.into_iter().map(|m| (own.clone(), m)).collect())
+        .into_iter()
+        .map(|(_, m)| m)
+        .collect();
     matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.components.aligned.cmp(&a.components.aligned)));
     Ok(PassageRun { anchors, candidates: cands.len(), non_banal, tokens: tokens.len(), matches, fallback })
 }
@@ -1285,6 +1342,89 @@ mod tests {
     }
 
     #[test]
+    fn a_short_quotation_in_a_long_window_is_scored_as_itself() {
+        // The failure this change exists to fix. Six words quoted exactly,
+        // sitting in a window of unrelated text. Scored against the window
+        // the coverage was a fraction and the match vanished under the
+        // threshold; scored against its own span it is what it is.
+        let f = freq(&[("و", 1000), ("في", 900)]);
+        let p = Params { banality_rank: 2, banality_baseline: Some(0.3), ..Default::default() };
+        let filler_a = "ثم ذكر المؤلف بابا اخر في الطهارة و ما يتصل بها من الاحكام";
+        let quote = "اتقوا الملاعن و اعدوا النبل للاستنجاء من الحجارة";
+        let filler_b = "ثم رجع الي الكلام في الصلاة و مواقيتها و ما ورد فيها";
+        let (q, t) = seqs(
+            &format!("{} {} {}", filler_a, quote, filler_b),
+            &format!("قال النبي {} قال الاصمعي", quote),
+            &f,
+            &p,
+        );
+
+        let all = align_all(&q, &t, &p);
+        assert_eq!(all.len(), 1, "one passage is shared, not several");
+        let pairs = &all[0].pairs;
+        let lo = pairs.iter().map(|x| x.0).min().unwrap();
+        let hi = pairs.iter().map(|x| x.0).max().unwrap() + 1;
+        assert!(lo >= 11, "the quotation is in the middle of the window, at {}", lo);
+        assert!(hi - lo <= 8, "the span is the quotation, not the window: {}..{}", lo, hi);
+
+        // Scored on the span, as `passage` now does it.
+        let span_non_banal = q.banal[lo..hi].iter().filter(|b| !**b).count().max(1);
+        let on_span = components(&q, &t, pairs, span_non_banal, &p);
+        // Scored on the window, as it used to be.
+        let on_window = components(&q, &t, pairs, q.non_banal(), &p);
+
+        assert!((on_span.coverage - 1.0).abs() < 1e-9, "coverage {}", on_span.coverage);
+        assert!(on_window.coverage < 0.35, "the window buried it at {}", on_window.coverage);
+        assert!(score(&on_span, &p) >= p.threshold, "score {}", score(&on_span, &p));
+        assert!(score(&on_window, &p) < p.threshold, "old score {}", score(&on_window, &p));
+    }
+
+    #[test]
+    fn two_quotations_on_one_page_are_two_matches() {
+        // One span stretched across the gap between them is not what
+        // happened, and it is not what gets reported.
+        let f = freq(&[("و", 1000)]);
+        let p = Params { banality_rank: 1, min_aligned: 5, proximity_window: 3, ..Default::default() };
+        let (q, t) = seqs(
+            "اتقوا الملاعن و اعدوا النبل ثم قال المؤلف كلاما اخر ثم قال ان الجدف نبات يكون باليمن",
+            "اتقوا الملاعن و اعدوا النبل \
+             هنا كلام طويل جدا لا علاقة له بشيء مما سبق ولا بما يلحقه من حديث \
+             وقال ايضا ان الجدف نبات يكون باليمن",
+            &f,
+            &p,
+        );
+        let all = align_all(&q, &t, &p);
+        assert_eq!(all.len(), 2, "{:?}", all.iter().map(|a| a.pairs.len()).collect::<Vec<_>>());
+        for a in &all {
+            assert!(a.pairs.len() >= p.min_aligned);
+        }
+    }
+
+    #[test]
+    fn a_short_chain_inside_an_isnad_is_formulaic_not_a_quotation() {
+        let f = freq(&[("عن", 1000), ("بن", 900)]);
+        let p = Params { banality_rank: 2, ..Default::default() };
+        let c = Components {
+            surface_agree: 1.0,
+            lemma_agree: 1.0,
+            root_agree: 1.0,
+            coverage: 1.0,
+            banal_share: 0.1,
+            banality_factor: 1.0,
+            aligned: 7,
+        };
+        assert_eq!(match_type(&c), MatchType::Verbatim);
+        assert_eq!(match_type_in(&c, None, &p), MatchType::Verbatim);
+        assert_eq!(match_type_in(&c, Some(Zone::Quran), &p), MatchType::Verbatim);
+        // Seven aligned tokens of a chain of transmission: two unrelated
+        // hadiths share that much and nothing else.
+        assert_eq!(match_type_in(&c, Some(Zone::Isnad), &p), MatchType::Formulaic);
+        // A whole chain genuinely copied is not the same claim.
+        let long = Components { aligned: 20, ..c };
+        assert_eq!(match_type_in(&long, Some(Zone::Isnad), &p), MatchType::Verbatim);
+    }
+
+    #[test]
     fn passage_mode_end_to_end_on_a_fake_corpus() {
         let f = freq(&[("و", 1000), ("في", 900)]);
         let p = Params { banality_rank: 2, anchors: 6, min_anchors: 3, banality_baseline: Some(0.3), ..Default::default() };
@@ -1311,7 +1451,14 @@ mod tests {
         assert!((best.score - 0.7).abs() < 1e-9, "1 × (0.5·1 + 0.3·0 + 0.2·1) × 1: the fixture has no roots");
         let second = &run.matches[1];
         assert_eq!(second.target.book_id, 3);
-        assert!(second.components.coverage < 1.0 && second.score < best.score);
+        // The partial page quotes ten of the query's words and stops. It is
+        // scored on what it shares, not on what it leaves out: a short
+        // quotation is a quotation, and dividing it by the length of the
+        // window that retrieved it is what used to bury it. What separates
+        // the two matches is how much each aligns, not the window.
+        assert!((second.components.coverage - 1.0).abs() < 1e-9);
+        assert!(second.components.aligned < best.components.aligned);
+        assert!(second.score <= best.score);
         // Exclude the whole book 2.
         let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], Some(2), &count, &load, &|| false).unwrap();
         assert_eq!(run.matches.len(), 1);
