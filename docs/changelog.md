@@ -14,13 +14,21 @@ One man is written a dozen ways across a book. The isnād panel has a Name
 disambiguator: every name in the text with its count on the left, and on the
 right the names that might be the same person.
 
-They are ranked on two things. How the names are spelled, by their parts
-rather than by letters, so a fuller name is not read as a different one. And
-how often the two keep the same company in a chain, which counts for more: a
+A name is offered only if every part the two names share agrees: ism with
+ism, first ancestor with first ancestor, nisba with nisba. A part that only
+one of them has is ignored, because that is a name written short. Nothing is
+compared letter by letter, so جابر and جاحظ are two men and أحمد بن علي and
+أحمد بن علي بن جعفر are one.
+
+Names that agree except for a pair that is easily confused, الحسن for
+الحسين or سعد for سعيد, are listed separately under Commonly confused. They
+are never mixed in with the rest.
+
+The list is ordered by how often the two keep the same company in a chain: a
 name that receives from the same teacher and passes to the same student is
-usually one man. Both numbers are shown, with the transmitters on either
-side and a page that opens in the reader, so you can decide without reading
-five chains first.
+usually one man. Each row says which parts agree, who stood on either side,
+and a page that opens in the reader, so you can decide without reading five
+chains first.
 
 Same person merges every occurrence of the chosen names and can be undone.
 Not the same is remembered, and that pair is never suggested again.

@@ -69,7 +69,11 @@ pub fn parse(surfaces: &[String]) -> NameParts {
     }
 
     // Ism: the next name unless a nasab connector comes first (أبو X بن Y).
-    if i < w.len() && !is_nasab(&w[i]) && !has_al(&w[i]) {
+    //
+    // A name may carry the article and still be the ism: الحسن بن محمد names
+    // the man الحسن. Only when a nasab follows, though; a lone الشيباني is a
+    // nisba, which is why the article otherwise disqualifies a word here.
+    if i < w.len() && !is_nasab(&w[i]) && (!has_al(&w[i]) || (i + 1 < w.len() && is_nasab(&w[i + 1]))) {
         let (name, used) = take_name(&w, i);
         parts.ism = Some(name);
         i += used;
@@ -167,6 +171,20 @@ mod tests {
         assert_eq!(n.nasab.as_deref(), Some("بن احمد بن زياد"));
         assert_eq!(n.nisba.as_deref(), Some("الاصبهاني"));
         assert_eq!(n.laqab, None);
+    }
+
+    #[test]
+    fn an_article_before_a_nasab_is_still_the_ism() {
+        // الحسن بن محمد names الحسن; the parser used to give up and call the
+        // whole thing a nisba, which left nothing to compare part by part.
+        let n = p("الحسن بن محمد");
+        assert_eq!(n.ism.as_deref(), Some("الحسن"));
+        assert_eq!(n.nasab.as_deref(), Some("بن محمد"));
+        assert_eq!(n.nisba, None);
+        // But a nisba on its own is still a nisba.
+        let n = p("الشيباني");
+        assert_eq!(n.ism, None);
+        assert_eq!(n.nisba.as_deref(), Some("الشيباني"));
     }
 
     #[test]

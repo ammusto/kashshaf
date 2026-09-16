@@ -47,9 +47,9 @@ const forms = [
 const candidates = [
   {
     ...forms[1],
-    score: 0.81,
-    string_score: 0.78,
-    neighbour_score: 0.83,
+    score: 0.83,
+    matched: ['ism', 'nasab 1'],
+    confusable: null,
     shared_from: 2,
     shared_to: 1,
     occurrences: [
@@ -59,9 +59,9 @@ const candidates = [
   },
   {
     ...forms[2],
-    score: 0.22,
-    string_score: 0.55,
-    neighbour_score: 0.0,
+    score: 0.0,
+    matched: ['nasab 1'],
+    confusable: 'احمد / محمد',
     shared_from: 0,
     shared_to: 0,
     occurrences: [{ isnad_id: 15, transmitter_id: 95, part_index: 0, page_id: 11, from: null, to: null }],
@@ -94,16 +94,15 @@ describe('Disambiguator', () => {
     expect(screen.getByTestId('form-count')).toHaveTextContent('3');
   });
 
-  it('ranks candidates with both components and the company they keep', async () => {
+  it('says which parts agree and how much company the pair keeps', async () => {
     view();
     fireEvent.click(await screen.findByTestId(`name-${AHMAD}`));
     await waitFor(() => expect(api.dis.candidates).toHaveBeenCalledWith(527, AHMAD));
 
     const best = await screen.findByTestId(`candidate-${AHMAD_FULL}`);
-    // The score, and what it is made of, so the two can be weighed apart.
-    expect(within(best).getByTestId(`score-${AHMAD_FULL}`)).toHaveTextContent('0.81');
-    expect(within(best).getByTestId(`score-${AHMAD_FULL}`)).toHaveTextContent('spelling 0.78');
+    // Why the pair is here at all, and why it is this far up.
     expect(within(best).getByTestId(`score-${AHMAD_FULL}`)).toHaveTextContent('company 0.83');
+    expect(within(best).getByTestId(`score-${AHMAD_FULL}`)).toHaveTextContent('ism, nasab 1 agree');
     expect(within(best).getByTestId(`shared-${AHMAD_FULL}`)).toHaveTextContent('Shares 2 sources and 1 recipient');
     // Who stood on either side, and the page, by the C1 rule.
     expect(best).toHaveTextContent('الجنيد');
@@ -114,6 +113,21 @@ describe('Disambiguator', () => {
     expect(within(screen.getByTestId(`candidate-${OMAR}`)).getByTestId(`shared-${OMAR}`)).toHaveTextContent(
       'No transmitter in common'
     );
+  });
+
+  it('keeps a commonly confused pair apart from the candidates', async () => {
+    view();
+    fireEvent.click(await screen.findByTestId(`name-${AHMAD}`));
+
+    const heading = await screen.findByTestId('confused-heading');
+    expect(heading).toHaveTextContent('Commonly confused');
+    // The confusable one is below that heading; the plain candidate is above.
+    const list = screen.getByTestId('candidate-list');
+    const order = [...list.children].map((el) => el.getAttribute('data-testid') ?? el.tagName);
+    expect(order.indexOf(`candidate-${AHMAD_FULL}`)).toBeLessThan(order.length);
+    expect(screen.getByTestId(`confusable-${OMAR}`)).toHaveTextContent('احمد / محمد');
+    // And the count says both.
+    expect(screen.getByText(/1 possible match, 1 commonly confused/)).toBeInTheDocument();
   });
 
   it('opens an occurrence in the workbench', async () => {

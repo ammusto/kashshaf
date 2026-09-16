@@ -13,11 +13,15 @@ import { Notice } from '../ui/Running';
  * here the unit is the *form*, every row that carries it moves together, and
  * the answer is recorded once.
  *
- * Left, every form in the text with its count. Right, the forms that might
- * be the same person, ranked by how much they look alike and — weighing
- * more — how often they keep the same company in a chain. Each row shows
- * both components and the transmitters on either side, so the judgment can
- * be made here rather than by going and reading five chains.
+ * Left, every form in the text with its count. Right, the forms that could
+ * be the same person: those whose every shared name part agrees, ordered by
+ * how often the two keep the same company in a chain. Each row says which
+ * parts corroborate it and who stood on either side, so the judgment can be
+ * made here rather than by going and reading five chains.
+ *
+ * Under them, apart and labelled, the pairs that agree only by way of a
+ * commonly confused name — الحسن for الحسين, سعد for سعيد. Those are a
+ * question, not a suggestion, and are never mixed into the list above.
  */
 
 export function Disambiguator({
@@ -96,7 +100,16 @@ export function Disambiguator({
     });
 
   const chosen = useMemo(() => [...group], [group]);
+  const likely = useMemo(() => candidates.filter((c) => !c.confusable), [candidates]);
+  const confused = useMemo(() => candidates.filter((c) => c.confusable), [candidates]);
   const named = useMemo(() => new Map(forms.map((f) => [f.form_norm, f])), [forms]);
+
+  const toggleOpen = (form: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(form)) next.add(form);
+      return next;
+    });
 
   const samePerson = async () => {
     if (chosen.length < 2) return;
@@ -193,7 +206,11 @@ export function Disambiguator({
                 {named.get(selected)?.raw ?? selected}
               </span>
               <span className="text-app-text-secondary">
-                {busy ? 'ranking…' : `${candidates.length} possible ${candidates.length === 1 ? 'match' : 'matches'}`}
+                {busy
+                  ? 'ranking…'
+                  : `${likely.length} possible ${likely.length === 1 ? 'match' : 'matches'}${
+                      confused.length > 0 ? `, ${confused.length} commonly confused` : ''
+                    }`}
               </span>
               <span className="ltr:ml-auto flex items-center gap-1">
                 <button
@@ -229,28 +246,46 @@ export function Disambiguator({
             <Notice error={error} message={message} />
 
             <div className="flex-1 min-h-0 overflow-y-auto" data-testid="candidate-list">
-              {candidates.map((c) => (
+              {likely.map((c) => (
                 <CandidateRow
                   key={c.form_norm}
                   c={c}
                   labels={labels}
                   picked={group.has(c.form_norm)}
                   open={expanded.has(c.form_norm)}
-                  onToggleOpen={() =>
-                    setExpanded((prev) => {
-                      const next = new Set(prev);
-                      if (!next.delete(c.form_norm)) next.add(c.form_norm);
-                      return next;
-                    })
-                  }
+                  onToggleOpen={() => toggleOpen(c.form_norm)}
                   onPick={() => toggle(c.form_norm)}
                   onOpen={onOpen}
                 />
               ))}
-              {!busy && candidates.length === 0 && (
+              {!busy && likely.length === 0 && (
                 <p className="p-4 text-sm text-app-text-secondary">
-                  Nothing else in this text looks like this name, or every pair has been ruled out.
+                  No other name in this text agrees with this one part for part.
                 </p>
+              )}
+
+              {confused.length > 0 && (
+                <>
+                  <div className="px-3 py-1.5 border-y border-app-border-light bg-app-surface-variant" data-testid="confused-heading">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-app-text-secondary">Commonly confused</span>
+                    <p className="text-xs text-app-text-secondary mt-0.5">
+                      These agree everywhere except a name that is often mistaken for another. They are as likely to be
+                      two men as one.
+                    </p>
+                  </div>
+                  {confused.map((c) => (
+                    <CandidateRow
+                      key={c.form_norm}
+                      c={c}
+                      labels={labels}
+                      picked={group.has(c.form_norm)}
+                      open={expanded.has(c.form_norm)}
+                      onToggleOpen={() => toggleOpen(c.form_norm)}
+                      onPick={() => toggle(c.form_norm)}
+                      onOpen={onOpen}
+                    />
+                  ))}
+                </>
               )}
             </div>
           </>
@@ -303,18 +338,21 @@ function CandidateRow({
           ×{c.count}
         </span>
 
-        {/* The score, with what it is made of, because the two parts mean
-            different things and a reader should weigh them separately. */}
+        {/* What the two names have in common, part by part, and how much
+            company they keep. The first is why the pair is here at all; the
+            second is why it is this far up the list. */}
         <span className="shrink-0 text-xs tabular-nums" data-testid={`score-${c.form_norm}`}>
-          <span className="font-semibold">{c.score.toFixed(2)}</span>
-          <span className="text-app-text-secondary">
-            {' '}
-            (spelling {c.string_score.toFixed(2)}, company {c.neighbour_score.toFixed(2)})
-          </span>
+          <span className="font-semibold">company {c.score.toFixed(2)}</span>
+          <span className="text-app-text-secondary"> · {c.matched.length > 0 ? c.matched.join(', ') : 'nothing'} agree</span>
         </span>
       </div>
 
       <div className="px-3 pb-2 text-xs text-app-text-secondary">
+        {c.confusable && (
+          <div className="mb-1 text-app-text-primary" data-testid={`confusable-${c.form_norm}`}>
+            Rests on <span className="font-arabic">{c.confusable}</span>, which are often confused.
+          </div>
+        )}
         <span data-testid={`shared-${c.form_norm}`}>
           {c.shared_from + c.shared_to === 0
             ? 'No transmitter in common'

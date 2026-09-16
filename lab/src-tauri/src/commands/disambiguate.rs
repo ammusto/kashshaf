@@ -219,3 +219,84 @@ pub(crate) fn other_persons(h: &Handles, conn: &Connection, book_id: u64, forms:
     out.dedup();
     Ok(out)
 }
+
+#[cfg(test)]
+mod diagnostics {
+    //! Not a test of anything: a way to look at the ranker's output on the
+    //! real annotations, which is the only place the question "is this the
+    //! same man" has real answers in it.
+    use super::*;
+    use crate::analysis::disambiguate as dis;
+
+    fn open() -> Option<Connection> {
+        let path = std::env::var("KASHSHAF_LAB_DB").ok()?;
+        Connection::open(path).ok()
+    }
+
+    fn show(conn: &Connection, book: u64, raw: &str) {
+        let links = links(conn, book).unwrap();
+        let names = person_names(conn).unwrap();
+        let target = crate::analysis::names::form_norm(raw);
+        let c = dis::candidates(&links, &target, &HashSet::new(), &names);
+        println!("\n=== {} ({} in book {}) : {} candidates", raw, target, book, c.len());
+        for (i, x) in c.iter().take(10).enumerate() {
+            println!(
+                "{:2}. {:<44} x{:<4} company {:.2}  shared {}+{}  matched [{}]{}",
+                i + 1,
+                x.raw,
+                x.count,
+                x.score,
+                x.shared_from,
+                x.shared_to,
+                x.matched.join(", "),
+                x.confusable.as_ref().map(|c| format!("  CONFUSABLE {}", c)).unwrap_or_default()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn rank_two_real_names() {
+        let Some(conn) = open() else {
+            println!("set KASHSHAF_LAB_DB to run this");
+            return;
+        };
+        show(&conn, 1820, "الجنيد");
+        show(&conn, 1820, "الحسن بن محمد");
+        show(&conn, 1820, "الحسن بن علي");
+        show(&conn, 1820, "احمد بن علي بن جعفر");
+    }
+
+    #[test]
+    #[ignore]
+    fn rank_how_many_pairs_survive() {
+        let Some(conn) = open() else {
+            println!("set KASHSHAF_LAB_DB to run this");
+            return;
+        };
+        let books: Vec<u64> = {
+            let mut st = conn.prepare("SELECT DISTINCT book_id FROM isnad ORDER BY book_id").unwrap();
+            st.query_map([], |r| r.get::<_, i64>(0)).unwrap().map(|x| x.unwrap() as u64).collect()
+        };
+        let names = person_names(&conn).unwrap();
+        let (mut pairs, mut kept, mut confused) = (0usize, 0usize, 0usize);
+        for b in &books {
+            let links = links(&conn, *b).unwrap();
+            let forms = dis::forms(&links, &names);
+            pairs += forms.len() * forms.len().saturating_sub(1) / 2;
+            for f in &forms {
+                let c = dis::candidates(&links, &f.form_norm, &HashSet::new(), &names);
+                // Each unordered pair is seen from both ends.
+                kept += c.iter().filter(|x| x.confusable.is_none()).count();
+                confused += c.iter().filter(|x| x.confusable.is_some()).count();
+            }
+            println!("book {}: {} forms", b, forms.len());
+        }
+        println!(
+            "\ncorpus-wide: {} pairs examined, {} survive the gate, {} more are commonly confused",
+            pairs,
+            kept / 2,
+            confused / 2
+        );
+    }
+}

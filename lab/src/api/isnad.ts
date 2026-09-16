@@ -137,9 +137,15 @@ export interface NameOccurrence {
 
 /** A form that might be the same person as the selected one (10 A). */
 export interface NameCandidate extends NameForm {
+  /** How much company the two keep, which is what orders the list. */
   score: number;
-  string_score: number;
-  neighbour_score: number;
+  /** The parts that corroborate the match: "ism", "nasab 1", "nisba"… */
+  matched: string[];
+  /**
+   * Set when the pair only matches by way of a commonly confused name,
+   * naming it. These are listed apart and never merged in.
+   */
+  confusable: string | null;
   shared_from: number;
   shared_to: number;
   occurrences: NameOccurrence[];

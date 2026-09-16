@@ -5,22 +5,35 @@
 //! links a transmitter row at a time; this ranks whole *forms* against one
 //! another so the decision is made once.
 //!
-//! Two signals, and they are not equal:
+//! A gate, and then a ranking.
 //!
-//! 1. **The names look alike.** Not character overlap, which rates
-//!    `أحمد بن علي` against `أحمد بن عمر` almost as highly as against
-//!    `أحمد بن علي بن جعفر`, but the parts `names::parse` finds — ism,
-//!    nasab chain, nisba, kunya — with a token measure under it and edit
-//!    distance under that.
-//! 2. **The names keep the same company.** How often the two forms sit next
-//!    to the same transmitter in a chain: the one they received from, and
-//!    the one they gave to. Two names that transmit from the same teacher to
-//!    the same student are one man far more reliably than two names that
-//!    merely spell alike, so this carries the greater weight.
+//! **The gate is structural.** Edit distance over whole strings is the wrong
+//! instrument for Arabic names: `جابر` and `جاحظ` are one letter apart and
+//! two men, `الحسن بن محمد` and `الحسين بن محمود` are close and two men,
+//! while `أحمد بن علي` and `أحمد بن علي بن جعفر` are far apart and one man.
+//! So nothing here measures strings as strings. The parts `names::parse`
+//! finds are compared to their counterparts — ism to ism, the first nasab
+//! link to the first nasab link, nisba to nisba, kunya to kunya — and a pair
+//! is a candidate only if **every part present in both matches**, either
+//! identically once normalised or as a listed orthographic variant.
+//!
+//! A part present in one name only is ignored. That is truncation, and it is
+//! the strongest positive signal there is: the shorter name is the longer
+//! one with its tail cut off, which is how these texts name people.
+//!
+//! The one exception is a short curated list of genuinely confusable pairs
+//! (`الحسن`/`الحسين`, `سعد`/`سعيد`, `عمر`/`عمرو`, `أحمد`/`محمد`). A pair
+//! that needs one of those to match is not a candidate: it is reported in a
+//! separate group, labelled, and never mixed into the ranked list.
+//!
+//! **The ranking is the company kept.** Among the forms that pass the gate,
+//! how often the two sit next to the same transmitter in a chain — the one
+//! they received from, and the one they gave to. It orders the survivors; it
+//! cannot rescue a name that failed the gate.
 //!
 //! Everything here is pure: the commands read the rows, this ranks them.
 
-use crate::analysis::names::{self, NameParts};
+use crate::analysis::names::{self};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -73,10 +86,13 @@ pub struct Candidate {
     pub count: usize,
     pub person_id: Option<i64>,
     pub person_name: Option<String>,
-    /// The two components, and what they come to together.
+    /// How much company the two keep, which is what orders the list.
     pub score: f64,
-    pub string_score: f64,
-    pub neighbour_score: f64,
+    /// The parts that corroborate the match: "ism", "nasab 1", "nisba"…
+    pub matched: Vec<String>,
+    /// Set when the pair only matches by way of a commonly confused pair,
+    /// naming it. These are listed apart and never merged in.
+    pub confusable: Option<String>,
     /// Chains where both forms received from the same transmitter.
     pub shared_from: usize,
     /// Chains where both gave to the same transmitter.
@@ -88,11 +104,6 @@ pub struct Candidate {
 
 /// How much a shared neighbour is worth, and how fast the worth saturates.
 const NEIGHBOUR_RATE: f64 = 0.7;
-/// The company kept outweighs the spelling.
-const NEIGHBOUR_WEIGHT: f64 = 0.6;
-const STRING_WEIGHT: f64 = 0.4;
-/// Below this a candidate is noise.
-pub const FLOOR: f64 = 0.12;
 pub const MAX_CANDIDATES: usize = 40;
 /// Occurrences listed in full before they are summarised.
 pub const MAX_OCCURRENCES: usize = 8;
@@ -209,7 +220,7 @@ pub fn candidates(
     let co = company(links);
     let empty = Company { from: HashMap::new(), to: HashMap::new(), occurrences: Vec::new() };
     let mine = co.get(target).unwrap_or(&empty);
-    let my_parts = parse_raw(&me.raw);
+    let my_parts = slots(&me.raw);
 
     let mut out: Vec<Candidate> = Vec::new();
     for f in &all {
@@ -219,24 +230,25 @@ pub fn candidates(
         if distinctions.contains(&pair(target, &f.form_norm)) {
             continue;
         }
+        // The gate first: no amount of shared company makes two names one
+        // name.
+        let (matched, confusable) = match gate(&my_parts, &slots(&f.raw)) {
+            Gate::Fail => continue,
+            Gate::Pass { matched } => (matched, None),
+            Gate::Confused { matched, confusion } => (matched, Some(confusion)),
+        };
         let theirs = co.get(&f.form_norm).unwrap_or(&empty);
         let shared_from = shared(&mine.from, &theirs.from);
         let shared_to = shared(&mine.to, &theirs.to);
-        let neighbour_score = saturate(shared_from + shared_to);
-        let string_score = string_similarity(&me.form_norm, &f.form_norm, &my_parts, &parse_raw(&f.raw));
-        let score = STRING_WEIGHT * string_score + NEIGHBOUR_WEIGHT * neighbour_score;
-        if score < FLOOR {
-            continue;
-        }
         out.push(Candidate {
             form_norm: f.form_norm.clone(),
             raw: f.raw.clone(),
             count: f.count,
             person_id: f.person_id,
             person_name: f.person_name.clone(),
-            score,
-            string_score,
-            neighbour_score,
+            score: saturate(shared_from + shared_to),
+            matched,
+            confusable,
             shared_from,
             shared_to,
             occurrences: theirs.occurrences.iter().take(MAX_OCCURRENCES).cloned().collect(),
@@ -244,9 +256,28 @@ pub fn candidates(
             page_id: f.page_id,
         });
     }
-    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.count.cmp(&a.count)).then_with(|| a.form_norm.cmp(&b.form_norm)));
-    out.truncate(MAX_CANDIDATES);
-    out
+    // Company orders the survivors; where it says nothing, the name that
+    // corroborates in more places and occurs more often comes first.
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.matched.len().cmp(&a.matched.len()))
+            .then_with(|| b.count.cmp(&a.count))
+            .then_with(|| a.form_norm.cmp(&b.form_norm))
+    });
+    // The two groups are capped apart, so a flood of one cannot bury the
+    // other.
+    let mut kept: Vec<Candidate> = Vec::new();
+    let mut confused: Vec<Candidate> = Vec::new();
+    for c in out {
+        let bucket = if c.confusable.is_some() { &mut confused } else { &mut kept };
+        if bucket.len() < MAX_CANDIDATES {
+            bucket.push(c);
+        }
+    }
+    kept.extend(confused);
+    kept
 }
 
 /// One shared neighbour is already strong; ten are not ten times stronger.
@@ -263,79 +294,195 @@ pub fn pair(a: &str, b: &str) -> (String, String) {
     }
 }
 
-fn parse_raw(raw: &str) -> NameParts {
-    names::parse(&raw.split_whitespace().map(String::from).collect::<Vec<_>>())
+// ----------------------------------------------------------- the spelling ---
+
+/// A name split into the parts that can be compared with another name's.
+///
+/// `names::parse` does the work; the nasab chain is split into its links so
+/// that the first can be compared with the first, and every part is put in
+/// the one spelling used for comparison.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Slots {
+    pub kunya: Option<String>,
+    pub ism: Option<String>,
+    /// One entry per `بن X` link, in order, without the connector.
+    pub nasab: Vec<String>,
+    pub nisba: Option<String>,
 }
 
-// ------------------------------------------------------------- spelling ---
-
-pub fn string_similarity(a_norm: &str, b_norm: &str, a: &NameParts, b: &NameParts) -> f64 {
-    let lev = lev_ratio(a_norm, b_norm);
-    let tokens = containment(&words(a_norm), &words(b_norm));
-    match part_agreement(a, b) {
-        Some(parts) => 0.5 * parts + 0.3 * tokens + 0.2 * lev,
-        // Nothing the parser placed on both sides: fall back to the words.
-        None => 0.6 * tokens + 0.4 * lev,
+pub fn slots(raw: &str) -> Slots {
+    let p = names::parse(&raw.split_whitespace().map(String::from).collect::<Vec<_>>());
+    Slots {
+        kunya: p.kunya.as_deref().map(canon),
+        ism: p.ism.as_deref().map(canon),
+        nasab: p.nasab.as_deref().map(split_nasab).unwrap_or_default(),
+        nisba: p.nisba.as_deref().map(canon),
     }
 }
 
-fn words(s: &str) -> HashSet<String> {
-    s.split_whitespace().map(|w| w.to_string()).collect()
-}
-
-/// How much of the shorter name the longer one contains. `أحمد بن علي`
-/// inside `أحمد بن علي بن جعفر` is 1.0, which is the point: a fuller name is
-/// not a different name.
-fn containment(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
-    if a.is_empty() || b.is_empty() {
-        return 0.0;
+impl Slots {
+    fn count(&self) -> usize {
+        self.kunya.is_some() as usize + self.ism.is_some() as usize + self.nasab.len() + self.nisba.is_some() as usize
     }
-    a.intersection(b).count() as f64 / a.len().min(b.len()) as f64
+
+    /// What the name is chiefly called: the ism, or what stands in for it.
+    /// A one-word name is the head of a longer one, not one of its
+    /// genealogy: `الجنيد` is `الجنيد بن محمد`, but it is not `ابراهيم بن
+    /// الجنيد`, who is his son, nor `خادمة الجنيد`, who is his servant.
+    fn head(&self) -> Option<&String> {
+        self.ism.as_ref().or(self.nisba.as_ref()).or(self.kunya.as_ref()).or(self.nasab.first())
+    }
+
+    fn all(&self) -> Vec<&String> {
+        let mut v: Vec<&String> = Vec::new();
+        v.extend(self.kunya.iter());
+        v.extend(self.ism.iter());
+        v.extend(self.nasab.iter());
+        v.extend(self.nisba.iter());
+        v
+    }
 }
 
-/// Agreement over the parts both names have. `None` when they share none.
-fn part_agreement(a: &NameParts, b: &NameParts) -> Option<f64> {
-    let mut total = 0.0;
-    let mut weight = 0.0;
-    let mut add = |w: f64, x: &Option<String>, y: &Option<String>| {
-        if let (Some(x), Some(y)) = (x, y) {
-            weight += w;
-            total += w * containment(&words(x), &words(y));
+/// `بن احمد بن زياد` → `["احمد", "زياد"]`.
+fn split_nasab(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur: Vec<&str> = Vec::new();
+    for w in s.split_whitespace() {
+        if names::NASAB.contains(&w) {
+            if !cur.is_empty() {
+                out.push(canon(&cur.join(" ")));
+                cur.clear();
+            }
+        } else {
+            cur.push(w);
+        }
+    }
+    if !cur.is_empty() {
+        out.push(canon(&cur.join(" ")));
+    }
+    out
+}
+
+/// The one spelling a part is compared in: the engine's normalisation (which
+/// `names::parse` has already applied), tāʾ marbūṭa folded to hāʾ, the kunya
+/// heads and the two spellings of `بن` unified, and the spaces taken out so
+/// that `عبد الله` and `عبدالله` are one word.
+pub fn canon(s: &str) -> String {
+    s.split_whitespace()
+        .map(|w| match w {
+            "ابا" | "ابي" => "ابو",
+            "ابن" => "بن",
+            "ابنة" => "بنت",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+        .replace('ة', "ه")
+}
+
+/// Spellings of one name. Not similar names: the same name written the way
+/// the manuscripts write it.
+const VARIANTS: [(&str, &str); 7] = [
+    ("اسمعيل", "اسماعيل"),
+    ("اسحق", "اسحاق"),
+    ("ابرهيم", "ابراهيم"),
+    ("هرون", "هارون"),
+    ("سليمن", "سليمان"),
+    ("داود", "داوود"),
+    ("يحي", "يحيي"),
+];
+
+/// Names that are genuinely mistaken for one another by scribes and by
+/// readers. A pair that needs one of these is never a candidate: it is
+/// shown apart, under its own heading, for a person to decide.
+const CONFUSABLE: [(&str, &str); 5] = [
+    ("الحسن", "الحسين"),
+    ("حسن", "حسين"),
+    ("سعد", "سعيد"),
+    ("عمر", "عمرو"),
+    ("احمد", "محمد"),
+];
+
+fn listed(table: &[(&str, &str)], a: &str, b: &str) -> bool {
+    table.iter().any(|(x, y)| (a == *x && b == *y) || (a == *y && b == *x))
+}
+
+/// The same part, written either of the ways it is written.
+fn same(a: &str, b: &str) -> bool {
+    a == b || listed(&VARIANTS, a, b)
+}
+
+fn confusable(a: &str, b: &str) -> bool {
+    listed(&CONFUSABLE, a, b)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Gate {
+    Pass { matched: Vec<String> },
+    Confused { matched: Vec<String>, confusion: String },
+    Fail,
+}
+
+/// Compare part with part. Every part the two names share must match.
+pub fn gate(a: &Slots, b: &Slots) -> Gate {
+    // A name of one part is almost always the longer name cut short, and
+    // which part the parser called it is a coin toss: `الجنيد` alone is an
+    // ism in one chain and a nisba in the next. So it is matched against any
+    // part of the other name — but strictly, with no confusable allowed.
+    if a.count() <= 1 || b.count() <= 1 {
+        let (short, long) = if a.count() <= b.count() { (a, b) } else { (b, a) };
+        let (Some(one), Some(head)) = (short.all().first().cloned(), long.head()) else { return Gate::Fail };
+        return if same(one, head) {
+            Gate::Pass { matched: vec!["name".into()] }
+        } else {
+            Gate::Fail
+        };
+    }
+
+    let mut matched: Vec<String> = Vec::new();
+    let mut confusion: Option<String> = None;
+    let mut compare = |label: String, x: &str, y: &str| -> bool {
+        if same(x, y) {
+            matched.push(label);
+            true
+        } else if confusable(x, y) && confusion.is_none() {
+            confusion = Some(format!("{} / {}", x, y));
+            true
+        } else {
+            false
         }
     };
-    add(0.40, &a.ism, &b.ism);
-    add(0.30, &a.nasab, &b.nasab);
-    add(0.20, &a.nisba, &b.nisba);
-    add(0.10, &a.kunya, &b.kunya);
-    if weight == 0.0 {
-        None
-    } else {
-        Some(total / weight)
-    }
-}
 
-fn lev_ratio(a: &str, b: &str) -> f64 {
-    let x: Vec<char> = a.chars().collect();
-    let y: Vec<char> = b.chars().collect();
-    let longest = x.len().max(y.len());
-    if longest == 0 {
-        return 1.0;
-    }
-    1.0 - levenshtein(&x, &y) as f64 / longest as f64
-}
-
-fn levenshtein(a: &[char], b: &[char]) -> usize {
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let cost = if ca == cb { 0 } else { 1 };
-            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+    if let (Some(x), Some(y)) = (&a.kunya, &b.kunya) {
+        if !compare("kunya".into(), x, y) {
+            return Gate::Fail;
         }
-        std::mem::swap(&mut prev, &mut cur);
     }
-    prev[b.len()]
+    if let (Some(x), Some(y)) = (&a.ism, &b.ism) {
+        if !compare("ism".into(), x, y) {
+            return Gate::Fail;
+        }
+    }
+    for (i, (x, y)) in a.nasab.iter().zip(b.nasab.iter()).enumerate() {
+        if !compare(format!("nasab {}", i + 1), x, y) {
+            return Gate::Fail;
+        }
+    }
+    if let (Some(x), Some(y)) = (&a.nisba, &b.nisba) {
+        if !compare("nisba".into(), x, y) {
+            return Gate::Fail;
+        }
+    }
+
+    // Two names that share no part at all are not a pair; they are two names
+    // that happen to be in the same book.
+    if matched.is_empty() && confusion.is_none() {
+        return Gate::Fail;
+    }
+    match confusion {
+        Some(c) => Gate::Confused { matched, confusion: c },
+        None => Gate::Pass { matched },
+    }
 }
 
 #[cfg(test)]
@@ -355,47 +502,119 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_fuller_name_is_not_a_different_name() {
-        let short = "احمد بن علي";
-        let long = "احمد بن علي بن جعفر";
-        let other = "احمد بن عمر";
-        let s = string_similarity(short, long, &parse_raw(short), &parse_raw(long));
-        let d = string_similarity(short, other, &parse_raw(short), &parse_raw(other));
-        assert!(s > d, "{} should beat {}", s, d);
-        assert!(s > 0.75, "{}", s);
+    fn g(a: &str, b: &str) -> Gate {
+        gate(&slots(a), &slots(b))
+    }
+
+    fn passes(a: &str, b: &str) -> bool {
+        matches!(g(a, b), Gate::Pass { .. })
     }
 
     #[test]
-    fn character_overlap_alone_does_not_decide() {
-        // Same length, one letter apart, but a different man.
-        let a = "علي بن حسن";
-        let b = "علي بن حسين";
-        let s = string_similarity(a, b, &parse_raw(a), &parse_raw(b));
-        assert!(s < 0.9, "{}", s);
+    fn truncation_passes_because_it_is_the_same_man() {
+        // The whole point: a shorter name is the longer one cut off.
+        assert!(passes("احمد بن علي", "احمد بن علي بن جعفر"));
+        assert!(passes("احمد بن علي بن جعفر", "احمد بن علي"));
+        // What matched is the part the two share, not the part only one has.
+        match g("احمد بن علي", "احمد بن علي بن جعفر") {
+            Gate::Pass { matched } => assert_eq!(matched, vec!["ism", "nasab 1"]),
+            other => panic!("{:?}", other),
+        }
     }
 
     #[test]
-    fn shared_company_outweighs_spelling() {
-        // Two spellings of one man, each between the same teacher and the
-        // same student, in two chains.
+    fn a_letter_apart_is_still_two_men() {
+        // Edit distance rated these close. They are different people.
+        assert!(!passes("جابر", "جاحظ"));
+        assert!(!passes("الحسن بن محمد", "الحسين بن محمود"));
+        assert!(!passes("علي بن حسن", "علي بن حسين") || matches!(g("علي بن حسن", "علي بن حسين"), Gate::Confused { .. }));
+    }
+
+    #[test]
+    fn a_part_that_disagrees_fails_however_alike_the_rest() {
+        assert!(!passes("احمد بن علي", "احمد بن عمر"));
+        assert!(!passes("محمد بن سعيد الطوسي", "محمد بن سعيد البغدادي"));
+        // Nothing in common at all is not a pair either.
+        assert!(!passes("الجنيد", "سهل بن عبد الله"));
+    }
+
+    #[test]
+    fn one_name_is_written_several_ways() {
+        assert!(passes("عبد الله بن عمر", "عبدالله بن عمر"));
+        assert!(passes("اسمعيل بن احمد", "اسماعيل بن احمد"));
+        assert!(passes("احمد بن ابراهيم", "احمد بن ابرهيم"));
+        // The hamza carriers and بن/ابن are folded before any of this.
+        assert!(passes("أحمد بن علي", "احمد ابن علي"));
+        // And tāʾ marbūṭa.
+        assert!(passes("عائشة بنت طلحة", "عايشه بنت طلحه"));
+    }
+
+    #[test]
+    fn a_confusable_pair_is_held_apart_and_named() {
+        match g("الحسن بن محمد", "الحسين بن محمد") {
+            Gate::Confused { matched, confusion } => {
+                assert_eq!(matched, vec!["nasab 1"]);
+                assert_eq!(confusion, "الحسن / الحسين");
+            }
+            other => panic!("{:?}", other),
+        }
+        // One confusable is a question; two are a different man.
+        assert!(!passes("الحسن بن سعد", "الحسين بن سعيد"));
+        assert!(matches!(g("الحسن بن سعد", "الحسين بن سعيد"), Gate::Fail));
+    }
+
+    #[test]
+    fn a_single_part_name_is_strict() {
+        // It may match any part, because which part it is is a coin toss.
+        assert!(passes("الجنيد", "الجنيد بن محمد الصوفي"));
+        assert!(passes("مالك", "مالك بن انس"));
+        // But it must be the head of the longer name, not a link in its
+        // genealogy: the son and the servant are not the man.
+        assert!(!passes("الجنيد", "ابراهيم بن الجنيد"));
+        assert!(!passes("الجنيد", "خادمة الجنيد"));
+        assert!(!passes("علي", "احمد بن علي بن جعفر"));
+        // And nothing is allowed to be nearly right.
+        assert!(!passes("الحسن", "الحسين بن محمد"));
+        assert!(!passes("سعد", "سعيد بن جبير"));
+        assert!(matches!(g("الحسن", "الحسين"), Gate::Fail));
+    }
+
+    #[test]
+    fn company_ranks_the_survivors_and_rescues_nobody() {
         let links = vec![
+            // Two spellings of one man between the same pair.
             link(1, 2, "الجنيد"),
             link(1, 1, "احمد بن علي"),
             link(1, 0, "ابو نصر"),
             link(2, 2, "الجنيد"),
             link(2, 1, "احمد بن علي بن جعفر"),
             link(2, 0, "ابو نصر"),
-            // A stranger who merely spells alike.
-            link(3, 0, "احمد بن عمر"),
+            // A stranger who keeps exactly the same company.
+            link(3, 2, "الجنيد"),
+            link(3, 1, "سهل بن عبد الله"),
+            link(3, 0, "ابو نصر"),
         ];
         let c = candidates(&links, &names::form_norm("احمد بن علي"), &HashSet::new(), &HashMap::new());
+        assert_eq!(c.len(), 1, "{:?}", c.iter().map(|x| &x.raw).collect::<Vec<_>>());
         assert_eq!(c[0].form_norm, names::form_norm("احمد بن علي بن جعفر"));
-        assert_eq!(c[0].shared_from, 1);
-        assert_eq!(c[0].shared_to, 1);
-        assert!(c[0].score > 0.7, "{}", c[0].score);
-        // And the stranger is behind it, on spelling alone.
-        assert!(c.len() < 2 || c[1].score < c[0].score);
+        assert_eq!((c[0].shared_from, c[0].shared_to), (1, 1));
+        // The stranger shared both neighbours too, and is still not offered.
+        assert!(c.iter().all(|x| x.raw != "سهل بن عبد الله"));
+    }
+
+    #[test]
+    fn the_confused_come_after_the_candidates() {
+        let links = vec![
+            link(1, 0, "الحسن بن محمد"),
+            link(2, 0, "الحسن بن محمد الطوسي"),
+            link(3, 0, "الحسين بن محمد"),
+        ];
+        let c = candidates(&links, &names::form_norm("الحسن بن محمد"), &HashSet::new(), &HashMap::new());
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].raw, "الحسن بن محمد الطوسي");
+        assert_eq!(c[0].confusable, None);
+        assert_eq!(c[1].raw, "الحسين بن محمد");
+        assert_eq!(c[1].confusable.as_deref(), Some("الحسن / الحسين"));
     }
 
     #[test]
@@ -433,5 +652,12 @@ mod tests {
         assert_eq!(f[0].count, 3);
         assert_eq!(f[0].raw, "احمد بن علي");
         assert_eq!(f[1].count, 1);
+    }
+
+    #[test]
+    fn the_nasab_chain_is_compared_link_by_link() {
+        assert_eq!(slots("احمد بن علي بن جعفر").nasab, vec!["علي", "جعفر"]);
+        // Same links, different order: not the same man.
+        assert!(!passes("احمد بن علي بن جعفر", "احمد بن جعفر بن علي"));
     }
 }
