@@ -106,6 +106,13 @@ export interface MatchRow {
    * that spans pages.
    */
   target_end: PageRef | null;
+  /**
+   * The page the query span ends on, when it runs over a break. Windows are
+   * cut against the book's token stream, not per page, so `tok_start`,
+   * `tok_end` and the query side of `pairs` are offsets from the page the
+   * match starts on and may run past its last token.
+   */
+  query_end: PageRef | null;
   target_title: string | null;
   target_author: number | null;
   /** The author's name, for the row's hover card (Phase 7 C2). */

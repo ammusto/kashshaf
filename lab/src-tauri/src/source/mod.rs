@@ -60,7 +60,7 @@ pub struct Page {
 /// Where a page sits in a book, without its text. Reading order is ascending
 /// `(part_index, page_id)`, which is how the index is built and what
 /// `kashshaf-engine`'s reading-order check verifies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PageRef {
     pub book_id: u64,
     pub part_index: u32,

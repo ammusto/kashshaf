@@ -104,6 +104,7 @@ const match = (id: number, score: number, kind: MatchRow['kind'], banal = 0.2): 
   zone: null,
   anchor_hits: 3,
   target_end: null,
+  query_end: null,
   user_verdict: null,
 });
 

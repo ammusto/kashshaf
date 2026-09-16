@@ -247,6 +247,19 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE reuse_match ADD COLUMN target_end_page_id INTEGER;
     "#,
     },
+    Migration {
+        version: 9,
+        name: "reuse match over a page break, query side",
+        // Windows are cut against the book's token stream rather than per
+        // page, so a match can begin on one page and end on the next on the
+        // query side too. `tok_start`, `tok_end` and the query side of
+        // `pairs_json` are offsets from the page the match starts on. NULL
+        // means it ends where it starts.
+        sql: r#"
+        ALTER TABLE reuse_match ADD COLUMN query_end_part_index INTEGER;
+        ALTER TABLE reuse_match ADD COLUMN query_end_page_id INTEGER;
+    "#,
+    },
 ];
 
 fn migration_sql(m: &Migration) -> String {
@@ -466,6 +479,35 @@ mod tests {
         }
         let status: String = conn.query_row("SELECT status FROM isnad WHERE id = 1", [], |r| r.get(0)).unwrap();
         assert_eq!(status, "confirmed", "the Phase 2 isnād survives");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A schema-8 database gains the query-side end-page columns.
+    #[test]
+    fn a_schema_8_database_migrates_to_the_query_end_page_columns() {
+        let dir = temp("from-v8");
+        let path = dir.join("analysis.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..8] {
+                conn.execute_batch(&migration_sql(m)).unwrap();
+            }
+            conn.execute("INSERT INTO lab_info (key, value) VALUES ('schema_version', '8')", []).unwrap();
+            conn.execute("INSERT INTO reuse_run (corpus_version, book_id, mode, params_json, started_at, status) VALUES ('4.1.0', 1, 'book', '{}', 't', 'done')", []).unwrap();
+            conn.execute(
+                "INSERT INTO reuse_match (run_id, corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash,                  target_book_id, target_part_index, target_page_id, target_tok_start, target_tok_end, score, type, target_end_page_id)                  VALUES (1, '4.1.0', 1, 0, 1, 0, 9, 'x', 'h', 2, 0, 5, 1, 9, 0.8, 'verbatim', 6)",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.schema_version().unwrap(), target_schema_version());
+        let conn = store.connect().unwrap();
+        let (qp, qg, tg): (Option<i64>, Option<i64>, Option<i64>) = conn
+            .query_row("SELECT query_end_part_index, query_end_page_id, target_end_page_id FROM reuse_match WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!((qp, qg), (None, None), "an old match's query span ends where it starts");
+        assert_eq!(tg, Some(6), "and its target end survives");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

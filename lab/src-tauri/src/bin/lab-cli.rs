@@ -243,10 +243,16 @@ impl Ctx {
 
     fn passage(&self, page: &Page, a: usize, b: usize, exclude_book: Option<u64>) -> Result<reuse::PassageRun> {
         let zones = self.zones(page);
+        self.passage_over(std::slice::from_ref(page), a..b, &zones, exclude_book)
+    }
+
+    /// The same over a run of pages in reading order, which is what a window
+    /// cut against the book's token stream needs.
+    fn passage_over(&self, pages: &[Page], range: std::ops::Range<usize>, zones: &[Option<Zone>], exclude_book: Option<u64>) -> Result<reuse::PassageRun> {
         let load = |r: &PageRef| self.load(r);
         let around = |r: &PageRef, n: usize| self.around(r, n);
         let count = |t: &[String]| reuse::phrase_df(&self.source, t);
-        reuse::passage(&self.source, &self.freq, &self.params, &[], page, a..b, &zones, exclude_book, &count, &load, &around, &|| false)
+        reuse::passage(&self.source, &self.freq, &self.params, &[], pages, range, zones, exclude_book, &count, &load, &around, &|| false)
     }
 }
 
@@ -358,9 +364,8 @@ fn reuse_find(args: &[String]) -> Result<()> {
     let exclude_same = args.iter().any(|a| a == "--exclude-same-book");
     let limit: usize = arg(args, "--limit").map(|s| s.parse()).transpose()?.unwrap_or(5);
     // One book to compare against, for a head-to-head with another system.
-    // The search is still the whole corpus -- that is what Lab does, and
-    // pretending otherwise would flatter its running time -- but only the
-    // matches landing in this book are reported.
+    // `--pairwise` pushes it into retrieval; without it the search is still
+    // the whole corpus and only the matches landing here are reported.
     let only: Option<u64> = arg(args, "--target-book").map(|s| s.parse()).transpose()?;
     let keep_formulaic = args.iter().any(|a| a == "--include-formulaic");
     let mut jsonl = match arg(args, "--jsonl") {
@@ -370,76 +375,126 @@ fn reuse_find(args: &[String]) -> Result<()> {
     let started = std::time::Instant::now();
     let mut found = 0usize;
     let p = &ctx.params;
-    for r in page_range(args, &ctx.source, book)? {
-        let Some(page) = ctx.source.page(r.book_id, r.part_index, r.page_id)? else { continue };
-        // Every window of the page first, then one merge, as the app does
-        // (`commands::reuse` book mode). Emitting per window reports the same
-        // passage once per window that covers it, and on a book whose entries
-        // run longer than a window that is a great many rows.
-        let own = PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id };
-        let mut page_matches: Vec<(PageRef, reuse::Match)> = Vec::new();
-        for w in reuse::windows(page.tokens.len(), p.window, p.stride, p.min_aligned) {
-            let run = ctx.passage(&page, w.start, w.end, if exclude_same { Some(book) } else { None })?;
-            page_matches.extend(run.matches.into_iter().map(|m| (own, m)));
-        }
-        let mut merged = reuse::merge_overlapping(page_matches);
-        // `--limit` is per page, so the page's best come first.
-        merged.sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal));
-        {
-            for m in merged
-                .iter()
-                .map(|(_, m)| m)
-                .filter(|m| {
-                    m.score >= p.threshold
-                        && only.map_or(true, |t| m.target.book_id == t)
-                        // Formulaic is recorded, not reported -- the panel's
-                        // type filter leaves it out by default, and a report
-                        // that included it would not be the one a reader sees.
-                        && (keep_formulaic || m.kind != reuse::MatchType::Formulaic)
-                })
-                .take(limit)
-            {
-                found += 1;
-                if let Some(w) = jsonl.as_mut() {
-                    use std::io::Write;
-                    writeln!(
-                        w,
-                        "{}",
-                        serde_json::json!({
-                            "q_book": page.book_id, "q_part": page.part_index, "q_page": page.page_id,
-                            "q_start": m.q_start, "q_end": m.q_end,
-                            "t_book": m.target.book_id, "t_part": m.target.part_index, "t_page": m.target.page_id,
-                            "t_end_part": m.target_end.map(|p| p.part_index), "t_end_page": m.target_end.map(|p| p.page_id),
-                            "t_start": m.t_start, "t_end": m.t_end,
-                            "score": m.score, "kind": m.kind.as_str(), "zone": m.zone.map(|z| z.as_str()),
-                            "coverage": m.components.coverage,
-                            "lemma_agree": m.components.lemma_agree,
-                            "root_agree": m.components.root_agree,
-                            "surface_agree": m.components.surface_agree,
-                            "banal_share": m.components.banal_share,
-                            "aligned": m.components.aligned,
-                        })
-                    )?;
-                }
-                if jsonl.is_some() {
-                    continue;
-                }
-                let Some(tp) = ctx.source.page(m.target.book_id, m.target.part_index, m.target.page_id)? else { continue };
-                let title = ctx.source.book(m.target.book_id)?.map(|b| b.title).unwrap_or_default();
-                println!(
-                    "Q {}:{}:{} [{}..{}]  →  T {}:{}:{} [{}..{}]  score {:.3} {} cov {:.2} lem {:.2} surf {:.2} banal {:.2} zone {}  {}",
-                    page.book_id, page.part_index, page.page_id, m.q_start, m.q_end,
-                    m.target.book_id, m.target.part_index, m.target.page_id, m.t_start, m.t_end,
-                    m.score, m.kind.as_str(), m.components.coverage, m.components.lemma_agree, m.components.surface_agree, m.components.banal_share,
-                    m.zone.map(|z| z.as_str()).unwrap_or("-"), title
-                );
-                println!("   q: {}", text_of(&page, m.q_start, m.q_end));
-                println!("   t: {}", text_of(&tp, m.t_start, m.t_end));
+
+    // Windows are cut against the book's token stream, not per page, so a
+    // first pass reads the page lengths. Matches are then grouped by the page
+    // each one starts on, and a page is written out once the windows have
+    // moved past it -- a window reaches into the next page, so a page's last
+    // match is not known until then.
+    let refs = page_range(args, &ctx.source, book)?;
+    let mut lens: Vec<usize> = Vec::with_capacity(refs.len());
+    for r in &refs {
+        lens.push(ctx.load(r)?.map(|x| x.tokens.len()).unwrap_or(0));
+    }
+    let wins = reuse::stream_windows(&lens, p.window, p.stride, p.min_aligned);
+    let mut pending: HashMap<usize, Vec<(PageRef, reuse::Match)>> = HashMap::new();
+    let mut zcache: HashMap<usize, Vec<Option<Zone>>> = HashMap::new();
+    let mut flushed = 0usize;
+
+    for w in &wins {
+        let mut pages: Vec<Page> = Vec::new();
+        let mut zones: Vec<Option<Zone>> = Vec::new();
+        for pi in w.first_page..=w.last_page {
+            let Some(pg) = ctx.load(&refs[pi])? else { continue };
+            if !zcache.contains_key(&pi) {
+                let z = ctx.zones(&pg);
+                zcache.insert(pi, z);
             }
+            zones.extend(zcache[&pi].iter().copied());
+            pages.push(pg);
         }
+        if pages.is_empty() {
+            continue;
+        }
+        let run = ctx.passage_over(&pages, w.range.clone(), &zones, if exclude_same { Some(book) } else { None })?;
+        for m in run.matches {
+            let pi = (w.first_page..=w.last_page)
+                .find(|&k| refs[k].part_index == m.query.part_index && refs[k].page_id == m.query.page_id)
+                .unwrap_or(w.first_page);
+            pending.entry(pi).or_default().push((m.query, m));
+        }
+        while flushed < w.first_page {
+            emit_page(&ctx, &refs, flushed, &mut pending, &mut found, &mut jsonl, limit, only, keep_formulaic)?;
+            flushed += 1;
+        }
+        zcache.retain(|k, _| *k >= w.first_page);
+    }
+    for pi in flushed..refs.len() {
+        emit_page(&ctx, &refs, pi, &mut pending, &mut found, &mut jsonl, limit, only, keep_formulaic)?;
     }
     if jsonl.is_some() {
         println!("{} matches in {} ms", found, started.elapsed().as_millis());
+    }
+    Ok(())
+}
+
+/// One page's matches, merged and reported. `--limit` is per page, over the
+/// merged matches sorted by score, which is what it reads as.
+#[allow(clippy::too_many_arguments)]
+fn emit_page(
+    ctx: &Ctx,
+    refs: &[PageRef],
+    pi: usize,
+    pending: &mut HashMap<usize, Vec<(PageRef, reuse::Match)>>,
+    found: &mut usize,
+    jsonl: &mut Option<std::io::BufWriter<std::fs::File>>,
+    limit: usize,
+    only: Option<u64>,
+    keep_formulaic: bool,
+) -> Result<()> {
+    let Some(ms) = pending.remove(&pi) else { return Ok(()) };
+    let Some(page) = ctx.load(&refs[pi])? else { return Ok(()) };
+    let p = &ctx.params;
+    let mut merged = reuse::merge_overlapping(ms);
+    merged.sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal));
+    for m in merged
+        .iter()
+        .map(|(_, m)| m)
+        .filter(|m| {
+            m.score >= p.threshold
+                && only.map_or(true, |t| m.target.book_id == t)
+                // Formulaic is recorded, not reported -- the panel's type
+                // filter leaves it out by default, and a report that included
+                // it would not be the one a reader sees.
+                && (keep_formulaic || m.kind != reuse::MatchType::Formulaic)
+        })
+        .take(limit)
+    {
+        *found += 1;
+        if let Some(w) = jsonl.as_mut() {
+            use std::io::Write;
+            writeln!(
+                w,
+                "{}",
+                serde_json::json!({
+                    "q_book": page.book_id, "q_part": page.part_index, "q_page": page.page_id,
+                    "q_end_part": m.query_end.map(|x| x.part_index), "q_end_page": m.query_end.map(|x| x.page_id),
+                    "q_start": m.q_start, "q_end": m.q_end,
+                    "t_book": m.target.book_id, "t_part": m.target.part_index, "t_page": m.target.page_id,
+                    "t_end_part": m.target_end.map(|x| x.part_index), "t_end_page": m.target_end.map(|x| x.page_id),
+                    "t_start": m.t_start, "t_end": m.t_end,
+                    "score": m.score, "kind": m.kind.as_str(), "zone": m.zone.map(|z| z.as_str()),
+                    "coverage": m.components.coverage,
+                    "lemma_agree": m.components.lemma_agree,
+                    "root_agree": m.components.root_agree,
+                    "surface_agree": m.components.surface_agree,
+                    "banal_share": m.components.banal_share,
+                    "aligned": m.components.aligned,
+                })
+            )?;
+            continue;
+        }
+        let Some(tp) = ctx.source.page(m.target.book_id, m.target.part_index, m.target.page_id)? else { continue };
+        let title = ctx.source.book(m.target.book_id)?.map(|b| b.title).unwrap_or_default();
+        println!(
+            "Q {}:{}:{} [{}..{}]  \u{2192}  T {}:{}:{} [{}..{}]  score {:.3} {} cov {:.2} lem {:.2} surf {:.2} banal {:.2} zone {}  {}",
+            page.book_id, page.part_index, page.page_id, m.q_start, m.q_end,
+            m.target.book_id, m.target.part_index, m.target.page_id, m.t_start, m.t_end,
+            m.score, m.kind.as_str(), m.components.coverage, m.components.lemma_agree, m.components.surface_agree, m.components.banal_share,
+            m.zone.map(|z| z.as_str()).unwrap_or("-"), title
+        );
+        println!("   q: {}", text_of(&page, m.q_start, m.q_end));
+        println!("   t: {}", text_of(&tp, m.t_start, m.t_end));
     }
     Ok(())
 }
@@ -510,7 +565,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         let cands = if anchors.is_empty() {
             Vec::new()
         } else {
-            reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)?
+            reuse::candidates(&ctx.source, &anchors, std::slice::from_ref(&own), None, non_banal, &pr)?
         };
         let hit = cands.iter().find(|c| c.page.part_index == want.part_index && c.page.page_id == want.page_id && c.page.book_id != book);
 

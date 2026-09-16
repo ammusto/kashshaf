@@ -204,13 +204,15 @@ fn finish_run(conn: &Connection, run_id: i64, status: &str) -> Result<(), LabErr
 }
 
 fn insert_match(conn: &Connection, run_id: i64, corpus_version: &str, page: &Page, m: &Match) -> Result<i64, LabError> {
+    // `page` is the match's own start page; the span may run past its end,
+    // and the snapshot stops there.
     let (snap, hash) = snapshot(page, m.q_start, m.q_end);
     conn.execute(
         "INSERT INTO reuse_match (run_id, corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
          target_book_id, target_part_index, target_page_id, target_tok_start, target_tok_end, score, type, \
          surface_agree, lemma_agree, root_agree, coverage, banality_factor, banal_share, aligned, anchor_hits, pairs_json, zone, \
-         target_end_part_index, target_end_page_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
+         target_end_part_index, target_end_page_id, query_end_part_index, query_end_page_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
         params![
             run_id,
             corpus_version,
@@ -240,6 +242,8 @@ fn insert_match(conn: &Connection, run_id: i64, corpus_version: &str, page: &Pag
             m.zone.map(|z| z.as_str()),
             m.target_end.map(|p| p.part_index as i64),
             m.target_end.map(|p| p.page_id as i64),
+            m.query_end.map(|p| p.part_index as i64),
+            m.query_end.map(|p| p.page_id as i64),
         ],
     )
     .map_err(dberr)?;
@@ -261,6 +265,9 @@ pub struct MatchRow {
     /// The page the span ends on when it runs over a break; `t_end` and the
     /// target side of `pairs` are offsets from `target`, past its last token.
     pub target_end: Option<PageRef>,
+    /// The same on the query side: windows are cut against the book's token
+    /// stream, so a match may begin on one page and end on the next.
+    pub query_end: Option<PageRef>,
     pub target_title: Option<String>,
     pub target_author: Option<i64>,
     /// The author's name, for the row's hover card (Phase 7 C2).
@@ -301,6 +308,10 @@ fn read_matches(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> 
                     (Some(p), Some(g)) => Some(PageRef { book_id: r.get::<_, i64>(8)? as u64, part_index: p as u32, page_id: g as u64 }),
                     _ => None,
                 },
+                query_end: match (r.get::<_, Option<i64>>(30)?, r.get::<_, Option<i64>>(31)?) {
+                    (Some(p), Some(g)) => Some(PageRef { book_id: r.get::<_, i64>(2)? as u64, part_index: p as u32, page_id: g as u64 }),
+                    _ => None,
+                },
                 target_title: None,
                 target_author: None,
                 target_author_name: None,
@@ -338,7 +349,7 @@ fn read_matches(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> 
 const MATCH_COLUMNS: &str = "id, run_id, book_id, part_index, page_id, tok_start, tok_end, snapshot, \
     target_book_id, target_part_index, target_page_id, target_tok_start, target_tok_end, snapshot_hash, score, type, \
     surface_agree, lemma_agree, root_agree, coverage, banality_factor, banal_share, aligned, anchor_hits, corpus_version, pairs_json, zone, user_verdict, \
-    target_end_part_index, target_end_page_id";
+    target_end_part_index, target_end_page_id, query_end_part_index, query_end_page_id";
 
 /// Fill target titles from the source's book list, once per distinct book.
 fn with_titles(source: &dyn BookSource, rows: &mut [MatchRow]) {
@@ -435,7 +446,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             &s.freq,
             &s.params,
             &s.banal_phrases,
-            &page,
+            std::slice::from_ref(&page),
             a..b,
             &zones,
             if args.exclude_same_book { Some(args.book_id) } else { None },
@@ -615,14 +626,29 @@ fn require_local(h: &Handles) -> Result<(), LabError> {
 }
 
 /// Count every window of the book (§4.3 batch mode).
-fn book_windows(book: &crate::state::LoadedBook, p: &Params) -> Vec<(usize, std::ops::Range<usize>)> {
+fn book_windows(book: &crate::state::LoadedBook, p: &Params) -> Vec<reuse::StreamWindow> {
+    let lens: Vec<usize> = book.pages.iter().map(|x| x.tokens.len()).collect();
+    reuse::stream_windows(&lens, p.window, p.stride, p.min_aligned)
+}
+
+/// The zones of a run of pages, concatenated, from the per-page cache.
+fn zones_of<'a>(
+    conn: &Connection,
+    s: &Setup,
+    book: &'a crate::state::LoadedBook,
+    cache: &mut HashMap<usize, Vec<Option<Zone>>>,
+    first: usize,
+    last: usize,
+) -> Result<Vec<Option<Zone>>, LabError> {
     let mut out = Vec::new();
-    for (pi, page) in book.pages.iter().enumerate() {
-        for w in reuse::windows(page.tokens.len(), p.window, p.stride, p.min_aligned) {
-            out.push((pi, w));
+    for pi in first..=last {
+        if !cache.contains_key(&pi) {
+            let z = zones_for(conn, s, &book.pages[pi])?;
+            cache.insert(pi, z);
         }
+        out.extend(cache[&pi].iter().copied());
     }
-    out
+    Ok(out)
 }
 
 /// A 20-window trial for the time estimate shown before a book run.
@@ -640,13 +666,13 @@ pub async fn reuse_estimate(
         let conn = db(&h)?;
         let s = setup(&h, &conn, params, Some(&window))?;
         let book = crate::commands::stats::load_book(&h, Some(&window), book_id)?;
-        let windows: Vec<(usize, std::ops::Range<usize>)> = book_windows(&book, &s.params)
+        let windows: Vec<reuse::StreamWindow> = book_windows(&book, &s.params)
             .into_iter()
-            .filter(|(pi, _)| span.map(|sp| sp.contains(book.pages[*pi].part_index, book.pages[*pi].page_id)).unwrap_or(true))
+            .filter(|w| span.map(|sp| sp.contains(book.pages[w.first_page].part_index, book.pages[w.first_page].page_id)).unwrap_or(true))
             .collect();
         // Sample from the middle of the book: front matter is atypical.
         let n = windows.len();
-        let sample: Vec<&(usize, std::ops::Range<usize>)> = if n <= 20 { windows.iter().collect() } else { windows.iter().skip(n / 2 - 10).take(20).collect() };
+        let sample: Vec<&reuse::StreamWindow> = if n <= 20 { windows.iter().collect() } else { windows.iter().skip(n / 2 - 10).take(20).collect() };
         let cache = PageCache::new(h.source.as_ref());
         let load = |r: &PageRef| cache.get(r);
         let around = |r: &PageRef, n: usize| cache.around(r, n);
@@ -659,21 +685,26 @@ pub async fn reuse_estimate(
         // is the slow part and a reader who changes their mind should not
         // have to wait for twenty windows to finish.
         h.cancel.store(false, Ordering::SeqCst);
-        for (pi, w) in &sample {
+        for w in &sample {
             if h.should_stop() {
                 break;
             }
-            let page = &book.pages[*pi];
-            let zones = match zone_cache.get(pi) {
-                Some(z) => z.clone(),
-                None => {
-                    let z = zones_for(&conn, &s, page)?;
-                    zone_cache.insert(*pi, z.clone());
-                    z
-                }
-            };
-            let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w.clone(), &zones, Some(book_id), &count, &load, &around, &|| false)
-                .map_err(|e| LabError::Source(e.to_string()))?;
+            let zones = zones_of(&conn, &s, &book, &mut zone_cache, w.first_page, w.last_page)?;
+            let run = reuse::passage(
+                h.source.as_ref(),
+                &s.freq,
+                &s.params,
+                &s.banal_phrases,
+                &book.pages[w.first_page..=w.last_page],
+                w.range.clone(),
+                &zones,
+                Some(book_id),
+                &count,
+                &load,
+                &around,
+                &|| false,
+            )
+            .map_err(|e| LabError::Source(e.to_string()))?;
             found += run.matches.len();
         }
         let sample_ms = started.elapsed().as_millis() as u64;
@@ -725,9 +756,9 @@ pub async fn reuse_book(
         let conn = db(&h)?;
         let s = setup(&h, &conn, params, Some(&window))?;
         let book = crate::commands::stats::load_book(&h, Some(&window), book_id)?;
-        let windows: Vec<(usize, std::ops::Range<usize>)> = book_windows(&book, &s.params)
+        let windows: Vec<reuse::StreamWindow> = book_windows(&book, &s.params)
             .into_iter()
-            .filter(|(pi, _)| span.map(|sp| sp.contains(book.pages[*pi].part_index, book.pages[*pi].page_id)).unwrap_or(true))
+            .filter(|w| span.map(|sp| sp.contains(book.pages[w.first_page].part_index, book.pages[w.first_page].page_id)).unwrap_or(true))
             .collect();
         h.cancel.store(false, Ordering::SeqCst);
         let run_id = insert_run(&conn, h.source.corpus_version(), book_id, "book", &s.params)?;
@@ -741,53 +772,82 @@ pub async fn reuse_book(
         let mut windows_done = 0usize;
         let mut pages_done = 0usize;
         let mut cancelled = false;
-        let mut wi = 0usize;
-        for (pi, page) in book.pages.iter().enumerate() {
-            if !windows.iter().any(|(w, _)| *w == pi) {
-                continue;
-            }
+        // Matches are grouped by the page they start on, and a page is
+        // finished when the windows have moved past it -- a window may reach
+        // into the next page, so a page's last match is not known until then.
+        let mut zone_cache: HashMap<usize, Vec<Option<Zone>>> = HashMap::new();
+        let mut pending: HashMap<usize, Vec<(PageRef, Match)>> = HashMap::new();
+        let mut flushed = 0usize;
+        for w in &windows {
             if h.should_stop() {
                 cancelled = true;
                 break;
             }
-            let zones = zones_for(&conn, &s, page)?;
-            let mut page_matches: Vec<(PageRef, Match)> = Vec::new();
-            let qref = PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id };
-            while wi < windows.len() && windows[wi].0 < pi {
-                wi += 1;
+            let zones = zones_of(&conn, &s, &book, &mut zone_cache, w.first_page, w.last_page)?;
+            let run = reuse::passage(
+                h.source.as_ref(),
+                &s.freq,
+                &s.params,
+                &s.banal_phrases,
+                &book.pages[w.first_page..=w.last_page],
+                w.range.clone(),
+                &zones,
+                Some(book_id),
+                &count,
+                &load,
+                &around,
+                &|| h.should_stop(),
+            )
+            .map_err(|e| LabError::Source(e.to_string()))?;
+            for m in run.matches {
+                let pi = book
+                    .pages
+                    .iter()
+                    .enumerate()
+                    .skip(w.first_page)
+                    .find(|(_, p)| p.part_index == m.query.part_index && p.page_id == m.query.page_id)
+                    .map(|(i, _)| i)
+                    .unwrap_or(w.first_page);
+                pending.entry(pi).or_default().push((m.query, m));
             }
-            while wi < windows.len() && windows[wi].0 == pi {
-                let w = windows[wi].1.clone();
-                let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w, &zones, Some(book_id), &count, &load, &around, &|| h.should_stop())
-                    .map_err(|e| LabError::Source(e.to_string()))?;
-                for m in run.matches {
-                    page_matches.push((qref.clone(), m));
+            windows_done += 1;
+            // Everything before this window's first page is complete.
+            while flushed < w.first_page {
+                if let Some(ms) = pending.remove(&flushed) {
+                    let merged = reuse::merge_overlapping(ms);
+                    conn.execute_batch("BEGIN").map_err(dberr)?;
+                    for (_, m) in &merged {
+                        insert_match(&conn, run_id, h.source.corpus_version(), &book.pages[flushed], m)?;
+                        found += 1;
+                    }
+                    conn.execute_batch("COMMIT").map_err(dberr)?;
                 }
-                wi += 1;
-                windows_done += 1;
-                if h.should_stop() {
-                    cancelled = true;
-                    break;
-                }
+                flushed += 1;
+                pages_done += 1;
+                emit(&window, "book", pages_done as u64, total_pages, found, started);
             }
-            let merged = reuse::merge_overlapping(page_matches);
-            conn.execute_batch("BEGIN").map_err(dberr)?;
-            for (_, m) in &merged {
-                insert_match(&conn, run_id, h.source.corpus_version(), page, m)?;
-                found += 1;
-            }
-            conn.execute_batch("COMMIT").map_err(dberr)?;
-            pages_done += 1;
-            emit(&window, "book", pages_done as u64, total_pages, found, started);
-            if cancelled {
-                break;
-            }
+            zone_cache.retain(|k, _| *k >= w.first_page);
         }
+        for pi in flushed..book.pages.len() {
+            if let Some(ms) = pending.remove(&pi) {
+                let merged = reuse::merge_overlapping(ms);
+                conn.execute_batch("BEGIN").map_err(dberr)?;
+                for (_, m) in &merged {
+                    insert_match(&conn, run_id, h.source.corpus_version(), &book.pages[pi], m)?;
+                    found += 1;
+                }
+                conn.execute_batch("COMMIT").map_err(dberr)?;
+            }
+            pages_done += 1;
+        }
+        emit(&window, "book", pages_done as u64, total_pages, found, started);
         finish_run(&conn, run_id, if cancelled { "cancelled" } else { "done" })?;
         let rows = read_matches(&conn, &format!("SELECT {} FROM reuse_match WHERE run_id = ?1", MATCH_COLUMNS), &[&run_id])?;
         let matches: Vec<Match> = rows
             .iter()
             .map(|r| Match {
+                query: PageRef { book_id: r.book_id, part_index: r.part_index, page_id: r.page_id },
+                query_end: r.query_end,
                 target_end: r.target_end,
                 target: r.target.clone(),
                 q_start: r.tok_start,
