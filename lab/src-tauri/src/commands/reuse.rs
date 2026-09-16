@@ -8,7 +8,7 @@
 //!
 //! Zones (§4.3 preprocessing) are computed per query page here: Qurʾān
 //! spans from the §4.4 detector, isnād spans from confirmed rows in
-//! `isnad` and from live extraction at confidence ≥ 0.6.
+//! `isnad` and from live extraction at `Params::isnad_zone_confidence`.
 
 use crate::analysis::isnad;
 use crate::analysis::quran;

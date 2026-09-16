@@ -39,6 +39,18 @@ export interface ReuseParams {
   exclude_zones_from_anchoring: boolean;
   window: number;
   stride: number;
+  /**
+   * The type table's four cutoffs, in the order they are asked: below
+   * `type_formulaic` banality the match is formulaic, then `type_verbatim`
+   * surface agreement, `type_inflected` lemma agreement, `type_paraphrase`
+   * root agreement, else weak.
+   */
+  type_formulaic: number;
+  type_verbatim: number;
+  type_inflected: number;
+  type_paraphrase: number;
+  /** Extractor confidence at which a chain becomes an isnād zone. */
+  isnad_zone_confidence: number;
   /** Books a run may match against; empty is the whole corpus. */
   target_books: number[];
   /** Pages either side of a candidate page the alignment may run over. */
@@ -69,6 +81,11 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   exclude_zones_from_anchoring: true,
   window: 60,
   stride: 30,
+  type_formulaic: 0.3,
+  type_verbatim: 0.9,
+  type_inflected: 0.85,
+  type_paraphrase: 0.7,
+  isnad_zone_confidence: 0.5,
   target_books: [],
   target_neighbours: 1,
 };

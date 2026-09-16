@@ -10,7 +10,7 @@
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
 //! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--rare-one-df N] [--jsonl FILE]
-//! lab-cli isnad-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--groups core,sama,…] [--show]
+//! lab-cli isnad-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--groups core,sama,…] [--show] [--jsonl FILE]
 //! ```
 //!
 //! `--corpus` defaults to `KASHSHAF_SAMPLE_DIR`, then Kashshaf's data
@@ -671,6 +671,12 @@ fn isnad_scan(args: &[String]) -> Result<()> {
             .collect::<Result<Vec<_>>>()?;
     }
     let show = args.iter().any(|a| a == "--show");
+    // Every chain's confidence components, to ask whether the formula's
+    // weights suit a genre the gold set does not cover.
+    let mut jsonl = match arg(args, "--jsonl") {
+        Some(path) => Some(std::io::BufWriter::new(std::fs::File::create(path)?)),
+        None => None,
+    };
     let mut pages = 0usize;
     let mut tokens = 0usize;
     let mut chains = 0usize;
@@ -691,6 +697,24 @@ fn isnad_scan(args: &[String]) -> Result<()> {
             if c.confidence.total >= 0.6 {
                 confident += 1;
                 covered += c.tok_end.saturating_sub(c.tok_start);
+            }
+            if let Some(w) = jsonl.as_mut() {
+                use std::io::Write;
+                writeln!(
+                    w,
+                    "{}",
+                    serde_json::json!({
+                        "part": page.part_index, "page": page.page_id,
+                        "start": c.tok_start, "end": c.tok_end, "kind": format!("{:?}", c.kind),
+                        "links": c.links,
+                        "links_score": c.confidence.links,
+                        "noun_prop": c.confidence.noun_prop,
+                        "terminal": c.confidence.terminal,
+                        "clean": c.confidence.clean,
+                        "total": c.confidence.total,
+                        "text": text_of(&page, c.tok_start, c.tok_end.min(c.tok_start + 40)),
+                    })
+                )?;
             }
             if show {
                 println!(

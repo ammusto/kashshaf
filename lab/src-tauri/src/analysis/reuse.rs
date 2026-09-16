@@ -133,6 +133,18 @@ pub struct Params {
     /// Document frequency is still counted corpus-wide: how banal a phrase
     /// is does not depend on which book you are asking about.
     pub target_books: Vec<u64>,
+    /// The type table's four cutoffs (§4.3), in the order they are asked:
+    /// below `type_formulaic` banality the match is formulaic, then
+    /// `type_verbatim` surface agreement, `type_inflected` lemma agreement,
+    /// `type_paraphrase` root agreement, else weak.
+    ///
+    /// They decide every match's type and nothing else reads them, so a
+    /// question like "why is this pair 14% paraphrase where that one is 5%"
+    /// is a question about these four numbers.
+    pub type_formulaic: f64,
+    pub type_verbatim: f64,
+    pub type_inflected: f64,
+    pub type_paraphrase: f64,
     /// Extractor confidence at which a chain becomes an isnād zone (0.5).
     ///
     /// The confidence formula scores `min(links, 5) / 5` for length, so a
@@ -201,6 +213,10 @@ impl Default for Params {
             // a bigram needs a much lower one because it is commoner.
             anchor_slots: vec![AnchorSlot { gram: 3, anchors: 6, df_cap: 0 }, AnchorSlot { gram: 2, anchors: 4, df_cap: 200 }],
             target_books: Vec::new(),
+            type_formulaic: 0.3,
+            type_verbatim: 0.9,
+            type_inflected: 0.85,
+            type_paraphrase: 0.7,
             isnad_zone_confidence: 0.5,
             target_neighbours: 1,
         }
@@ -704,8 +720,9 @@ pub fn align_page(q: &Seq, t: &Seq, p: &Params) -> Option<Aligned> {
     align_one(q, t, &mut q_mask, &mut t_mask, p)
 }
 
-/// At most this many passages are reported from one candidate page. A page
-/// that aligns eight separate times is either a table of contents or a
+/// At most this many passages are reported from one candidate page, and at
+/// most this many fragments are folded into one of them in proximity mode. A
+/// page that aligns eight separate times is either a table of contents or a
 /// disaster, and either way the ninth adds nothing.
 pub const MAX_ALIGNMENTS_PER_PAGE: usize = 8;
 
@@ -748,7 +765,7 @@ fn align_one(q: &Seq, t: &Seq, q_mask: &mut [bool], t_mask: &mut [bool], p: &Par
         let t_first = first.pairs[0].1;
         let lo = t_first.saturating_sub(p.proximity_window);
         let hi = (first.pairs.last().unwrap().1 + 1 + p.proximity_window).min(t.len());
-        for _ in 0..8 {
+        for _ in 0..MAX_ALIGNMENTS_PER_PAGE {
             let Some(next) = smith_waterman(q, t, lo..hi, q_mask, t_mask, p) else { break };
             // A fragment: at least half the minimum, so an inflected tail
             // after a gap still counts, but not a chance bigram.
@@ -929,15 +946,16 @@ impl MatchType {
     }
 }
 
-/// §4.3's type table, `formulaic` first (see the module header).
-pub fn match_type(c: &Components) -> MatchType {
-    if c.banality_factor < 0.3 {
+/// §4.3's type table, `formulaic` first (see the module header). The four
+/// cutoffs are [`Params`] fields; the defaults are the spec's.
+pub fn match_type(c: &Components, p: &Params) -> MatchType {
+    if c.banality_factor < p.type_formulaic {
         MatchType::Formulaic
-    } else if c.surface_agree >= 0.9 {
+    } else if c.surface_agree >= p.type_verbatim {
         MatchType::Verbatim
-    } else if c.lemma_agree >= 0.85 {
+    } else if c.lemma_agree >= p.type_inflected {
         MatchType::Inflected
-    } else if c.root_agree >= 0.7 {
+    } else if c.root_agree >= p.type_paraphrase {
         MatchType::Paraphrase
     } else {
         MatchType::Weak
@@ -952,7 +970,7 @@ pub fn match_type(c: &Components) -> MatchType {
 /// out of the default report rather than out of the record. A long
 /// alignment inside an isnād is a different thing -- the whole chain
 /// genuinely copied -- and keeps its own type.
-pub fn match_type_in(c: &Components, zone: Option<Zone>, _p: &Params) -> MatchType {
+pub fn match_type_in(c: &Components, zone: Option<Zone>, p: &Params) -> MatchType {
     // Two books that carry the same ḥadīth share its chain, and a shared
     // chain is a fact about transmission rather than a passage one text took
     // from the other. Length does not change that: `سمعت فلانا يقول سمعت
@@ -964,7 +982,7 @@ pub fn match_type_in(c: &Components, zone: Option<Zone>, _p: &Params) -> MatchTy
     if zone == Some(Zone::Isnad) {
         return MatchType::Formulaic;
     }
-    match_type(c)
+    match_type(c, p)
 }
 
 /// Recompute what the banality scale, weights and threshold affect from the
@@ -973,7 +991,7 @@ pub fn rescore(c: &Components, p: &Params) -> (Components, f64, MatchType) {
     let mut c = *c;
     c.banality_factor = banality_factor(c.banal_share, p);
     let s = score(&c, p);
-    (c, s, match_type(&c))
+    (c, s, match_type(&c, p))
 }
 
 // ---------------------------------------------------------------- matches ---
@@ -1558,14 +1576,14 @@ mod tests {
         assert!((c.banality_factor - 0.5).abs() < 1e-9, "1 − 0.25/0.5 (baseline 0)");
         let s = score(&c, &p);
         assert!((s - 1.0 * (0.5 + 0.3 + 0.2 * 0.75) * 0.5).abs() < 1e-9);
-        assert_eq!(match_type(&c), MatchType::Inflected);
+        assert_eq!(match_type(&c, &p), MatchType::Inflected);
         // Banality wins over verbatim: three of four aligned tokens banal → factor 0.
         let mut c2 = c;
         c2.surface_agree = 1.0;
         c2.banal_share = 0.75;
         c2.banality_factor = banality_factor(0.75, &p);
         assert_eq!(c2.banality_factor, 0.0);
-        assert_eq!(match_type(&c2), MatchType::Formulaic);
+        assert_eq!(match_type(&c2, &p), MatchType::Formulaic);
         // Re-scoring with a wider scale from the stored share.
         let p2 = Params { banality_scale: 1.0, ..p.clone() };
         let (rc, rs, rk) = rescore(&c2, &p2);
@@ -1586,9 +1604,9 @@ mod tests {
         assert_eq!(corpus_banal_share(&f, 0), 0.0);
         // Paraphrase: roots agree, lemmas do not.
         let c3 = Components { surface_agree: 0.1, lemma_agree: 0.2, root_agree: 0.8, coverage: 0.5, banal_share: 0.0, banality_factor: 1.0, aligned: 6 };
-        assert_eq!(match_type(&c3), MatchType::Paraphrase);
+        assert_eq!(match_type(&c3, &p), MatchType::Paraphrase);
         let c4 = Components { root_agree: 0.5, ..c3 };
-        assert_eq!(match_type(&c4), MatchType::Weak);
+        assert_eq!(match_type(&c4, &p), MatchType::Weak);
     }
 
     #[test]
@@ -1890,7 +1908,7 @@ mod tests {
             banality_factor: 1.0,
             aligned: 7,
         };
-        assert_eq!(match_type(&c), MatchType::Verbatim);
+        assert_eq!(match_type(&c, &p), MatchType::Verbatim);
         assert_eq!(match_type_in(&c, None, &p), MatchType::Verbatim);
         assert_eq!(match_type_in(&c, Some(Zone::Quran), &p), MatchType::Verbatim);
         // Seven aligned tokens of a chain of transmission: two unrelated
