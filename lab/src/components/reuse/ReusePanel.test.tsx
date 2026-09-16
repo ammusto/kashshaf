@@ -103,6 +103,7 @@ const match = (id: number, score: number, kind: MatchRow['kind'], banal = 0.2): 
   kind,
   zone: null,
   anchor_hits: 3,
+  target_end: null,
   user_verdict: null,
 });
 
@@ -220,8 +221,46 @@ describe('ReusePanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     await findReuseOver(0, 3);
-    const args = api.reuse.passage.mock.calls.at(-1)![0] as { params?: { target_books?: number[] } };
+    const args = api.reuse.passage.mock.calls[api.reuse.passage.mock.calls.length - 1][0] as { params?: { target_books?: number[] } };
     expect(args.params?.target_books).toEqual([230]);
+  });
+
+  it('reads a target span that runs over a page break as one passage', async () => {
+    // A quotation split by the printer is still one quotation. The match
+    // names both pages, the words come from both, and the break is marked
+    // where it falls rather than cutting the passage in half.
+    const first = mkPage(5563, 6260, 'قال ابو عبيد في');
+    const second = mkPage(5563, 6261, 'الثاني من كلامه');
+    // The span starts one word into 6260 and ends one word into 6261.
+    const m = {
+      ...match(1, 0.8, 'verbatim'),
+      t_start: 1,
+      t_end: 5,
+      target_end: { book_id: 5563, part_index: 0, page_id: 6261 },
+      pairs: [[0, 1], [1, 2], [2, 3], [3, 4]] as [number, number][],
+    };
+    api.reuse.passage.mockResolvedValue(passageResult([m]));
+    api.lab.listPageRefs.mockImplementation(async (id: number) =>
+      id === 5563
+        ? [
+            { book_id: 5563, part_index: 0, page_id: 6260 },
+            { book_id: 5563, part_index: 0, page_id: 6261 },
+          ]
+        : [{ book_id: 4382, part_index: 0, page_id: 118 }]
+    );
+    api.lab.getPage.mockImplementation(async (id: number, _p: number, pageId: number) =>
+      id === 4382 ? queryPage : pageId === 6261 ? second : first
+    );
+    render(<ReusePanel book={book} local />);
+    await findReuseOver(0, 3);
+    fireEvent.click(screen.getAllByTestId('reuse-row')[0]);
+
+    await waitFor(() => expect(screen.getByTestId('target-span')).toHaveTextContent('6261'));
+    const side = await screen.findByTestId('side-by-side');
+    // Three words from the page it starts on and one from the next.
+    expect(side).toHaveTextContent('ابو');
+    await waitFor(() => expect(side).toHaveTextContent('الثاني'));
+    expect(within(side).getByTestId('page-break')).toHaveTextContent('6261');
   });
 
   it('keeps the text pane shrinkable when a long passage is selected (A4)', async () => {

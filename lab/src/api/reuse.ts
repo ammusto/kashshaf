@@ -41,6 +41,8 @@ export interface ReuseParams {
   stride: number;
   /** Books a run may match against; empty is the whole corpus. */
   target_books: number[];
+  /** Pages either side of a candidate page the alignment may run over. */
+  target_neighbours: number;
 }
 
 export const DEFAULT_REUSE_PARAMS: ReuseParams = {
@@ -68,6 +70,7 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   window: 60,
   stride: 30,
   target_books: [],
+  target_neighbours: 1,
 };
 
 export interface Components {
@@ -96,6 +99,13 @@ export interface MatchRow {
   tok_end: number;
   snapshot: string;
   target: PageRef;
+  /**
+   * Where the target span ends when it runs over a page break. `t_start`,
+   * `t_end` and the target side of `pairs` are then offsets from `target`
+   * that run past its last token, the way the isnād tables number a chain
+   * that spans pages.
+   */
+  target_end: PageRef | null;
   target_title: string | null;
   target_author: number | null;
   /** The author's name, for the row's hover card (Phase 7 C2). */

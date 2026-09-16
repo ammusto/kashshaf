@@ -4,7 +4,7 @@
 //! ```text
 //! lab-cli reuse-eval  [--corpus DIR] [--gold FILE] [--threshold 0.35]
 //! lab-cli reuse-find  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--min-score 0.35]
-//!                     [--target-book ID] [--pairwise] [--jsonl FILE]
+//!                     [--target-book ID] [--pairwise] [--target-neighbours N] [--jsonl FILE]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
@@ -84,6 +84,10 @@ fn text_of(page: &Page, a: usize, b: usize) -> String {
 
 struct Ctx {
     source: LocalSource,
+    /// Candidate pages and book page lists, so spanning does not re-read a
+    /// neighbour once per candidate.
+    pages: std::cell::RefCell<HashMap<(u64, u32, u64), Option<Page>>>,
+    refs: std::cell::RefCell<HashMap<u64, Vec<PageRef>>>,
     freq: std::sync::Arc<kashshaf_lab_lib::source::FreqTable>,
     params: Params,
     lex: lexicon::Lexicon,
@@ -133,6 +137,9 @@ impl Ctx {
                 params.target_books = vec![t.parse().context("--target-book")?];
             }
         }
+        if let Some(r) = arg(args, "--target-neighbours") {
+            params.target_neighbours = r.parse().context("--target-neighbours")?;
+        }
         if let Some(r) = arg(args, "--rare-df") {
             params.rare_df = r.parse().context("--rare-df")?;
         }
@@ -164,7 +171,7 @@ impl Ctx {
                 None
             }
         };
-        Ok(Self { source, freq, params, lex, quran })
+        Ok(Self { source, pages: Default::default(), refs: Default::default(), freq, params, lex, quran })
     }
 
     fn zones(&self, page: &Page) -> Vec<Option<Zone>> {
@@ -190,11 +197,34 @@ impl Ctx {
         z
     }
 
+    fn load(&self, r: &PageRef) -> Result<Option<Page>> {
+        let key = (r.book_id, r.part_index, r.page_id);
+        if let Some(p) = self.pages.borrow().get(&key) {
+            return Ok(p.clone());
+        }
+        let p = self.source.page(r.book_id, r.part_index, r.page_id)?;
+        let mut c = self.pages.borrow_mut();
+        if c.len() > 5000 {
+            c.clear();
+        }
+        c.insert(key, p.clone());
+        Ok(p)
+    }
+
+    fn around(&self, r: &PageRef, radius: usize) -> Result<Vec<PageRef>> {
+        if !self.refs.borrow().contains_key(&r.book_id) {
+            let l = self.source.page_refs(r.book_id).unwrap_or_default();
+            self.refs.borrow_mut().insert(r.book_id, l);
+        }
+        Ok(reuse::span_around(&self.refs.borrow()[&r.book_id], r, radius))
+    }
+
     fn passage(&self, page: &Page, a: usize, b: usize, exclude_book: Option<u64>) -> Result<reuse::PassageRun> {
         let zones = self.zones(page);
-        let load = |r: &PageRef| self.source.page(r.book_id, r.part_index, r.page_id);
+        let load = |r: &PageRef| self.load(r);
+        let around = |r: &PageRef, n: usize| self.around(r, n);
         let count = |t: &[String]| reuse::phrase_df(&self.source, t);
-        reuse::passage(&self.source, &self.freq, &self.params, &[], page, a..b, &zones, exclude_book, &count, &load, &|| false)
+        reuse::passage(&self.source, &self.freq, &self.params, &[], page, a..b, &zones, exclude_book, &count, &load, &around, &|| false)
     }
 }
 
@@ -345,6 +375,7 @@ fn reuse_find(args: &[String]) -> Result<()> {
                             "q_book": page.book_id, "q_part": page.part_index, "q_page": page.page_id,
                             "q_start": m.q_start, "q_end": m.q_end,
                             "t_book": m.target.book_id, "t_part": m.target.part_index, "t_page": m.target.page_id,
+                            "t_end_part": m.target_end.map(|p| p.part_index), "t_end_page": m.target_end.map(|p| p.page_id),
                             "t_start": m.t_start, "t_end": m.t_end,
                             "score": m.score, "kind": m.kind.as_str(),
                             "coverage": m.components.coverage,
@@ -474,8 +505,12 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         }
         if let Some(c) = hit {
             let Some(tp) = ctx.source.page(c.page.book_id, c.page.part_index, c.page.page_id)? else { continue };
-            let t = reuse::Seq::build(&tp.tokens, &mut intern, &ctx.freq, p, &[], &[]);
-            let all = reuse::align_all(&q, &t, p);
+            let refs = if p.target_neighbours > 0 { ctx.around(&c.page, p.target_neighbours)? } else { vec![c.page] };
+            let load = |r: &kashshaf_lab_lib::source::PageRef| ctx.load(r);
+            let Some(span) = reuse::TargetSpan::load(&refs, &c.page, &load)? else { continue };
+            let _ = tp;
+            let t = reuse::Seq::build(&span.tokens, &mut intern, &ctx.freq, p, &[], &[]);
+            let all = reuse::align_all_upto(&q, &t, p, reuse::MAX_ALIGNMENTS_PER_PAGE * span.pages.len());
             match all.first() {
                 None => cause = "alignment: nothing reaches min_aligned",
                 Some(a) => {

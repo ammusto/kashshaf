@@ -121,6 +121,12 @@ pub struct Params {
     /// Document frequency is still counted corpus-wide: how banal a phrase
     /// is does not depend on which book you are asking about.
     pub target_books: Vec<u64>,
+    /// Pages either side of a candidate page that the alignment may run
+    /// over (1). A quotation that crosses a page break in the quoted book is
+    /// one passage in that book and has to be one alignment here; a page is
+    /// a printing accident, not a unit of composition. 0 restores the old
+    /// behaviour, one page at a time.
+    pub target_neighbours: usize,
 }
 
 impl Default for Params {
@@ -158,6 +164,7 @@ impl Default for Params {
             anchor_df_cap: 0,
             anchor_skip: 0,
             target_books: Vec::new(),
+            target_neighbours: 1,
         }
     }
 }
@@ -645,10 +652,16 @@ pub const MAX_ALIGNMENTS_PER_PAGE: usize = 8;
 /// parts of the same page come back as two matches instead of one span
 /// stretched across the gap between them.
 pub fn align_all(q: &Seq, t: &Seq, p: &Params) -> Vec<Aligned> {
+    align_all_upto(q, t, p, MAX_ALIGNMENTS_PER_PAGE)
+}
+
+/// The same, over a region of several pages: the budget is per page, so
+/// widening the region does not make the last page compete with the first.
+pub fn align_all_upto(q: &Seq, t: &Seq, p: &Params, limit: usize) -> Vec<Aligned> {
     let mut q_mask = vec![false; q.len()];
     let mut t_mask = vec![false; t.len()];
     let mut out = Vec::new();
-    while out.len() < MAX_ALIGNMENTS_PER_PAGE {
+    while out.len() < limit.max(1) {
         let Some(a) = align_one(q, t, &mut q_mask, &mut t_mask, p) else { break };
         out.push(a);
     }
@@ -688,6 +701,58 @@ fn align_one(q: &Seq, t: &Seq, q_mask: &mut [bool], t_mask: &mut [bool], p: &Par
         all.pairs.sort_unstable();
     }
     Some(all)
+}
+
+/// The pages of `refs` around `center`, `radius` either side, in reading
+/// order. `refs` is the book page list, which is already in reading order;
+/// a centre that is not in it is its own span.
+pub fn span_around(refs: &[PageRef], center: &PageRef, radius: usize) -> Vec<PageRef> {
+    match refs.iter().position(|r| r == center) {
+        None => vec![*center],
+        Some(i) => refs[i.saturating_sub(radius)..(i + radius + 1).min(refs.len())].to_vec(),
+    }
+}
+
+/// A candidate page and its neighbours, concatenated into one token stream.
+///
+/// Token indices inside it are offsets from the first page, exactly as the
+/// isnad workbench numbers a chain that runs over a page break, and a match
+/// re-bases them on whichever page its own alignment starts on.
+pub struct TargetSpan {
+    pub pages: Vec<PageRef>,
+    /// Where each page starts in `tokens`.
+    pub starts: Vec<usize>,
+    pub tokens: Vec<Token>,
+}
+
+impl TargetSpan {
+    /// Load `refs` in order, keeping only the run that contains `center`: a
+    /// page that will not load is a hole, and a stream with a hole in it
+    /// would align across text that is not there.
+    pub fn load(refs: &[PageRef], center: &PageRef, load: &dyn Fn(&PageRef) -> Result<Option<Page>>) -> Result<Option<Self>> {
+        let mut span = TargetSpan { pages: Vec::new(), starts: Vec::new(), tokens: Vec::new() };
+        for r in refs {
+            match load(r)? {
+                Some(p) => {
+                    span.starts.push(span.tokens.len());
+                    span.pages.push(*r);
+                    span.tokens.extend(p.tokens.iter().cloned());
+                }
+                None if span.pages.contains(center) => break,
+                None => {
+                    span.pages.clear();
+                    span.starts.clear();
+                    span.tokens.clear();
+                }
+            }
+        }
+        Ok(if span.pages.contains(center) { Some(span) } else { None })
+    }
+
+    /// The page holding token `i`, as an index into `pages`.
+    pub fn page_of(&self, i: usize) -> usize {
+        self.starts.iter().rposition(|s| *s <= i).unwrap_or(0)
+    }
 }
 
 // ---------------------------------------------------------------- scoring ---
@@ -844,6 +909,11 @@ pub fn rescore(c: &Components, p: &Params) -> (Components, f64, MatchType) {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Match {
     pub target: PageRef,
+    /// The page the target span ends on, when it is not the one it starts
+    /// on. `t_end` and the target side of `pairs` are offsets from the start
+    /// page and run past its last token into this one.
+    #[serde(default)]
+    pub target_end: Option<PageRef>,
     /// Query span, in the query page's token indices (end exclusive).
     pub q_start: usize,
     pub q_end: usize,
@@ -953,6 +1023,7 @@ pub fn passage(
     exclude_book: Option<u64>,
     count: &dyn Fn(&[String]) -> Result<usize>,
     load: &dyn Fn(&PageRef) -> Result<Option<Page>>,
+    neighbours: &dyn Fn(&PageRef, usize) -> Result<Vec<PageRef>>,
     cancel: &dyn Fn() -> bool,
 ) -> Result<PassageRun> {
     let mut intern = Interner::default();
@@ -983,9 +1054,10 @@ pub fn passage(
         if cancel() {
             break;
         }
-        let Some(tp) = load(&c.page)? else { continue };
-        let t = Seq::build(&tp.tokens, &mut intern, freq, params, banal_phrases, &[]);
-        for al in align_all(&q, &t, params) {
+        let refs = if params.target_neighbours > 0 { neighbours(&c.page, params.target_neighbours)? } else { vec![c.page] };
+        let Some(span) = TargetSpan::load(&refs, &c.page, load)? else { continue };
+        let t = Seq::build(&span.tokens, &mut intern, freq, params, banal_phrases, &[]);
+        for al in align_all_upto(&q, &t, params, MAX_ALIGNMENTS_PER_PAGE * span.pages.len()) {
             // Each alignment is scored on itself, not on the window that
             // retrieved it. A window is a retrieval device: it decides which
             // pages are worth reading, and has no business in the score. Six
@@ -1006,13 +1078,22 @@ pub fn passage(
             }
             let s = score(&comp, params);
             let zone = zone_of(&q, &al.pairs);
-            let pairs: Vec<(usize, usize)> = al.pairs.iter().map(|(i, j)| (i + range.start, *j)).collect();
+            // Re-base on the page the alignment starts on, which is not
+            // always the page retrieval found: a quotation running back over
+            // a break belongs to the page it begins on.
+            let t_lo = al.pairs.iter().map(|p| p.1).min().unwrap();
+            let t_hi = al.pairs.iter().map(|p| p.1).max().unwrap() + 1;
+            let si = span.page_of(t_lo);
+            let ei = span.page_of(t_hi - 1);
+            let base = span.starts[si];
+            let pairs: Vec<(usize, usize)> = al.pairs.iter().map(|(i, j)| (i + range.start, j - base)).collect();
             matches.push(Match {
-                target: c.page.clone(),
+                target: span.pages[si],
+                target_end: if ei > si { Some(span.pages[ei]) } else { None },
                 q_start: q_lo + range.start,
                 q_end: q_hi + range.start,
-                t_start: al.pairs.iter().map(|p| p.1).min().unwrap(),
-                t_end: al.pairs.iter().map(|p| p.1).max().unwrap() + 1,
+                t_start: t_lo - base,
+                t_end: t_hi - base,
                 zone,
                 pairs,
                 components: comp,
@@ -1022,6 +1103,7 @@ pub fn passage(
             });
         }
     }
+    matches.retain(|m| m.target != own);
     // Two alignments that overlap are one passage seen twice.
     matches = merge_overlapping(matches.into_iter().map(|m| (own.clone(), m)).collect())
         .into_iter()
@@ -1070,6 +1152,9 @@ pub fn merge_overlapping(mut matches: Vec<(PageRef, Match)>) -> Vec<(PageRef, Ma
             let overlap_q = m.q_start < last.q_end && last.q_start < m.q_end;
             let overlap_t = m.t_start < last.t_end && last.t_start < m.t_end;
             if same && overlap_q && overlap_t {
+                if m.t_end > last.t_end {
+                    last.target_end = m.target_end;
+                }
                 let mut pairs = std::mem::take(&mut last.pairs);
                 pairs.extend(m.pairs.iter().copied());
                 pairs.sort_unstable();
@@ -1137,6 +1222,12 @@ mod tests {
 
     fn freq(counts: &[(&str, u64)]) -> FreqTable {
         FreqTable::from_counts(FreqLayer::Lemma, "t", counts.iter().map(|(k, c)| (k.to_string(), *c)).collect())
+    }
+
+    /// Test corpora have no page list; a page is then its own span, which
+    /// is what `span_around` does with a centre it cannot place.
+    fn alone(r: &PageRef, _n: usize) -> Result<Vec<PageRef>> {
+        Ok(vec![*r])
     }
 
     fn seqs(qw: &str, tw: &str, f: &FreqTable, p: &Params) -> (Seq, Seq) {
@@ -1231,7 +1322,7 @@ mod tests {
         let s = Seq::build(&query.tokens[3..10], &mut it, &f, &p, &[], &[]);
         assert_eq!(s.non_banal(), 0, "every token is banal");
         // The passage alone: seven tokens, under the fallback length.
-        let run = passage(&fake, &f, &p, &[], &query, 3..10, &[], None, &count, &load, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], &query, 3..10, &[], None, &count, &load, &alone, &|| false).unwrap();
         assert_eq!(run.fallback, Some("lemma-slop"), "{:?}", run);
         assert_eq!(run.matches.len(), 1);
         assert_eq!(run.matches[0].target.book_id, 2);
@@ -1239,7 +1330,7 @@ mod tests {
         assert_eq!(run.matches[0].components.aligned, 7);
         // With context around it (13 tokens) the trigram counts find it too:
         // `من أين تأكلون` is on two pages, the context trigrams on one.
-        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
         assert!(run.fallback.is_none());
         assert!(run.anchors.iter().all(|a| a.df > 0));
         assert_eq!(run.matches.iter().filter(|m| m.target.book_id == 2).count(), 1, "{:?}", run.anchors);
@@ -1364,6 +1455,7 @@ mod tests {
         let qp = PageRef { book_id: 1, part_index: 0, page_id: 1 };
         let tp = PageRef { book_id: 2, part_index: 0, page_id: 5 };
         let m = |qs: usize, qe: usize, ts: usize, te: usize, s: f64| Match {
+            target_end: None,
             target: tp.clone(),
             q_start: qs,
             q_end: qe,
@@ -1444,6 +1536,40 @@ mod tests {
     }
 
     #[test]
+    fn a_quotation_split_by_a_page_break_is_one_match_over_two_pages() {
+        // The printer's break is not a boundary of the text. Half the
+        // quotation sits at the foot of one page and half at the head of the
+        // next; page by page neither half reaches min_aligned, and the
+        // passage was invisible. Over the two together it is one match,
+        // reported on the page it starts on, with the page it ends on.
+        let f = freq(&[("و", 1000), ("في", 900)]);
+        let p = Params { banality_rank: 2, min_aligned: 6, banality_baseline: Some(0.3), ..Default::default() };
+        let quote = "المربد كل شيء حبست به الابل و هو موضع سوق";
+        let query = page(1, 0, 1, "", &format!("قال ابو عبيد {} ثم رجع الي الكلام", quote));
+        let head = page(2, 0, 10, "", "باب ما جاء في المربد كل شيء حبست");
+        let tail = page(2, 0, 11, "", "به الابل و هو موضع سوق الابل بالبصرة");
+        let elsewhere = page(2, 0, 9, "", "لا شيء هنا");
+        let head_len = head.tokens.len();
+        let fake = Fake { pages: vec![query.clone(), elsewhere, head, tail], calls: Mutex::new(vec![]) };
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let count = |t: &[String]| phrase_df(&fake, t);
+        let refs: Vec<PageRef> = (9..=11).map(|g| PageRef { book_id: 2, part_index: 0, page_id: g }).collect();
+        let around = |r: &PageRef, n: usize| Ok(span_around(&refs, r, n));
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &around, &|| false).unwrap();
+        let best = run.matches.first().expect("the split quotation is found");
+        assert_eq!(best.target.page_id, 10, "reported on the page it starts on");
+        assert_eq!(best.target_end.map(|p| p.page_id), Some(11), "and carries the page it ends on");
+        assert!(best.components.aligned >= 10, "both halves align: {}", best.components.aligned);
+        // The offsets run past the start page's last token into the next.
+        assert!(best.t_end > head_len, "t_end {} vs {} tokens", best.t_end, head_len);
+
+        // One page at a time, the same quotation is lost.
+        let alone = Params { target_neighbours: 0, ..p.clone() };
+        let run = passage(&fake, &f, &alone, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &around, &|| false).unwrap();
+        assert!(run.matches.iter().all(|m| m.components.aligned < 10), "each half is under the floor on its own");
+    }
+
+    #[test]
     fn a_target_book_restricts_retrieval_and_not_the_frequency_count() {
         // Pairwise mode. The restriction has to reach the index, or the run
         // reads the whole corpus and throws most of it away; but document
@@ -1458,12 +1584,12 @@ mod tests {
         let count = |t: &[String]| phrase_df(&fake, t);
         let base = Params { banality_rank: 2, anchors: 6, min_anchors: 3, banality_baseline: Some(0.3), ..Default::default() };
         let p = Params { target_books: vec![3], ..base.clone() };
-        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
         assert_eq!(run.candidates, 1);
         assert!(run.matches.iter().all(|m| m.target.book_id == 3), "only the chosen book is searched");
         // The same anchors, at the same corpus-wide frequencies, as the
         // unrestricted run: nothing about the query has changed.
-        let wide = passage(&fake, &f, &base, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| false).unwrap();
+        let wide = passage(&fake, &f, &base, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
         assert_eq!(run.anchors, wide.anchors);
     }
 
@@ -1561,7 +1687,7 @@ mod tests {
         let fake = Fake { pages: vec![query.clone(), reuse, partial, noise], calls: Mutex::new(vec![]) };
         let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
         let count = |t: &[String]| phrase_df(&fake, t);
-        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
         assert_eq!(run.anchors.len(), 6, "{:?}", run.anchors);
         assert_eq!(run.candidates, 2, "the query's own page is excluded and noise hits nothing");
         assert!(run.anchors.iter().all(|a| a.df >= 2), "{:?}", run.anchors);
@@ -1586,10 +1712,10 @@ mod tests {
         assert!(second.components.aligned < best.components.aligned);
         assert!(second.score <= best.score);
         // Exclude the whole book 2.
-        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], Some(2), &count, &load, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], Some(2), &count, &load, &alone, &|| false).unwrap();
         assert_eq!(run.matches.len(), 1);
         // Cancel before the first candidate keeps the anchors and nothing else.
-        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| true).unwrap();
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| true).unwrap();
         assert!(run.matches.is_empty());
     }
 }

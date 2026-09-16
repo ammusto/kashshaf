@@ -148,11 +148,30 @@ impl<'a> DfCache<'a> {
 struct PageCache<'a> {
     source: &'a dyn BookSource,
     pages: Mutex<HashMap<(u64, u32, u64), Option<Arc<Page>>>>,
+    refs: Mutex<HashMap<u64, Arc<Vec<PageRef>>>>,
 }
 
 impl<'a> PageCache<'a> {
     fn new(source: &'a dyn BookSource) -> Self {
-        Self { source, pages: Mutex::new(HashMap::new()) }
+        Self { source, pages: Mutex::new(HashMap::new()), refs: Mutex::new(HashMap::new()) }
+    }
+
+    /// The reading-order neighbourhood of a page, `radius` either side.
+    /// A book's page list is fetched once and kept: without that, spanning
+    /// would cost a list scan per candidate.
+    fn around(&self, r: &PageRef, radius: usize) -> anyhow::Result<Vec<PageRef>> {
+        let list = {
+            let mut refs = self.refs.lock().unwrap();
+            match refs.get(&r.book_id) {
+                Some(l) => l.clone(),
+                None => {
+                    let l = Arc::new(self.source.page_refs(r.book_id).unwrap_or_default());
+                    refs.insert(r.book_id, l.clone());
+                    l
+                }
+            }
+        };
+        Ok(reuse::span_around(&list, r, radius))
     }
 
     fn get(&self, r: &PageRef) -> anyhow::Result<Option<Page>> {
@@ -189,8 +208,9 @@ fn insert_match(conn: &Connection, run_id: i64, corpus_version: &str, page: &Pag
     conn.execute(
         "INSERT INTO reuse_match (run_id, corpus_version, book_id, part_index, page_id, tok_start, tok_end, snapshot, snapshot_hash, \
          target_book_id, target_part_index, target_page_id, target_tok_start, target_tok_end, score, type, \
-         surface_agree, lemma_agree, root_agree, coverage, banality_factor, banal_share, aligned, anchor_hits, pairs_json, zone) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+         surface_agree, lemma_agree, root_agree, coverage, banality_factor, banal_share, aligned, anchor_hits, pairs_json, zone, \
+         target_end_part_index, target_end_page_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
         params![
             run_id,
             corpus_version,
@@ -218,6 +238,8 @@ fn insert_match(conn: &Connection, run_id: i64, corpus_version: &str, page: &Pag
             m.anchor_hits as i64,
             serde_json::to_string(&m.pairs).unwrap_or_default(),
             m.zone.map(|z| z.as_str()),
+            m.target_end.map(|p| p.part_index as i64),
+            m.target_end.map(|p| p.page_id as i64),
         ],
     )
     .map_err(dberr)?;
@@ -236,6 +258,9 @@ pub struct MatchRow {
     pub tok_end: usize,
     pub snapshot: String,
     pub target: PageRef,
+    /// The page the span ends on when it runs over a break; `t_end` and the
+    /// target side of `pairs` are offsets from `target`, past its last token.
+    pub target_end: Option<PageRef>,
     pub target_title: Option<String>,
     pub target_author: Option<i64>,
     /// The author's name, for the row's hover card (Phase 7 C2).
@@ -272,6 +297,10 @@ fn read_matches(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> 
                 tok_end: r.get::<_, i64>(6)? as usize,
                 snapshot: r.get(7)?,
                 target: PageRef { book_id: r.get::<_, i64>(8)? as u64, part_index: r.get::<_, i64>(9)? as u32, page_id: r.get::<_, i64>(10)? as u64 },
+                target_end: match (r.get::<_, Option<i64>>(28)?, r.get::<_, Option<i64>>(29)?) {
+                    (Some(p), Some(g)) => Some(PageRef { book_id: r.get::<_, i64>(8)? as u64, part_index: p as u32, page_id: g as u64 }),
+                    _ => None,
+                },
                 target_title: None,
                 target_author: None,
                 target_author_name: None,
@@ -308,7 +337,8 @@ fn read_matches(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> 
 
 const MATCH_COLUMNS: &str = "id, run_id, book_id, part_index, page_id, tok_start, tok_end, snapshot, \
     target_book_id, target_part_index, target_page_id, target_tok_start, target_tok_end, snapshot_hash, score, type, \
-    surface_agree, lemma_agree, root_agree, coverage, banality_factor, banal_share, aligned, anchor_hits, corpus_version, pairs_json, zone, user_verdict";
+    surface_agree, lemma_agree, root_agree, coverage, banality_factor, banal_share, aligned, anchor_hits, corpus_version, pairs_json, zone, user_verdict, \
+    target_end_part_index, target_end_page_id";
 
 /// Fill target titles from the source's book list, once per distinct book.
 fn with_titles(source: &dyn BookSource, rows: &mut [MatchRow]) {
@@ -397,6 +427,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             emit(&window, "align", d, 0, 0, started);
             cache.get(r)
         };
+        let around = |r: &PageRef, n: usize| cache.around(r, n);
         let cancel = || h.should_stop();
         emit(&window, "candidates", 0, 0, 0, started);
         let run = reuse::passage(
@@ -410,6 +441,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             if args.exclude_same_book { Some(args.book_id) } else { None },
             &count,
             &load,
+            &around,
             &cancel,
         )
         .map_err(|e| LabError::Source(e.to_string()))?;
@@ -617,6 +649,7 @@ pub async fn reuse_estimate(
         let sample: Vec<&(usize, std::ops::Range<usize>)> = if n <= 20 { windows.iter().collect() } else { windows.iter().skip(n / 2 - 10).take(20).collect() };
         let cache = PageCache::new(h.source.as_ref());
         let load = |r: &PageRef| cache.get(r);
+        let around = |r: &PageRef, n: usize| cache.around(r, n);
         let dfs = DfCache::new(h.source.as_ref());
         let count = |t: &[String]| dfs.get(t);
         let started = std::time::Instant::now();
@@ -639,7 +672,7 @@ pub async fn reuse_estimate(
                     z
                 }
             };
-            let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w.clone(), &zones, Some(book_id), &count, &load, &|| false)
+            let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w.clone(), &zones, Some(book_id), &count, &load, &around, &|| false)
                 .map_err(|e| LabError::Source(e.to_string()))?;
             found += run.matches.len();
         }
@@ -700,6 +733,7 @@ pub async fn reuse_book(
         let run_id = insert_run(&conn, h.source.corpus_version(), book_id, "book", &s.params)?;
         let cache = PageCache::new(h.source.as_ref());
         let load = |r: &PageRef| cache.get(r);
+        let around = |r: &PageRef, n: usize| cache.around(r, n);
         let dfs = DfCache::new(h.source.as_ref());
         let count = |t: &[String]| dfs.get(t);
         let total_pages = book.pages.len() as u64;
@@ -724,7 +758,7 @@ pub async fn reuse_book(
             }
             while wi < windows.len() && windows[wi].0 == pi {
                 let w = windows[wi].1.clone();
-                let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w, &zones, Some(book_id), &count, &load, &|| h.should_stop())
+                let run = reuse::passage(h.source.as_ref(), &s.freq, &s.params, &s.banal_phrases, page, w, &zones, Some(book_id), &count, &load, &around, &|| h.should_stop())
                     .map_err(|e| LabError::Source(e.to_string()))?;
                 for m in run.matches {
                     page_matches.push((qref.clone(), m));
@@ -754,6 +788,7 @@ pub async fn reuse_book(
         let matches: Vec<Match> = rows
             .iter()
             .map(|r| Match {
+                target_end: r.target_end,
                 target: r.target.clone(),
                 q_start: r.tok_start,
                 q_end: r.tok_end,

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { BookMetadata } from '@kashshaf/shared';
+import type { BookMetadata, Token } from '@kashshaf/shared';
 import { labApi, type Page, type PageSpan } from '../../api/lab';
 import { plainPageLabel, type At } from '../../api/pages';
+import type { PageRef } from '../../api/lab';
 import { tocApi, type TocRow } from '../../api/workspace';
 import {
   DEFAULT_REUSE_PARAMS,
@@ -90,7 +91,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   const [open, setOpen] = useState<MatchRow | null>(null);
   /** The right reader's page, by the C1 rule, for its header. */
   const [targetLabel, setTargetLabel] = useState('');
-  const [openPage, setOpenPage] = useState<Page | null>(null);
+  const [openPages, setOpenPages] = useState<Page[]>([]);
   const [sideBySide, setSideBySide] = useState(false);
   const [queryPages, setQueryPages] = useState<Map<string, Page>>(new Map());
   const [contexts, setContexts] = useState<Map<number, Context>>(new Map());
@@ -330,7 +331,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
 
   const openTarget = async (m: MatchRow) => {
     setOpen(m);
-    setOpenPage(null);
+    setOpenPages([]);
     // The alignment is the point of opening a match, so it starts on (10 H).
     setSideBySide(true);
     // The left reader goes to this match's own page and marks its words; the
@@ -338,15 +339,34 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
     setQueryAt({ part_index: m.part_index, page_id: m.page_id });
     setQuerySpan([m.tok_start, m.tok_end]);
     setTargetLabel(plainPageLabel(m.target.part_index, m.target.page_id, m.target_parts, contexts.get(m.id)?.pageNumber ?? null));
-    const p = await labApi.getPage(m.target.book_id, m.target.part_index, m.target.page_id).catch(() => null);
-    setOpenPage(p);
+    setOpenPages((await loadSpan(m)).filter((x): x is Page => x != null));
     if (!queryPages.has(`${m.part_index}:${m.page_id}`)) {
       const q = await labApi.getPage(m.book_id, m.part_index, m.page_id).catch(() => null);
       if (q) setQueryPages((map) => new Map(map).set(`${m.part_index}:${m.page_id}`, q));
     }
   };
 
-  /** Enough of a book for the reader: the rest it loads for itself. */
+  /**
+ * Every page the target span covers, in reading order.
+ *
+ * Usually one. When the quotation runs over a break the match names the page
+ * it starts on and the page it ends on, and the pages between come from the
+ * book's own page list, which is the only thing that knows the order.
+ */
+async function loadSpan(m: MatchRow): Promise<(Page | null)[]> {
+  const one = () => labApi.getPage(m.target.book_id, m.target.part_index, m.target.page_id).catch(() => null);
+  if (!m.target_end || (m.target_end.part_index === m.target.part_index && m.target_end.page_id === m.target.page_id)) {
+    return [await one()];
+  }
+  const refs = await labApi.listPageRefs(m.target.book_id).catch(() => []);
+  const at = (r: PageRef) => refs.findIndex((x) => x.part_index === r.part_index && x.page_id === r.page_id);
+  const a = at(m.target);
+  const b = at(m.target_end);
+  if (a < 0 || b < a) return [await one()];
+  return Promise.all(refs.slice(a, b + 1).map((r) => labApi.getPage(r.book_id, r.part_index, r.page_id).catch(() => null)));
+}
+
+/** Enough of a book for the reader: the rest it loads for itself. */
   const targetBook: BookMetadata | null = useMemo(
     () =>
       open
@@ -478,7 +498,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
             <OpenMatch
               m={open}
               label={targetLabel}
-              page={openPage}
+              pages={openPages}
               queryPage={queryPages.get(`${open.part_index}:${open.page_id}`) ?? null}
               sideBySide={sideBySide}
               onToggleSideBySide={() => setSideBySide((v) => !v)}
@@ -584,9 +604,12 @@ interface Context {
 
 function contextOf(page: Page | null, m: MatchRow): Context {
   if (!page) return { before: '', phrase: m.snapshot, after: '', pageNumber: null };
+  // Token indices are offsets from the start page and may run past its end
+  // into the next one, which the row does not have: slicing stops there, and
+  // the reader below shows the whole of it.
   const words = (a: number, b: number) =>
     page.tokens
-      .filter((t) => t.idx >= a && t.idx < b)
+      .slice(Math.max(0, a), Math.max(0, b))
       .map((t) => t.surface)
       .join(' ');
   return {
@@ -679,7 +702,7 @@ function ResultRow({ m, ctx, onClick }: { m: MatchRow; ctx?: Context; onClick: (
 function OpenMatch({
   m,
   label,
-  page,
+  pages,
   queryPage,
   sideBySide,
   onToggleSideBySide,
@@ -689,7 +712,8 @@ function OpenMatch({
   m: MatchRow;
   /** The target page by the C1 rule, from the reader below. */
   label: string;
-  page: Page | null;
+  /** Every page the target span covers, in reading order. */
+  pages: Page[];
   queryPage: Page | null;
   sideBySide: boolean;
   onToggleSideBySide: () => void;
@@ -706,6 +730,17 @@ function OpenMatch({
     return { q, t };
   }, [m.pairs]);
 
+  // The span as one stream, with the page each word sits on, so a quotation
+  // that runs over a break reads as the one passage it is.
+  const span = useMemo(() => {
+    const out: { tok: Token; page: Page; first: boolean }[] = [];
+    for (const p of pages) {
+      p.tokens.forEach((tok, i) => out.push({ tok, page: p, first: i === 0 }));
+    }
+    return out;
+  }, [pages]);
+  const page = pages[0] ?? null;
+
   return (
     <div className="flex-shrink-0 flex flex-col" data-testid="reuse-target">
       <div className="px-3 py-1.5 border-b border-app-border-light bg-app-surface-variant flex items-center gap-2 text-xs">
@@ -718,6 +753,12 @@ function OpenMatch({
         </span>
         <span className="tabular-nums text-app-text-secondary" data-testid="target-page">
           {label || '…'}
+          {m.target_end && (
+            <span className="text-app-accent" data-testid="target-span">
+              {' → '}
+              {plainPageLabel(m.target_end.part_index, m.target_end.page_id, m.target_parts, null)}
+            </span>
+          )}
         </span>
         <label className="flex items-center gap-1">
           <input type="checkbox" checked={sideBySide} onChange={onToggleSideBySide} />
@@ -745,7 +786,7 @@ function OpenMatch({
         {m.components.banality_factor.toFixed(2)} · {m.components.aligned} aligned
       </div>
 
-      {sideBySide && queryPage && page && (
+      {sideBySide && queryPage && page && span.length > 0 && (
         <div className="max-h-56 overflow-y-auto grid grid-cols-2 gap-3 p-4 font-arabic text-lg leading-8 border-b border-app-border-light" dir="rtl" data-testid="side-by-side">
           <div>
             <div className="text-xs text-app-text-secondary mb-1 flex items-center gap-1" dir="ltr">
@@ -765,13 +806,21 @@ function OpenMatch({
               <span className="inline-block w-2 h-2 rounded-sm bg-[#FDE2E2] border border-[#DC3545]" />
               the other
             </div>
-            {page.tokens
-              .filter((t) => t.idx >= m.t_start && t.idx < m.t_end)
-              .map((t) => (
-                <span key={t.idx} className={pairs.t.has(t.idx) ? `lay-pair-${pairs.t.get(t.idx)! % 8}` : 'text-app-text-secondary'}>
-                  {t.surface}{' '}
+            {span.slice(m.t_start, m.t_end).map((w, k) => {
+              const idx = m.t_start + k;
+              return (
+                <span key={idx}>
+                  {w.first && k > 0 && (
+                    <span className="mx-1 px-1 text-xs font-ui text-app-accent border border-app-accent rounded align-middle" dir="ltr" data-testid="page-break">
+                      {plainPageLabel(w.page.part_index, w.page.page_id, m.target_parts, w.page.page_number)}
+                    </span>
+                  )}
+                  <span className={pairs.t.has(idx) ? `lay-pair-${pairs.t.get(idx)! % 8}` : 'text-app-text-secondary'}>
+                    {w.tok.surface}{' '}
+                  </span>
                 </span>
-              ))}
+              );
+            })}
           </div>
         </div>
       )}

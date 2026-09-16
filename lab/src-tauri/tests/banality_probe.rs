@@ -133,6 +133,7 @@ fn formulae_through_passage_mode() {
     params.banality_baseline = Some(reuse::corpus_banal_share(&freq, params.banality_rank));
     let spec_params = Params { banality_baseline: Some(0.0), ..params.clone() };
     println!("=== baseline {:.3} (corpus share of the top-{} lemmas)", params.banality_baseline.unwrap(), params.banality_rank);
+    let around = |r: &PageRef, _n: usize| Ok(vec![*r]);
     let load = |r: &PageRef| source.page(r.book_id, r.part_index, r.page_id);
     let count = |t: &[String]| reuse::phrase_df(&source, t);
 
@@ -180,7 +181,7 @@ fn formulae_through_passage_mode() {
             continue;
         }
         let label: String = page.tokens[a..b].iter().map(|t| t.surface.as_str()).collect::<Vec<_>>().join(" ");
-        let run = reuse::passage(&source, &freq, &params, &[], &page, a..b, &[], None, &count, &load, &|| false).unwrap();
+        let run = reuse::passage(&source, &freq, &params, &[], &page, a..b, &[], None, &count, &load, &around, &|| false).unwrap();
         chains.push((label, run));
     }
     report("gold isnād chains, corpus-baseline penalty", &chains, &params);
@@ -191,7 +192,7 @@ fn formulae_through_passage_mode() {
         if b <= a {
             continue;
         }
-        let run = reuse::passage(&source, &freq, &spec_params, &[], &page, a..b, &[], None, &count, &load, &|| false).unwrap();
+        let run = reuse::passage(&source, &freq, &spec_params, &[], &page, a..b, &[], None, &count, &load, &around, &|| false).unwrap();
         chains_spec.push((String::new(), run));
     }
     report("gold isnād chains (first 12), spec's formula (baseline 0)", &chains_spec, &spec_params);
@@ -208,10 +209,10 @@ fn formulae_through_passage_mode() {
                 continue;
             }
             let label: String = page.tokens[..12].iter().map(|t| t.surface.as_str()).collect::<Vec<_>>().join(" ");
-            let run = reuse::passage(&source, &freq, &params, &[], &page, 0..12, &[], None, &count, &load, &|| false).unwrap();
+            let run = reuse::passage(&source, &freq, &params, &[], &page, 0..12, &[], None, &count, &load, &around, &|| false).unwrap();
             openings.push((label, run));
             // The basmala alone: four tokens.
-            let run = reuse::passage(&source, &freq, &Params { min_aligned: 3, ..params.clone() }, &[], &page, 0..4, &[], None, &count, &load, &|| false).unwrap();
+            let run = reuse::passage(&source, &freq, &Params { min_aligned: 3, ..params.clone() }, &[], &page, 0..4, &[], None, &count, &load, &around, &|| false).unwrap();
             basmala_only.push(("بسم الله الرحمن الرحيم".to_string(), run));
             if openings.len() >= 10 {
                 break;
