@@ -97,7 +97,7 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   exhaustive_max_books: 4,
   exhaustive_grams: [2, 3],
   exhaustive_max_candidates: 100,
-  exhaustive_min_aligned: 6,
+  exhaustive_min_aligned: 4,
   type_formulaic: 0.3,
   type_verbatim: 0.9,
   type_inflected: 0.85,
