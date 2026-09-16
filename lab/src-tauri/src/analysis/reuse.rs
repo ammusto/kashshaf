@@ -181,14 +181,20 @@ pub struct Params {
     pub exhaustive_max_books: usize,
     /// Which n-gram lengths the exhaustive index holds (2 and 3).
     pub exhaustive_grams: Vec<usize>,
-    /// Candidate pages kept per window in exhaustive mode (200).
+    /// Candidate pages kept per window in exhaustive mode (100).
     ///
     /// Every page sharing one n-gram is a candidate, which for a common
     /// bigram is most of a book, so they are ranked by how many n-grams they
     /// share and cut. This is a bound on work, not a claim about relevance:
     /// a real parallel shares many.
     pub exhaustive_max_candidates: usize,
-    /// The aligned floor in exhaustive mode (4), against `min_aligned`'s 6.
+    /// The aligned floor in exhaustive mode (6).
+    ///
+    /// It was 4 on the argument that a four-token coincidence between two
+    /// books is not the claim it is across the corpus. True, and it buys
+    /// nothing measured: 56 of alNaql's 70 clusters either way, and 365 more
+    /// matches. What exhaustive retrieval recovers is longer than four
+    /// tokens anyway.
     pub exhaustive_min_aligned: usize,
     /// Extractor confidence at which a chain becomes an isnād zone (0.5).
     ///
@@ -261,8 +267,8 @@ impl Default for Params {
             retrieval: RetrievalMode::Corpus,
             exhaustive_max_books: 4,
             exhaustive_grams: vec![2, 3],
-            exhaustive_max_candidates: 200,
-            exhaustive_min_aligned: 4,
+            exhaustive_max_candidates: 100,
+            exhaustive_min_aligned: 6,
             type_formulaic: 0.3,
             type_verbatim: 0.9,
             type_inflected: 0.85,
@@ -2007,7 +2013,7 @@ mod tests {
         let base = Params { banality_rank: 2, min_aligned: 6, banality_baseline: Some(0.3), target_books: vec![2], ..Default::default() };
         let ex = Params { retrieval: RetrievalMode::Exhaustive, ..base.clone() };
         assert!(ex.exhaustive());
-        assert_eq!(ex.aligned_floor(), 4, "the floor is a different claim between two books");
+        assert_eq!(ex.aligned_floor(), 6);
         assert_eq!(base.aligned_floor(), 6);
 
         let run = passage(&fake, &f, &ex, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, Some(&ix), &|| false).unwrap();
