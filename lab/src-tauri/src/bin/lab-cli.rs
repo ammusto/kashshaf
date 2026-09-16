@@ -6,6 +6,8 @@
 //! lab-cli reuse-find  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--min-score 0.35]
 //!                     [--target-book ID] [--pairwise] [--target-neighbours N] [--jsonl FILE]
 //!                     [--anchor-slots 3:4:500,2:4:200]
+//!                     [--exhaustive] [--exhaustive-grams 2,3] [--exhaustive-max-candidates N]
+//!                     [--exhaustive-min-aligned N]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
@@ -86,6 +88,8 @@ fn text_of(page: &Page, a: usize, b: usize) -> String {
 
 struct Ctx {
     source: LocalSource,
+    /// The target book in memory, when the run is exhaustive.
+    index: Option<reuse::BookIndex>,
     /// Candidate pages and book page lists, so spanning does not re-read a
     /// neighbour once per candidate.
     pages: std::cell::RefCell<HashMap<(u64, u32, u64), Option<Page>>>,
@@ -159,6 +163,19 @@ impl Ctx {
         if let Some(r) = arg(args, "--target-neighbours") {
             params.target_neighbours = r.parse().context("--target-neighbours")?;
         }
+        // --pairwise names the target book; --exhaustive reads it.
+        if args.iter().any(|a| a == "--exhaustive") {
+            params.retrieval = reuse::RetrievalMode::Exhaustive;
+        }
+        if let Some(r) = arg(args, "--exhaustive-grams") {
+            params.exhaustive_grams = r.split(',').filter(|x| !x.is_empty()).map(|x| x.parse()).collect::<Result<Vec<_>, _>>()?;
+        }
+        if let Some(r) = arg(args, "--exhaustive-max-candidates") {
+            params.exhaustive_max_candidates = r.parse().context("--exhaustive-max-candidates")?;
+        }
+        if let Some(r) = arg(args, "--exhaustive-min-aligned") {
+            params.exhaustive_min_aligned = r.parse().context("--exhaustive-min-aligned")?;
+        }
         if let Some(r) = arg(args, "--isnad-zone-confidence") {
             params.isnad_zone_confidence = r.parse().context("--isnad-zone-confidence")?;
         }
@@ -193,7 +210,24 @@ impl Ctx {
                 None
             }
         };
-        Ok(Self { source, pages: Default::default(), refs: Default::default(), freq, params, lex, quran })
+        // Exhaustive retrieval reads the target book once, here, so every
+        // window shares the one index.
+        let index = if params.exhaustive() {
+            let mut pages: Vec<Page> = Vec::new();
+            for b in &params.target_books {
+                pages.extend(source.book_pages(*b, &|_, _| {})?);
+            }
+            let t0 = std::time::Instant::now();
+            let ix = reuse::BookIndex::build(&pages, &params.exhaustive_grams);
+            eprintln!(
+                "[exhaustive] {} pages, {} n-gram keys, {} postings, ~{:.1} MB, built in {} ms",
+                ix.pages(), ix.keys(), ix.postings, ix.bytes() as f64 / 1e6, t0.elapsed().as_millis()
+            );
+            Some(ix)
+        } else {
+            None
+        };
+        Ok(Self { source, index, pages: Default::default(), refs: Default::default(), freq, params, lex, quran })
     }
 
     fn zones(&self, page: &Page) -> Vec<Option<Zone>> {
@@ -252,7 +286,7 @@ impl Ctx {
         let load = |r: &PageRef| self.load(r);
         let around = |r: &PageRef, n: usize| self.around(r, n);
         let count = |t: &[String]| reuse::phrase_df(&self.source, t);
-        reuse::passage(&self.source, &self.freq, &self.params, &[], pages, range, zones, exclude_book, &count, &load, &around, &|| false)
+        reuse::passage(&self.source, &self.freq, &self.params, &[], pages, range, zones, exclude_book, &count, &load, &around, self.index.as_ref(), &|| false)
     }
 }
 

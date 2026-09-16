@@ -46,6 +46,31 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// How candidate pages are found.
+///
+/// The two differ only in retrieval. Alignment, scoring, typing and zones
+/// are the same code on the same parameters either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RetrievalMode {
+    /// Choose a handful of rare phrases and look them up on the index. The
+    /// only thing that works against 5.7M pages, and the source of both
+    /// standing failure modes: a passage whose window contributes no rare
+    /// phrase shared with the other book is never retrieved, and the
+    /// alignment floor has to be high because a short coincidence across
+    /// seven thousand books is certain.
+    #[default]
+    Corpus,
+    /// Read the target book into memory and look up *every* n-gram of the
+    /// query window. Only available when the run names its target, because
+    /// it costs one pass over that book and an index of it.
+    ///
+    /// Neither constraint above survives: nothing is selected, so nothing is
+    /// missed for not being selected, and a four-token coincidence between
+    /// two books is not the same claim as one across the corpus.
+    Exhaustive,
+}
+
 /// One key length and what it is allowed to spend.
 ///
 /// `df_cap` has to come down as `gram` does: a bigram is commoner than the
@@ -145,6 +170,26 @@ pub struct Params {
     pub type_verbatim: f64,
     pub type_inflected: f64,
     pub type_paraphrase: f64,
+    /// Corpus or exhaustive retrieval; see [`RetrievalMode`]. Exhaustive is
+    /// refused unless `target_books` names at most `exhaustive_max_books`.
+    pub retrieval: RetrievalMode,
+    /// Books a pairwise run may index in memory (4).
+    ///
+    /// The index is every lemma bigram and trigram of every page, so it is
+    /// linear in the text: a few hundred pages is nothing, a hundred books
+    /// is a corpus and the point of the mode has gone.
+    pub exhaustive_max_books: usize,
+    /// Which n-gram lengths the exhaustive index holds (2 and 3).
+    pub exhaustive_grams: Vec<usize>,
+    /// Candidate pages kept per window in exhaustive mode (200).
+    ///
+    /// Every page sharing one n-gram is a candidate, which for a common
+    /// bigram is most of a book, so they are ranked by how many n-grams they
+    /// share and cut. This is a bound on work, not a claim about relevance:
+    /// a real parallel shares many.
+    pub exhaustive_max_candidates: usize,
+    /// The aligned floor in exhaustive mode (4), against `min_aligned`'s 6.
+    pub exhaustive_min_aligned: usize,
     /// Extractor confidence at which a chain becomes an isnād zone (0.5).
     ///
     /// The confidence formula scores `min(links, 5) / 5` for length, so a
@@ -213,6 +258,11 @@ impl Default for Params {
             // a bigram needs a much lower one because it is commoner.
             anchor_slots: vec![AnchorSlot { gram: 3, anchors: 6, df_cap: 0 }, AnchorSlot { gram: 2, anchors: 4, df_cap: 200 }],
             target_books: Vec::new(),
+            retrieval: RetrievalMode::Corpus,
+            exhaustive_max_books: 4,
+            exhaustive_grams: vec![2, 3],
+            exhaustive_max_candidates: 200,
+            exhaustive_min_aligned: 4,
             type_formulaic: 0.3,
             type_verbatim: 0.9,
             type_inflected: 0.85,
@@ -225,6 +275,18 @@ impl Default for Params {
 
 impl Params {
     /// The document-frequency ceiling for a candidate anchor.
+    /// Whether this run reads the target book instead of querying for it.
+    pub fn exhaustive(&self) -> bool {
+        self.retrieval == RetrievalMode::Exhaustive
+            && !self.target_books.is_empty()
+            && self.target_books.len() <= self.exhaustive_max_books.max(1)
+    }
+
+    /// Aligned pairs a match needs, which is a different claim in each mode.
+    pub fn aligned_floor(&self) -> usize {
+        if self.exhaustive() { self.exhaustive_min_aligned.max(2) } else { self.min_aligned.max(1) }
+    }
+
     /// The index-side book restriction, `None` for the whole corpus.
     pub fn book_filter(&self) -> Option<Vec<u64>> {
         if self.target_books.is_empty() { None } else { Some(self.target_books.clone()) }
@@ -535,6 +597,104 @@ fn rank_value(rank: u32) -> u64 {
     if rank == u32::MAX { 10_000_000 } else { rank as u64 }
 }
 
+// ---------------------------------------------------------- the book index ---
+
+/// Every lemma n-gram of one book, and the pages holding it.
+///
+/// Built once per run from the target book's pages. Keys are 64-bit hashes
+/// of the joined lemmas rather than the lemmas themselves: a collision costs
+/// one page that alignment then rejects, and it keeps a 150,000-token book
+/// to a few megabytes.
+#[derive(Debug, Default)]
+pub struct BookIndex {
+    grams: HashMap<u64, Vec<u32>>,
+    pages: Vec<PageRef>,
+    /// Lengths held, and how many postings there are, for the run report.
+    pub lengths: Vec<usize>,
+    pub postings: usize,
+}
+
+fn gram_key(lemmas: &[&str]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for l in lemmas {
+        l.hash(&mut h);
+        0xffu8.hash(&mut h);
+    }
+    h.finish()
+}
+
+impl BookIndex {
+    /// One pass over the book. `lengths` are the n-gram lengths to hold.
+    pub fn build(pages: &[Page], lengths: &[usize]) -> Self {
+        let mut ix = BookIndex { lengths: lengths.to_vec(), ..Default::default() };
+        for (pi, page) in pages.iter().enumerate() {
+            ix.pages.push(PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id });
+            let lemmas: Vec<&str> = page.tokens.iter().map(|t| t.lemma.as_str()).collect();
+            for &n in lengths {
+                if n == 0 || lemmas.len() < n {
+                    continue;
+                }
+                for i in 0..=lemmas.len() - n {
+                    if lemmas[i..i + n].iter().any(|l| l.is_empty()) {
+                        continue;
+                    }
+                    let e = ix.grams.entry(gram_key(&lemmas[i..i + n])).or_default();
+                    if e.last() != Some(&(pi as u32)) {
+                        e.push(pi as u32);
+                        ix.postings += 1;
+                    }
+                }
+            }
+        }
+        ix
+    }
+
+    pub fn pages(&self) -> usize {
+        self.pages.len()
+    }
+
+    pub fn keys(&self) -> usize {
+        self.grams.len()
+    }
+
+    /// Roughly what it occupies, for the run report.
+    pub fn bytes(&self) -> usize {
+        self.grams.len() * (8 + 24) + self.postings * 4 + self.pages.len() * 16
+    }
+
+    /// Every page sharing an n-gram with these tokens, most shared first.
+    pub fn candidates(&self, tokens: &[Token], own: &[PageRef], params: &Params) -> Vec<Candidate> {
+        let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
+        let mut hits: HashMap<u32, usize> = HashMap::new();
+        for &n in &self.lengths {
+            if n == 0 || lemmas.len() < n {
+                continue;
+            }
+            for i in 0..=lemmas.len() - n {
+                if lemmas[i..i + n].iter().any(|l| l.is_empty()) {
+                    continue;
+                }
+                if let Some(ps) = self.grams.get(&gram_key(&lemmas[i..i + n])) {
+                    for p in ps {
+                        *hits.entry(*p).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        let mut out: Vec<Candidate> = hits
+            .into_iter()
+            .map(|(pi, n)| Candidate { page: self.pages[pi as usize], hits: n })
+            .filter(|c| !own.contains(&c.page))
+            .collect();
+        out.sort_by(|a, b| {
+            b.hits.cmp(&a.hits).then_with(|| (a.page.book_id, a.page.part_index, a.page.page_id).cmp(&(b.page.book_id, b.page.part_index, b.page.page_id)))
+        });
+        out.truncate(params.exhaustive_max_candidates.max(1));
+        out
+    }
+}
+
 // ------------------------------------------------------------- candidates ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -753,7 +913,7 @@ pub fn align_all_upto(q: &Seq, t: &Seq, p: &Params, limit: usize) -> Vec<Aligned
 /// that belong to the same passage folded in.
 fn align_one(q: &Seq, t: &Seq, q_mask: &mut [bool], t_mask: &mut [bool], p: &Params) -> Option<Aligned> {
     let first = smith_waterman(q, t, 0..t.len(), q_mask, t_mask, p)?;
-    if first.pairs.len() < p.min_aligned {
+    if first.pairs.len() < p.aligned_floor() {
         return None;
     }
     for (a, b) in &first.pairs {
@@ -769,7 +929,7 @@ fn align_one(q: &Seq, t: &Seq, q_mask: &mut [bool], t_mask: &mut [bool], p: &Par
             let Some(next) = smith_waterman(q, t, lo..hi, q_mask, t_mask, p) else { break };
             // A fragment: at least half the minimum, so an inflected tail
             // after a gap still counts, but not a chance bigram.
-            if next.pairs.len() < (p.min_aligned / 2).max(2) || next.pairs[0].1.abs_diff(t_first) > p.proximity_window {
+            if next.pairs.len() < (p.aligned_floor() / 2).max(2) || next.pairs[0].1.abs_diff(t_first) > p.proximity_window {
                 break;
             }
             for (a, b) in &next.pairs {
@@ -1127,6 +1287,8 @@ pub fn passage(
     count: &dyn Fn(&[String]) -> Result<usize>,
     load: &dyn Fn(&PageRef) -> Result<Option<Page>>,
     neighbours: &dyn Fn(&PageRef, usize) -> Result<Vec<PageRef>>,
+    // The target book read into memory, when the run is exhaustive.
+    index: Option<&BookIndex>,
     cancel: &dyn Fn() -> bool,
 ) -> Result<PassageRun> {
     let mut intern = Interner::default();
@@ -1146,12 +1308,20 @@ pub fn passage(
     let q = Seq::build(tokens, &mut intern, freq, params, banal_phrases, &page_zones);
     let non_banal = q.non_banal();
     let own: Vec<PageRef> = pages.iter().map(|p| PageRef { book_id: p.book_id, part_index: p.part_index, page_id: p.page_id }).collect();
+    // Exhaustive retrieval asks nothing of the index and chooses nothing:
+    // every n-gram of the window is looked up in the book held in memory.
+    // Anchors are still computed, because the run report shows them and
+    // because a passage with no usable anchor is worth seeing either way.
     let anchors = anchors(&q, tokens, params, count)?;
-    let mut cands = if anchors.is_empty() { Vec::new() } else { candidates(source, &anchors, &own, exclude_book, non_banal, params)? };
+    let mut cands = match index.filter(|_| params.exhaustive()) {
+        Some(ix) => ix.candidates(tokens, &own, params),
+        None if anchors.is_empty() => Vec::new(),
+        None => candidates(source, &anchors, &own, exclude_book, non_banal, params)?,
+    };
     // A short passage, or one with no anchor, also goes to the index whole;
     // its hits join the anchor candidates.
     let mut fallback = None;
-    if tokens.len() < params.fallback_max_tokens || anchors.is_empty() {
+    if !params.exhaustive() && (tokens.len() < params.fallback_max_tokens || anchors.is_empty()) {
         let (extra, f) = fallback_candidates(source, tokens, &own, exclude_book, params)?;
         if !extra.is_empty() {
             fallback = f;
@@ -1486,7 +1656,7 @@ mod tests {
         let s = Seq::build(&query.tokens[3..10], &mut it, &f, &p, &[], &[]);
         assert_eq!(s.non_banal(), 0, "every token is banal");
         // The passage alone: seven tokens, under the fallback length.
-        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 3..10, &[], None, &count, &load, &alone, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 3..10, &[], None, &count, &load, &alone, None, &|| false).unwrap();
         assert_eq!(run.fallback, Some("lemma-slop"), "{:?}", run);
         assert_eq!(run.matches.len(), 1);
         assert_eq!(run.matches[0].target.book_id, 2);
@@ -1494,7 +1664,7 @@ mod tests {
         assert_eq!(run.matches[0].components.aligned, 7);
         // With context around it (13 tokens) the trigram counts find it too:
         // `من أين تأكلون` is on two pages, the context trigrams on one.
-        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, None, &|| false).unwrap();
         assert!(run.fallback.is_none());
         assert!(run.anchors.iter().all(|a| a.df > 0));
         assert_eq!(run.matches.iter().filter(|m| m.target.book_id == 2).count(), 1, "{:?}", run.anchors);
@@ -1759,7 +1929,7 @@ mod tests {
         let zones = vec![None; n];
         let best = stream_windows(&lens, 60, 30, 6)
             .into_iter()
-            .filter_map(|w| passage(&fake, &f, &p, &[], &pages[w.first_page..=w.last_page], w.range, &zones, None, &count, &load, &alone, &|| false).ok())
+            .filter_map(|w| passage(&fake, &f, &p, &[], &pages[w.first_page..=w.last_page], w.range, &zones, None, &count, &load, &alone, None, &|| false).ok())
             .flat_map(|r| r.matches)
             .max_by_key(|m| m.components.aligned)
             .expect("the split quotation is found");
@@ -1772,7 +1942,7 @@ mod tests {
         for pg in &pages {
             let zs = vec![None; pg.tokens.len()];
             for w in windows(pg.tokens.len(), 60, 30, 6) {
-                let run = passage(&fake, &f, &p, &[], std::slice::from_ref(pg), w, &zs, None, &count, &load, &alone, &|| false).unwrap();
+                let run = passage(&fake, &f, &p, &[], std::slice::from_ref(pg), w, &zs, None, &count, &load, &alone, None, &|| false).unwrap();
                 assert!(run.matches.iter().all(|m| m.components.aligned < 10), "a page on its own only has half");
             }
         }
@@ -1798,7 +1968,7 @@ mod tests {
         let count = |t: &[String]| phrase_df(&fake, t);
         let refs: Vec<PageRef> = (9..=11).map(|g| PageRef { book_id: 2, part_index: 0, page_id: g }).collect();
         let around = |r: &PageRef, n: usize| Ok(span_around(&refs, r, n));
-        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &around, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &around, None, &|| false).unwrap();
         let best = run.matches.first().expect("the split quotation is found");
         assert_eq!(best.target.page_id, 10, "reported on the page it starts on");
         assert_eq!(best.target_end.map(|p| p.page_id), Some(11), "and carries the page it ends on");
@@ -1808,8 +1978,49 @@ mod tests {
 
         // One page at a time, the same quotation is lost.
         let alone = Params { target_neighbours: 0, ..p.clone() };
-        let run = passage(&fake, &f, &alone, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &around, &|| false).unwrap();
+        let run = passage(&fake, &f, &alone, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &around, None, &|| false).unwrap();
         assert!(run.matches.iter().all(|m| m.components.aligned < 10), "each half is under the floor on its own");
+    }
+
+    #[test]
+    fn exhaustive_retrieval_looks_up_every_gram_and_selects_nothing() {
+        // The mode exists because selection is what loses a short
+        // quotation: a window whose rarest trigrams all belong to the citing
+        // author's own prose contributes no anchor that the quoted book
+        // could hold. Reading the book instead of querying for it has no
+        // such failure.
+        let f = freq(&[("و", 1000), ("في", 900)]);
+        let quote = "المربد كل شيء حبست به الابل";
+        // The window is mostly Ibn Qutayba-ish framing; the quotation is six
+        // words in the middle of it.
+        let query = page(1, 0, 1, "", &format!("قال ابو محمد وقد تدبرت هذا التفسير وناظرت فيه {} ثم رجع الي الكلام", quote));
+        let target = page(2, 0, 5, "", &format!("باب ما جاء في {} و هو موضع سوق", quote));
+        let noise = page(2, 0, 6, "", "لا شيء هنا يذكر");
+        let fake = Fake { pages: vec![query.clone(), target.clone(), noise.clone()], calls: Mutex::new(vec![]) };
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let count = |t: &[String]| phrase_df(&fake, t);
+
+        let ix = BookIndex::build(&[target.clone(), noise], &[2, 3]);
+        assert_eq!(ix.pages(), 2);
+        assert!(ix.keys() > 0);
+
+        let base = Params { banality_rank: 2, min_aligned: 6, banality_baseline: Some(0.3), target_books: vec![2], ..Default::default() };
+        let ex = Params { retrieval: RetrievalMode::Exhaustive, ..base.clone() };
+        assert!(ex.exhaustive());
+        assert_eq!(ex.aligned_floor(), 4, "the floor is a different claim between two books");
+        assert_eq!(base.aligned_floor(), 6);
+
+        let run = passage(&fake, &f, &ex, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, Some(&ix), &|| false).unwrap();
+        let best = run.matches.first().expect("the quotation is found");
+        assert_eq!(best.target.page_id, 5);
+        assert!(best.components.aligned >= 6, "{}", best.components.aligned);
+        // The page that shares nothing is not a candidate at all.
+        assert!(run.matches.iter().all(|m| m.target.page_id == 5));
+
+        // More books than the ceiling allows falls back to corpus mode.
+        let many = Params { target_books: (1..=99).collect(), ..ex.clone() };
+        assert!(!many.exhaustive());
+        assert_eq!(many.aligned_floor(), 6);
     }
 
     #[test]
@@ -1827,12 +2038,12 @@ mod tests {
         let count = |t: &[String]| phrase_df(&fake, t);
         let base = Params { banality_rank: 2, anchors: 6, min_anchors: 3, banality_baseline: Some(0.3), ..Default::default() };
         let p = Params { target_books: vec![3], ..base.clone() };
-        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, None, &|| false).unwrap();
         assert_eq!(run.candidates, 1);
         assert!(run.matches.iter().all(|m| m.target.book_id == 3), "only the chosen book is searched");
         // The same anchors, at the same corpus-wide frequencies, as the
         // unrestricted run: nothing about the query has changed.
-        let wide = passage(&fake, &f, &base, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
+        let wide = passage(&fake, &f, &base, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, None, &|| false).unwrap();
         assert_eq!(run.anchors, wide.anchors);
     }
 
@@ -1937,7 +2148,7 @@ mod tests {
         let fake = Fake { pages: vec![query.clone(), reuse, partial, noise], calls: Mutex::new(vec![]) };
         let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
         let count = |t: &[String]| phrase_df(&fake, t);
-        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, None, &|| false).unwrap();
         assert_eq!(run.anchors.len(), 10, "{:?}", run.anchors);
         assert_eq!(run.anchors.iter().filter(|a| a.terms.len() == 3).count(), 6);
         assert_eq!(run.anchors.iter().filter(|a| a.terms.len() == 2).count(), 4);
@@ -1964,10 +2175,10 @@ mod tests {
         assert!(second.components.aligned < best.components.aligned);
         assert!(second.score <= best.score);
         // Exclude the whole book 2.
-        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], Some(2), &count, &load, &alone, &|| false).unwrap();
+        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], Some(2), &count, &load, &alone, None, &|| false).unwrap();
         assert_eq!(run.matches.len(), 1);
         // Cancel before the first candidate keeps the anchors and nothing else.
-        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| true).unwrap();
+        let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, None, &|| true).unwrap();
         assert!(run.matches.is_empty());
     }
 }

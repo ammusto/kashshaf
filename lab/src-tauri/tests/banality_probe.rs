@@ -181,7 +181,7 @@ fn formulae_through_passage_mode() {
             continue;
         }
         let label: String = page.tokens[a..b].iter().map(|t| t.surface.as_str()).collect::<Vec<_>>().join(" ");
-        let run = reuse::passage(&source, &freq, &params, &[], std::slice::from_ref(&page), a..b, &[], None, &count, &load, &around, &|| false).unwrap();
+        let run = reuse::passage(&source, &freq, &params, &[], std::slice::from_ref(&page), a..b, &[], None, &count, &load, &around, None, &|| false).unwrap();
         chains.push((label, run));
     }
     report("gold isnād chains, corpus-baseline penalty", &chains, &params);
@@ -192,7 +192,7 @@ fn formulae_through_passage_mode() {
         if b <= a {
             continue;
         }
-        let run = reuse::passage(&source, &freq, &spec_params, &[], std::slice::from_ref(&page), a..b, &[], None, &count, &load, &around, &|| false).unwrap();
+        let run = reuse::passage(&source, &freq, &spec_params, &[], std::slice::from_ref(&page), a..b, &[], None, &count, &load, &around, None, &|| false).unwrap();
         chains_spec.push((String::new(), run));
     }
     report("gold isnād chains (first 12), spec's formula (baseline 0)", &chains_spec, &spec_params);
@@ -209,10 +209,10 @@ fn formulae_through_passage_mode() {
                 continue;
             }
             let label: String = page.tokens[..12].iter().map(|t| t.surface.as_str()).collect::<Vec<_>>().join(" ");
-            let run = reuse::passage(&source, &freq, &params, &[], std::slice::from_ref(&page), 0..12, &[], None, &count, &load, &around, &|| false).unwrap();
+            let run = reuse::passage(&source, &freq, &params, &[], std::slice::from_ref(&page), 0..12, &[], None, &count, &load, &around, None, &|| false).unwrap();
             openings.push((label, run));
             // The basmala alone: four tokens.
-            let run = reuse::passage(&source, &freq, &Params { min_aligned: 3, ..params.clone() }, &[], std::slice::from_ref(&page), 0..4, &[], None, &count, &load, &around, &|| false).unwrap();
+            let run = reuse::passage(&source, &freq, &Params { min_aligned: 3, ..params.clone() }, &[], std::slice::from_ref(&page), 0..4, &[], None, &count, &load, &around, None, &|| false).unwrap();
             basmala_only.push(("بسم الله الرحمن الرحيم".to_string(), run));
             if openings.len() >= 10 {
                 break;

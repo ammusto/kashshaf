@@ -203,6 +203,19 @@ fn finish_run(conn: &Connection, run_id: i64, status: &str) -> Result<(), LabErr
     Ok(())
 }
 
+/// The target book read into memory, when the run asks for exhaustive
+/// retrieval and names few enough books to make that honest.
+fn build_index(h: &Handles, params: &Params) -> Result<Option<reuse::BookIndex>, LabError> {
+    if !params.exhaustive() {
+        return Ok(None);
+    }
+    let mut pages: Vec<Page> = Vec::new();
+    for b in &params.target_books {
+        pages.extend(h.source.book_pages(*b, &|_, _| {}).map_err(|e| LabError::Source(e.to_string()))?);
+    }
+    Ok(Some(reuse::BookIndex::build(&pages, &params.exhaustive_grams)))
+}
+
 fn insert_match(conn: &Connection, run_id: i64, corpus_version: &str, page: &Page, m: &Match) -> Result<i64, LabError> {
     // `page` is the match's own start page; the span may run past its end,
     // and the snapshot stops there.
@@ -439,6 +452,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             cache.get(r)
         };
         let around = |r: &PageRef, n: usize| cache.around(r, n);
+        let index = build_index(&h, &s.params)?;
         let cancel = || h.should_stop();
         emit(&window, "candidates", 0, 0, 0, started);
         let run = reuse::passage(
@@ -453,6 +467,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             &count,
             &load,
             &around,
+            index.as_ref(),
             &cancel,
         )
         .map_err(|e| LabError::Source(e.to_string()))?;
@@ -676,6 +691,7 @@ pub async fn reuse_estimate(
         let cache = PageCache::new(h.source.as_ref());
         let load = |r: &PageRef| cache.get(r);
         let around = |r: &PageRef, n: usize| cache.around(r, n);
+        let index = build_index(&h, &s.params)?;
         let dfs = DfCache::new(h.source.as_ref());
         let count = |t: &[String]| dfs.get(t);
         let started = std::time::Instant::now();
@@ -702,6 +718,7 @@ pub async fn reuse_estimate(
                 &count,
                 &load,
                 &around,
+                index.as_ref(),
                 &|| false,
             )
             .map_err(|e| LabError::Source(e.to_string()))?;
@@ -765,6 +782,7 @@ pub async fn reuse_book(
         let cache = PageCache::new(h.source.as_ref());
         let load = |r: &PageRef| cache.get(r);
         let around = |r: &PageRef, n: usize| cache.around(r, n);
+        let index = build_index(&h, &s.params)?;
         let dfs = DfCache::new(h.source.as_ref());
         let count = |t: &[String]| dfs.get(t);
         let total_pages = book.pages.len() as u64;
@@ -796,6 +814,7 @@ pub async fn reuse_book(
                 &count,
                 &load,
                 &around,
+                index.as_ref(),
                 &|| h.should_stop(),
             )
             .map_err(|e| LabError::Source(e.to_string()))?;
