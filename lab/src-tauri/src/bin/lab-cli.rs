@@ -10,6 +10,7 @@
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
 //! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--rare-one-df N] [--jsonl FILE]
+//! lab-cli isnad-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--groups core,sama,…] [--show]
 //! ```
 //!
 //! `--corpus` defaults to `KASHSHAF_SAMPLE_DIR`, then Kashshaf's data
@@ -593,6 +594,65 @@ fn reuse_trace(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// What the isnād extractor finds in a book, in numbers.
+///
+/// Chains, their links, how much of the text they cover and at what
+/// confidence -- enough to see what a lexicon change does to a genre the
+/// gold set does not cover. `--groups` overrides the enabled groups
+/// (`core,history,written,citation,sama`), so before and after are one flag
+/// apart.
+fn isnad_scan(args: &[String]) -> Result<()> {
+    let ctx = Ctx::open(args)?;
+    let book: u64 = arg(args, "--book").ok_or_else(|| anyhow!("--book ID"))?.parse()?;
+    let mut params = kashshaf_lab_lib::analysis::isnad::Params::default();
+    if let Some(g) = arg(args, "--groups") {
+        params.groups = g
+            .split(',')
+            .filter(|x| !x.is_empty())
+            .map(|x| lexicon::Group::parse(x).ok_or_else(|| anyhow!("unknown group {:?}", x)))
+            .collect::<Result<Vec<_>>>()?;
+    }
+    let show = args.iter().any(|a| a == "--show");
+    let mut pages = 0usize;
+    let mut tokens = 0usize;
+    let mut chains = 0usize;
+    let mut confident = 0usize;
+    let mut covered = 0usize;
+    let mut links: std::collections::BTreeMap<usize, usize> = Default::default();
+    let mut conf_sum = 0.0f64;
+    let started = std::time::Instant::now();
+    for r in page_range(args, &ctx.source, book)? {
+        let Some(page) = ctx.source.page(r.book_id, r.part_index, r.page_id)? else { continue };
+        pages += 1;
+        tokens += page.tokens.len();
+        let no = HashMap::new();
+        for c in kashshaf_lab_lib::analysis::isnad::extract_page(&page.tokens, &page.body, &ctx.lex, &params, &no) {
+            chains += 1;
+            conf_sum += c.confidence.total;
+            *links.entry(c.links.min(9)).or_insert(0) += 1;
+            if c.confidence.total >= 0.6 {
+                confident += 1;
+                covered += c.tok_end.saturating_sub(c.tok_start);
+            }
+            if show {
+                println!(
+                    "  {}:{} [{}..{}) {} links conf {:.2} matn {:?}  «{}»",
+                    page.part_index, page.page_id, c.tok_start, c.tok_end, c.links, c.confidence.total, c.matn.map(|m| m.0),
+                    text_of(&page, c.tok_start, c.tok_end).chars().take(150).collect::<String>()
+                );
+            }
+        }
+    }
+    let groups: Vec<&str> = params.groups.iter().map(|g| g.as_str()).collect();
+    println!("book {} groups [{}]", book, groups.join(","));
+    println!("  {} pages, {} tokens, {} ms", pages, tokens, started.elapsed().as_millis());
+    println!("  {} chains ({:.2} per page), {} at confidence >= 0.6", chains, chains as f64 / pages.max(1) as f64, confident);
+    println!("  mean confidence {:.3}; confident chains cover {} tokens ({:.1}% of the book)", conf_sum / chains.max(1) as f64, covered, 100.0 * covered as f64 / tokens.max(1) as f64);
+    let hist: Vec<String> = links.iter().map(|(k, v)| format!("{}:{}", k, v)).collect();
+    println!("  links {}", hist.join(" "));
+    Ok(())
+}
+
 fn quran_scan(args: &[String]) -> Result<()> {
     let ctx = Ctx::open(args)?;
     let (qt, qi) = ctx.quran.as_ref().ok_or_else(|| anyhow!("the Qurʾān is not available"))?;
@@ -651,6 +711,7 @@ fn main() -> Result<()> {
         Some("reuse-eval") => reuse_eval(&args[1..]),
         Some("reuse-find") => reuse_find(&args[1..]),
         Some("reuse-trace") => reuse_trace(&args[1..]),
+        Some("isnad-scan") => isnad_scan(&args[1..]),
         Some("quran-scan") => quran_scan(&args[1..]),
         _ => {
             eprintln!("usage: lab-cli reuse-eval|reuse-find|quran-scan [options]  (see the module doc)");

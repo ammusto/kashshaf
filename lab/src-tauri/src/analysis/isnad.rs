@@ -98,7 +98,7 @@ impl Default for Params {
             min_links: 2,
             lookahead: 3,
             min_confidence: 0.2,
-            groups: vec![Group::Core, Group::History, Group::Written, Group::Citation],
+            groups: vec![Group::Core, Group::History, Group::Written, Group::Citation, Group::Sama],
         }
     }
 }
@@ -286,7 +286,14 @@ pub fn classify(
             Class::Connect
         } else if views[i].pos == "noun_prop" {
             Class::Name
-        } else if is_nominal(&views[i].pos) && matches!(prev, Class::Verb | Class::Connect) {
+        } else if is_nominal(&views[i].pos)
+            && matches!(prev, Class::Verb | Class::Connect)
+            // A samāʿ verb closes a link, it does not open a name slot.
+            // `حدثنا فلان` is followed by the man; `سمعت فلانا يقول` is
+            // followed by what he said, so reading the next noun as a
+            // transmitter swallows the matn.
+            && !(prev == Class::Verb && i > 0 && groups[i - 1] == Some(Group::Sama))
+        {
             Class::Name
         } else if has_al(w) && is_nominal(&views[i].pos) && prev == Class::Name {
             Class::Connect
@@ -833,9 +840,10 @@ mod tests {
         assert_eq!(x.transmitters[2].raw, "احمد بن حموك");
         assert_eq!(x.transmitters[2].place, None);
         assert_eq!(x.transmitters[4].raw, "ابن الاعرابي");
-        // The chain ends at يذكر ذلك: the matn starts there.
-        assert_eq!(x.matn.map(|m| m.0), Some(29), "matn starts at يذكر (token 29)");
-        assert_eq!(x.tok_end, 29);
+        // `سمعت ابن الاعرابي يذكر ذلك`: يذكر carries the last link, so the
+        // chain ends after it and the matn starts at ذلك.
+        assert_eq!(x.matn.map(|m| m.0), Some(30), "matn starts at ذلك (token 30)");
+        assert_eq!(x.tok_end, 30);
     }
 
     #[test]
@@ -965,9 +973,10 @@ mod tests {
         let v = views("حدثنا/verb ابو داود قال/verb نا/verb محمد بن سعيد قال/verb سمعت/verb عليا يقول/verb الحمد لله باب الصلاة حدثنا/verb ابو بكر عن/prep مالك قال/verb كان/verb النبي يصلي/verb كذا حديث اخر");
         let c = extract_views(&v, &[(14, 16)], &[26], &Lexicon::shipped(), &Params::default(), &HashMap::new());
         assert_eq!(c.len(), 2, "{:?}", c.iter().map(|x| (x.tok_start, x.tok_end, x.matn)).collect::<Vec<_>>());
-        // يقول is not a lexicon verb, so the matn starts there (§4.2: "the
-        // matn starts at this OTHER") and stops at the heading.
-        assert_eq!(c[0].matn, Some((11, 14)), "the first matn stops at the heading");
+        // `سمعت عليا يقول الحمد لله`: يقول is a samāʿ verb, so it belongs to
+        // the chain and the matn is what he said -- الحمد لله -- stopping at
+        // the heading. Before the samāʿ group the matn began at يقول.
+        assert_eq!(c[0].matn, Some((12, 14)), "the first matn is what was said, and stops at the heading");
         assert_eq!(c[1].tok_start, 16);
         assert_eq!(c[1].links, 2);
         assert_eq!(c[1].matn, Some((22, 26)), "the second matn stops at the ḥadīth-number marker");

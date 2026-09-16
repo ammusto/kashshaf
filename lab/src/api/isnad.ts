@@ -13,7 +13,9 @@ import type { PageSpan } from './lab';
 
 export type TokenClass = 'formula' | 'verb' | 'connect' | 'name' | 'other' | 'boundary';
 export type IsnadStatus = 'candidate' | 'confirmed' | 'rejected' | 'orphaned';
-export type Group = 'core' | 'history' | 'written' | 'citation';
+/** 'sama' is the linking verb of a samāʿ chain (سمعت فلانا يقول …), which
+ *  ṭabaqāt and Sufi biography use where ḥadīth uses حدثنا. */
+export type Group = 'core' | 'history' | 'written' | 'citation' | 'sama';
 
 export interface Params {
   min_links: number;
@@ -22,7 +24,7 @@ export interface Params {
   groups: Group[];
 }
 
-export const DEFAULT_PARAMS: Params = { min_links: 2, lookahead: 3, min_confidence: 0.2, groups: ['core', 'history', 'written', 'citation'] };
+export const DEFAULT_PARAMS: Params = { min_links: 2, lookahead: 3, min_confidence: 0.2, groups: ['core', 'history', 'written', 'citation', 'sama'] };
 
 export interface Confidence {
   links: number;

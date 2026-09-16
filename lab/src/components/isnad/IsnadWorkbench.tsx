@@ -723,7 +723,7 @@ export function IsnadWorkbench({ book, onChanged }: { book: BookMetadata | null;
           <div className="flex items-center justify-between gap-2">
             <span title="Transmission-lexicon groups in play (spec §4.2)">Lexicon groups</span>
             <span className="flex gap-2">
-              {(['core', 'history', 'written', 'citation'] as Group[]).map((g) => (
+              {(['core', 'history', 'written', 'citation', 'sama'] as Group[]).map((g) => (
                 <label key={g} className="flex items-center gap-1">
                   <input type="checkbox" checked={draft.groups.includes(g)} onChange={(e) => setDraft({ ...draft, groups: e.target.checked ? [...draft.groups, g] : draft.groups.filter((x) => x !== g) })} aria-label={`Group ${g}`} />
                   {g}

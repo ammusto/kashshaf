@@ -24,6 +24,13 @@ pub enum Group {
     Written,
     /// Single-link: opens a *citation*, not an isnād (§4.2).
     Citation,
+    /// The linking verb of a samāʿ chain: `سمعت فلانا **يقول** سمعت فلانا
+    /// **يقول**`. Ṭabaqāt and Sufi biography carry their isnāds this way, and
+    /// with only the ḥadīth-shaped core group the chain breaks after one
+    /// link and `min_links` throws it away. Its own group because `يقول` is
+    /// also ordinary prose, so a genre that does not use samāʿ should be
+    /// able to switch it off.
+    Sama,
 }
 
 impl Group {
@@ -33,6 +40,7 @@ impl Group {
             Group::History => "history",
             Group::Written => "written",
             Group::Citation => "citation",
+            Group::Sama => "sama",
         }
     }
 
@@ -42,6 +50,7 @@ impl Group {
             "history" => Some(Group::History),
             "written" => Some(Group::Written),
             "citation" => Some(Group::Citation),
+            "sama" => Some(Group::Sama),
             _ => None,
         }
     }
