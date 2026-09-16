@@ -101,6 +101,21 @@ pub struct Params {
     /// Book mode (§4.3 batch): window and stride in tokens.
     pub window: usize,
     pub stride: usize,
+    /// How an anchor is built and matched (the three strategies of the
+    /// retrieval study).
+    ///
+    /// `anchor_gram` is the length of the lemma n-gram, 3 by default.
+    /// `anchor_slop` is the leniency allowed between its words; 0 is an
+    /// exact phrase. `anchor_df_cap` is the document frequency above which a
+    /// candidate anchor is discarded -- it has to come down as the n-gram
+    /// gets shorter, because a bigram is commoner than a trigram and a lemma
+    /// commoner still. `anchor_skip`, when non-zero, abandons n-grams
+    /// altogether: the rarest lemmas of the window are paired and a page
+    /// counts if it holds both within that many tokens.
+    pub anchor_gram: usize,
+    pub anchor_slop: u32,
+    pub anchor_df_cap: usize,
+    pub anchor_skip: u32,
 }
 
 impl Default for Params {
@@ -133,7 +148,18 @@ impl Default for Params {
             rare_df: 50,
             window: 60,
             stride: 30,
+            anchor_gram: 3,
+            anchor_slop: 0,
+            anchor_df_cap: 0,
+            anchor_skip: 0,
         }
+    }
+}
+
+impl Params {
+    /// The document-frequency ceiling for a candidate anchor.
+    pub fn df_cap(&self) -> usize {
+        if self.anchor_df_cap > 0 { self.anchor_df_cap } else { self.max_candidates.max(1) }
     }
 }
 
@@ -267,6 +293,9 @@ impl Seq {
 /// A lemma trigram used to retrieve candidates.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Anchor {
+    /// Leniency this anchor is matched with; see `Params::anchor_slop`.
+    #[serde(default)]
+    pub slop: u32,
     /// Offset of the trigram in the query.
     pub start: usize,
     pub terms: Vec<String>,
@@ -279,23 +308,75 @@ pub struct Anchor {
 /// The candidate trigrams of a passage (every lemma trigram outside a zone,
 /// each once), rarest-by-rank first — the order they are counted in.
 fn trigrams(q: &Seq, tokens: &[Token], params: &Params) -> Vec<Anchor> {
-    let mut seen: HashMap<[u32; 3], usize> = HashMap::new();
+    let n = params.anchor_gram.clamp(1, 5);
+    let mut seen: HashMap<Vec<u32>, usize> = HashMap::new();
     let mut out: Vec<Anchor> = Vec::new();
-    if q.len() < 3 {
+    if q.len() < n {
         return out;
     }
-    for i in 0..=q.len() - 3 {
-        let ok = (i..i + 3).all(|j| q.lemma[j].is_some() && (!params.exclude_zones_from_anchoring || q.zone[j].is_none()));
+    for i in 0..=q.len() - n {
+        let ok = (i..i + n).all(|j| q.lemma[j].is_some() && (!params.exclude_zones_from_anchoring || q.zone[j].is_none()));
         if !ok {
             continue;
         }
-        let key = [q.lemma[i].unwrap(), q.lemma[i + 1].unwrap(), q.lemma[i + 2].unwrap()];
+        let key: Vec<u32> = (i..i + n).map(|j| q.lemma[j].unwrap()).collect();
         if seen.contains_key(&key) {
             continue;
         }
         seen.insert(key, out.len());
-        let rank_sum = (i..i + 3).map(|j| rank_value(q.rank[j])).sum();
-        out.push(Anchor { start: i, terms: tokens[i..i + 3].iter().map(|t| t.lemma.clone()).collect(), rank_sum, df: 0 });
+        let rank_sum = (i..i + n).map(|j| rank_value(q.rank[j])).sum();
+        out.push(Anchor {
+            slop: params.anchor_slop,
+            start: i,
+            terms: tokens[i..i + n].iter().map(|t| t.lemma.clone()).collect(),
+            rank_sum,
+            df: 0,
+        });
+    }
+    out.sort_by(|a, b| b.rank_sum.cmp(&a.rank_sum).then_with(|| a.start.cmp(&b.start)));
+    out
+}
+
+/// Pairs of the window's rarest lemmas, to be matched anywhere within
+/// `anchor_skip` tokens of one another.
+///
+/// The n-gram is an adjacency claim, and adjacency is what a citing text
+/// breaks: `قال أبو عبيد: المربد كل شيء` puts the frame's last word next to
+/// the quotation's first, so the rarest trigram of the citing page is one
+/// that cannot exist in the book being quoted. A pair of rare lemmas near
+/// each other makes no claim about what lies between them.
+fn skipgrams(q: &Seq, tokens: &[Token], params: &Params) -> Vec<Anchor> {
+    let mut rare: Vec<usize> = (0..q.len())
+        .filter(|&j| {
+            q.lemma[j].is_some()
+                && !q.banal[j]
+                && (!params.exclude_zones_from_anchoring || q.zone[j].is_none())
+        })
+        .collect();
+    rare.sort_by_key(|&j| std::cmp::Reverse(rank_value(q.rank[j])));
+    rare.truncate(params.anchors.max(params.min_anchors).max(1) * 3);
+    rare.sort_unstable();
+
+    let mut out: Vec<Anchor> = Vec::new();
+    let mut seen: HashMap<(u32, u32), ()> = HashMap::new();
+    for a in 0..rare.len() {
+        for b in (a + 1)..rare.len() {
+            let (i, j) = (rare[a], rare[b]);
+            if j - i > params.anchor_skip as usize {
+                break;
+            }
+            let key = (q.lemma[i].unwrap(), q.lemma[j].unwrap());
+            if seen.insert(key, ()).is_some() {
+                continue;
+            }
+            out.push(Anchor {
+                slop: params.anchor_skip,
+                start: i,
+                terms: vec![tokens[i].lemma.clone(), tokens[j].lemma.clone()],
+                rank_sum: rank_value(q.rank[i]) + rank_value(q.rank[j]),
+                df: 0,
+            });
+        }
     }
     out.sort_by(|a, b| b.rank_sum.cmp(&a.rank_sum).then_with(|| a.start.cmp(&b.start)));
     out
@@ -310,7 +391,7 @@ fn trigrams(q: &Seq, tokens: &[Token], params: &Params) -> Vec<Anchor> {
 /// rarest by rank on ties — the rarest phrases of a passage cluster where
 /// its wording is peculiar, which is exactly where a parallel differs.
 pub fn anchors(q: &Seq, tokens: &[Token], params: &Params, count: &dyn Fn(&[String]) -> Result<usize>) -> Result<Vec<Anchor>> {
-    let all = trigrams(q, tokens, params);
+    let all = if params.anchor_skip > 0 { skipgrams(q, tokens, params) } else { trigrams(q, tokens, params) };
     if all.is_empty() {
         return Ok(Vec::new());
     }
@@ -328,7 +409,7 @@ pub fn anchors(q: &Seq, tokens: &[Token], params: &Params, count: &dyn Fn(&[Stri
             counted.push(a);
         }
     }
-    let cap = params.max_candidates.max(1);
+    let cap = params.df_cap();
     let mut usable: Vec<&Anchor> = counted.iter().filter(|a| a.df >= 2 && a.df <= cap).collect();
     usable.sort_by(|a, b| a.df.cmp(&b.df).then_with(|| b.rank_sum.cmp(&a.rank_sum)).then_with(|| a.start.cmp(&b.start)));
     let mut picked: Vec<Anchor> = Vec::new();
@@ -379,8 +460,17 @@ pub fn candidates(
     let mut hits: HashMap<(u64, u32, u64), usize> = HashMap::new();
     let mut rare: std::collections::HashSet<(u64, u32, u64)> = std::collections::HashSet::new();
     for a in anchors {
-        let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: a.terms.clone(), limit: params.max_candidates.max(1), slop: 0 };
-        for p in source.find_pages(&q)?.pages {
+        let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: a.terms.clone(), limit: params.max_candidates.max(1), slop: a.slop };
+        // A compound index expands a lemma into its triples, and a phrase
+        // whose expansion is too wide cannot be run with slop at all. That
+        // is a property of the phrase, not an error in the query: fall back
+        // to the exact one rather than abandoning the anchor.
+        let found = match source.find_pages(&q) {
+            Ok(h) => h,
+            Err(_) if a.slop > 0 => source.find_pages(&CandidateQuery { slop: 0, ..q.clone() })?,
+            Err(e) => return Err(e),
+        };
+        for p in found.pages {
             let key = (p.book_id, p.part_index, p.page_id);
             *hits.entry(key).or_insert(0) += 1;
             if a.df > 0 && a.df <= params.rare_df {

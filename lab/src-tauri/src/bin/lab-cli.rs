@@ -111,6 +111,21 @@ impl Ctx {
         if args.iter().any(|a| a == "--anchor-zones") {
             params.exclude_zones_from_anchoring = false;
         }
+        for (flag, slot) in [("--anchor-gram", 0), ("--anchor-df-cap", 1)] {
+            if let Some(r) = arg(args, flag) {
+                let v: usize = r.parse().with_context(|| flag.to_string())?;
+                match slot {
+                    0 => params.anchor_gram = v,
+                    _ => params.anchor_df_cap = v,
+                }
+            }
+        }
+        if let Some(r) = arg(args, "--anchor-slop") {
+            params.anchor_slop = r.parse().context("--anchor-slop")?;
+        }
+        if let Some(r) = arg(args, "--anchor-skip") {
+            params.anchor_skip = r.parse().context("--anchor-skip")?;
+        }
         if let Some(r) = arg(args, "--rare-df") {
             params.rare_df = r.parse().context("--rare-df")?;
         }
@@ -430,10 +445,13 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         // Did any single anchor reach that page at all?
         let mut anchor_hits: Vec<(String, usize, bool, usize)> = Vec::new();
         for a in &anchors {
-            let cq = kashshaf_lab_lib::source::CandidateQuery { layer: kashshaf_lab_lib::source::Layer::Lemma, terms: a.terms.clone(), limit: pr.max_candidates.max(1), slop: 0 };
-            let reached = ctx
-                .source
-                .find_pages(&cq)?
+            let cq = kashshaf_lab_lib::source::CandidateQuery { layer: kashshaf_lab_lib::source::Layer::Lemma, terms: a.terms.clone(), limit: pr.max_candidates.max(1), slop: a.slop };
+            let probe = match ctx.source.find_pages(&cq) {
+                Ok(h) => h,
+                Err(_) if a.slop > 0 => ctx.source.find_pages(&kashshaf_lab_lib::source::CandidateQuery { slop: 0, ..cq.clone() })?,
+                Err(e) => return Err(e),
+            };
+            let reached = probe
                 .pages
                 .iter()
                 .any(|x| x.part_index == want.part_index && x.page_id == want.page_id && x.book_id != book);
