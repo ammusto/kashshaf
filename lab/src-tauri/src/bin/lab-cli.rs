@@ -4,6 +4,7 @@
 //! ```text
 //! lab-cli reuse-eval  [--corpus DIR] [--gold FILE] [--threshold 0.35]
 //! lab-cli reuse-find  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--min-score 0.35]
+//!                     [--target-book ID] [--jsonl FILE]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
 //! ```
 //!
@@ -266,12 +267,52 @@ fn reuse_find(args: &[String]) -> Result<()> {
     let book: u64 = arg(args, "--book").ok_or_else(|| anyhow!("--book ID"))?.parse()?;
     let exclude_same = args.iter().any(|a| a == "--exclude-same-book");
     let limit: usize = arg(args, "--limit").map(|s| s.parse()).transpose()?.unwrap_or(5);
+    // One book to compare against, for a head-to-head with another system.
+    // The search is still the whole corpus -- that is what Lab does, and
+    // pretending otherwise would flatter its running time -- but only the
+    // matches landing in this book are reported.
+    let only: Option<u64> = arg(args, "--target-book").map(|s| s.parse()).transpose()?;
+    let mut jsonl = match arg(args, "--jsonl") {
+        Some(path) => Some(std::io::BufWriter::new(std::fs::File::create(path)?)),
+        None => None,
+    };
+    let started = std::time::Instant::now();
+    let mut found = 0usize;
     let p = &ctx.params;
     for r in page_range(args, &ctx.source, book)? {
         let Some(page) = ctx.source.page(r.book_id, r.part_index, r.page_id)? else { continue };
         for w in reuse::windows(page.tokens.len(), p.window, p.stride, p.min_aligned) {
             let run = ctx.passage(&page, w.start, w.end, if exclude_same { Some(book) } else { None })?;
-            for m in run.matches.iter().filter(|m| m.score >= p.threshold).take(limit) {
+            for m in run
+                .matches
+                .iter()
+                .filter(|m| m.score >= p.threshold && only.map_or(true, |t| m.target.book_id == t))
+                .take(limit)
+            {
+                found += 1;
+                if let Some(w) = jsonl.as_mut() {
+                    use std::io::Write;
+                    writeln!(
+                        w,
+                        "{}",
+                        serde_json::json!({
+                            "q_book": page.book_id, "q_part": page.part_index, "q_page": page.page_id,
+                            "q_start": m.q_start, "q_end": m.q_end,
+                            "t_book": m.target.book_id, "t_part": m.target.part_index, "t_page": m.target.page_id,
+                            "t_start": m.t_start, "t_end": m.t_end,
+                            "score": m.score, "kind": m.kind.as_str(),
+                            "coverage": m.components.coverage,
+                            "lemma_agree": m.components.lemma_agree,
+                            "root_agree": m.components.root_agree,
+                            "surface_agree": m.components.surface_agree,
+                            "banal_share": m.components.banal_share,
+                            "aligned": m.components.aligned,
+                        })
+                    )?;
+                }
+                if jsonl.is_some() {
+                    continue;
+                }
                 let Some(tp) = ctx.source.page(m.target.book_id, m.target.part_index, m.target.page_id)? else { continue };
                 let title = ctx.source.book(m.target.book_id)?.map(|b| b.title).unwrap_or_default();
                 println!(
@@ -285,6 +326,9 @@ fn reuse_find(args: &[String]) -> Result<()> {
                 println!("   t: {}", text_of(&tp, m.t_start, m.t_end));
             }
         }
+    }
+    if jsonl.is_some() {
+        println!("{} matches in {} ms", found, started.elapsed().as_millis());
     }
     Ok(())
 }
