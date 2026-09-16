@@ -51,6 +51,18 @@ export interface ReuseParams {
   type_paraphrase: number;
   /** Extractor confidence at which a chain becomes an isnād zone. */
   isnad_zone_confidence: number;
+  /**
+   * How candidates are found. `corpus` chooses a handful of rare phrases and
+   * looks them up; `exhaustive` reads the target book into memory and looks
+   * up every n-gram of the window. Exhaustive needs a target text and is
+   * refused above `exhaustive_max_books`.
+   */
+  retrieval: 'corpus' | 'exhaustive';
+  exhaustive_max_books: number;
+  exhaustive_grams: number[];
+  exhaustive_max_candidates: number;
+  /** The aligned floor in exhaustive mode, against `min_aligned` in corpus. */
+  exhaustive_min_aligned: number;
   /** Books a run may match against; empty is the whole corpus. */
   target_books: number[];
   /** Pages either side of a candidate page the alignment may run over. */
@@ -81,6 +93,11 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   exclude_zones_from_anchoring: true,
   window: 60,
   stride: 30,
+  retrieval: 'corpus',
+  exhaustive_max_books: 4,
+  exhaustive_grams: [2, 3],
+  exhaustive_max_candidates: 200,
+  exhaustive_min_aligned: 4,
   type_formulaic: 0.3,
   type_verbatim: 0.9,
   type_inflected: 0.85,

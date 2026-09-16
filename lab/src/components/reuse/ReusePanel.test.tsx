@@ -220,10 +220,17 @@ describe('ReusePanel', () => {
     fireEvent.click(within(screen.getByRole('listbox')).getByText('غريب الحديث'));
     await waitFor(() => expect(screen.getByTestId('target-books-note')).toHaveTextContent('Only 1 text'));
 
+    // Naming a text offers exhaustive retrieval; without one it is not on.
+    const exhaustive = screen.getByLabelText('Exhaustive retrieval') as HTMLInputElement;
+    expect(exhaustive).toBeEnabled();
+    fireEvent.click(exhaustive);
+
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     await findReuseOver(0, 3);
-    const args = api.reuse.passage.mock.calls[api.reuse.passage.mock.calls.length - 1][0] as { params?: { target_books?: number[] } };
+    await waitFor(() => expect(screen.getByTestId('run-mode')).toHaveTextContent('exhaustive retrieval'));
+    const args = api.reuse.passage.mock.calls[api.reuse.passage.mock.calls.length - 1][0] as { params?: { target_books?: number[]; retrieval?: string } };
     expect(args.params?.target_books).toEqual([230]);
+    expect(args.params?.retrieval).toBe('exhaustive');
   });
 
   it('reads a target span that runs over a page break as one passage', async () => {

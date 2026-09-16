@@ -542,6 +542,11 @@ async function loadSpan(bookId: number, from: { part_index: number; page_id: num
               <span className="w-16 shrink-0">Page</span>
               <span className="flex-[2] min-w-0">Text</span>
               <span className="flex-1 min-w-0">Book</span>
+              <span className="shrink-0 normal-case tracking-normal font-normal" dir="ltr" data-testid="run-mode">
+                {(runs.find((r) => r.id === shownRun)?.params?.retrieval ?? params.retrieval) === 'exhaustive'
+                  ? 'exhaustive retrieval'
+                  : 'corpus retrieval'}
+              </span>
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -944,6 +949,20 @@ function GearModal({
               ? `Only ${(params.target_books ?? []).length} text${(params.target_books ?? []).length > 1 ? 's' : ''} are searched, at the index. Much faster, and nothing outside them is read.`
               : 'Name one or two texts to ask whether this book draws on those. Applied at the index, so the run reads only their pages.'}
           </p>
+          <label className="flex items-start gap-2 text-[11px] ltr:ml-[7.5rem]">
+            <input
+              type="checkbox"
+              checked={params.retrieval === 'exhaustive'}
+              disabled={!(params.target_books ?? []).length}
+              onChange={(e) => setParams({ ...params, retrieval: e.target.checked ? 'exhaustive' : 'corpus' })}
+              aria-label="Exhaustive retrieval"
+            />
+            <span className={(params.target_books ?? []).length ? '' : 'opacity-50'}>
+              Read those texts instead of searching for them. Every phrase of every window is looked up rather than a
+              chosen few, which finds short quotations the corpus search cannot reach and reports a great deal more
+              formula with them. Needs a target text; runs in the two modes are not comparable.
+            </span>
+          </label>
         </div>
 
         <div className="flex items-center gap-4">
