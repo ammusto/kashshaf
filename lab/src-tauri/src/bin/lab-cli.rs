@@ -368,11 +368,23 @@ fn reuse_find(args: &[String]) -> Result<()> {
     let p = &ctx.params;
     for r in page_range(args, &ctx.source, book)? {
         let Some(page) = ctx.source.page(r.book_id, r.part_index, r.page_id)? else { continue };
+        // Every window of the page first, then one merge, as the app does
+        // (`commands::reuse` book mode). Emitting per window reports the same
+        // passage once per window that covers it, and on a book whose entries
+        // run longer than a window that is a great many rows.
+        let own = PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id };
+        let mut page_matches: Vec<(PageRef, reuse::Match)> = Vec::new();
         for w in reuse::windows(page.tokens.len(), p.window, p.stride, p.min_aligned) {
             let run = ctx.passage(&page, w.start, w.end, if exclude_same { Some(book) } else { None })?;
-            for m in run
-                .matches
+            page_matches.extend(run.matches.into_iter().map(|m| (own, m)));
+        }
+        let mut merged = reuse::merge_overlapping(page_matches);
+        // `--limit` is per page, so the page's best come first.
+        merged.sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal));
+        {
+            for m in merged
                 .iter()
+                .map(|(_, m)| m)
                 .filter(|m| {
                     m.score >= p.threshold
                         && only.map_or(true, |t| m.target.book_id == t)
