@@ -8,6 +8,7 @@
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
+//! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--rare-one-df N] [--jsonl FILE]
 //! ```
 //!
 //! `--corpus` defaults to `KASHSHAF_SAMPLE_DIR`, then Kashshaf's data
@@ -356,6 +357,152 @@ fn reuse_find(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Where a passage somebody else found is lost.
+///
+/// `--spans FILE` is one tab-separated row per passage:
+/// `part page tok_start tok_end t_part t_page t_tok_start t_tok_end text`.
+/// For each, this reports the window that covers it, the anchors chosen from
+/// that window with their phrase document frequencies, whether the target
+/// page became a candidate and on how many anchor hits, and -- when it did --
+/// the best local alignment on it and which gate turned it away.
+///
+/// `--rare-one-df N` re-asks retrieval with `rare_df = N`, which promotes a
+/// page on a single hit of an anchor that rare. Note the default is already
+/// 50; a smaller number promotes fewer pages, not more.
+fn reuse_trace(args: &[String]) -> Result<()> {
+    let ctx = Ctx::open(args)?;
+    let book: u64 = arg(args, "--book").ok_or_else(|| anyhow!("--book ID"))?.parse()?;
+    let spans_path = arg(args, "--spans").ok_or_else(|| anyhow!("--spans FILE"))?;
+    let rare_one: Option<usize> = arg(args, "--rare-one-df").map(|s| s.parse()).transpose()?;
+    let mut out = match arg(args, "--jsonl") {
+        Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p)?)),
+        None => None,
+    };
+    let p = &ctx.params;
+    let text = std::fs::read_to_string(&spans_path)?;
+
+    for (row, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 8 {
+            continue;
+        }
+        let (qpart, qpage): (u32, u64) = (f[0].parse()?, f[1].parse()?);
+        let (qa, qb): (usize, usize) = (f[2].parse()?, f[3].parse()?);
+        let (tpart, tpage): (u32, u64) = (f[4].parse()?, f[5].parse()?);
+        let want = PageRef { book_id: 0, part_index: tpart, page_id: tpage };
+
+        let Some(page) = ctx.source.page(book, qpart, qpage)? else {
+            eprintln!("row {}: no page {}:{}", row, qpart, qpage);
+            continue;
+        };
+        // The window Lab would have used: the one covering most of the span.
+        let ws = reuse::windows(page.tokens.len(), p.window, p.stride, p.min_aligned);
+        let w = ws
+            .iter()
+            .max_by_key(|w| w.end.min(qb).saturating_sub(w.start.max(qa)))
+            .cloned()
+            .unwrap_or(0..page.tokens.len());
+
+        let zones = ctx.zones(&page);
+        let mut intern = reuse::Interner::default();
+        let tokens = &page.tokens[w.clone()];
+        let page_zones: Vec<Option<Zone>> = w.clone().map(|i| zones.get(i).copied().flatten()).collect();
+        let q = reuse::Seq::build(tokens, &mut intern, &ctx.freq, p, &[], &page_zones);
+        let non_banal = q.non_banal();
+        let own = PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id };
+        let count = |t: &[String]| reuse::phrase_df(&ctx.source, t);
+        let anchors = reuse::anchors(&q, tokens, p, &count)?;
+
+        let mut pr = p.clone();
+        if let Some(n) = rare_one {
+            pr.rare_df = n;
+        }
+        let cands = if anchors.is_empty() {
+            Vec::new()
+        } else {
+            reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)?
+        };
+        let hit = cands.iter().find(|c| c.page.part_index == want.part_index && c.page.page_id == want.page_id && c.page.book_id != book);
+
+        // Did any single anchor reach that page at all?
+        let mut anchor_hits: Vec<(String, usize, bool, usize)> = Vec::new();
+        for a in &anchors {
+            let cq = kashshaf_lab_lib::source::CandidateQuery { layer: kashshaf_lab_lib::source::Layer::Lemma, terms: a.terms.clone(), limit: pr.max_candidates.max(1), slop: 0 };
+            let reached = ctx
+                .source
+                .find_pages(&cq)?
+                .pages
+                .iter()
+                .any(|x| x.part_index == want.part_index && x.page_id == want.page_id && x.book_id != book);
+            anchor_hits.push((a.terms.join(" "), a.df, reached, a.start));
+        }
+
+        let mut cause = "retrieval: no anchor reaches the page";
+        let mut aligned = 0usize;
+        let mut score = 0.0f64;
+        let mut kind = String::new();
+        if anchor_hits.iter().any(|(_, _, r, _)| *r) && hit.is_none() {
+            cause = "retrieval: anchors reach it but it is not promoted";
+        }
+        if let Some(c) = hit {
+            let Some(tp) = ctx.source.page(c.page.book_id, c.page.part_index, c.page.page_id)? else { continue };
+            let t = reuse::Seq::build(&tp.tokens, &mut intern, &ctx.freq, p, &[], &[]);
+            let all = reuse::align_all(&q, &t, p);
+            match all.first() {
+                None => cause = "alignment: nothing reaches min_aligned",
+                Some(a) => {
+                    let lo = a.pairs.iter().map(|x| x.0).min().unwrap();
+                    let hi = a.pairs.iter().map(|x| x.0).max().unwrap() + 1;
+                    let nb = q.banal[lo..hi].iter().filter(|b| !**b).count().max(1);
+                    let comp = reuse::components(&q, &t, &a.pairs, nb, p);
+                    let zone = reuse::zone_of(&q, &a.pairs);
+                    aligned = comp.aligned;
+                    score = reuse::score(&comp, p);
+                    let k = reuse::match_type_in(&comp, zone, p);
+                    kind = k.as_str().to_string();
+                    cause = if k == reuse::MatchType::Formulaic {
+                        "typing: formulaic, withheld"
+                    } else if score < p.threshold {
+                        "alignment: score below threshold"
+                    } else {
+                        "found"
+                    };
+                }
+            }
+        }
+
+        let record = serde_json::json!({
+            "row": row,
+            "q": format!("{}:{} [{}..{})", qpart, qpage, qa, qb),
+            "window": format!("{}..{}", w.start, w.end),
+            "target": format!("{}:{}", tpart, tpage),
+            "candidate": hit.is_some(),
+            "candidate_hits": hit.map(|c| c.hits).unwrap_or(0),
+            "candidates": cands.len(),
+            "anchors": anchor_hits.iter().map(|(t, d, r, st)| serde_json::json!({
+                "terms": t, "df": d, "reaches": r, "start": st,
+                // Does this anchor sit on the passage somebody else found,
+                // or elsewhere in the window that retrieved it?
+                "on_passage": *st + w.start + 2 >= qa && *st + w.start < qb,
+            })).collect::<Vec<_>>(),
+            "aligned": aligned,
+            "score": score,
+            "kind": kind,
+            "cause": cause,
+            "text": f.get(8).copied().unwrap_or(""),
+        });
+        println!("{:2}  {:<20} {:<9} cand={:<5} hits={} aligned={:<3} score={:.3} {}", row, record["q"].as_str().unwrap(), record["target"].as_str().unwrap(), hit.is_some(), record["candidate_hits"], aligned, score, cause);
+        if let Some(w) = out.as_mut() {
+            use std::io::Write;
+            writeln!(w, "{}", record)?;
+        }
+    }
+    Ok(())
+}
+
 fn quran_scan(args: &[String]) -> Result<()> {
     let ctx = Ctx::open(args)?;
     let (qt, qi) = ctx.quran.as_ref().ok_or_else(|| anyhow!("the Qurʾān is not available"))?;
@@ -413,6 +560,7 @@ fn main() -> Result<()> {
         Some("freq-build") => freq_build(&args[1..]),
         Some("reuse-eval") => reuse_eval(&args[1..]),
         Some("reuse-find") => reuse_find(&args[1..]),
+        Some("reuse-trace") => reuse_trace(&args[1..]),
         Some("quran-scan") => quran_scan(&args[1..]),
         _ => {
             eprintln!("usage: lab-cli reuse-eval|reuse-find|quran-scan [options]  (see the module doc)");
