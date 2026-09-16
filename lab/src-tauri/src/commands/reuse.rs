@@ -107,7 +107,7 @@ fn zones_for(conn: &Connection, s: &Setup, page: &Page) -> Result<Vec<Option<Zon
     }
     let no_overrides = HashMap::new();
     for c in isnad::extract_page(&page.tokens, &page.body, &s.lex, &isnad::Params::default(), &no_overrides) {
-        if c.confidence.total >= 0.6 {
+        if c.confidence.total >= s.params.isnad_zone_confidence {
             for x in c.tok_start..c.tok_end.min(n) {
                 if z[x].is_none() {
                     z[x] = Some(Zone::Isnad);

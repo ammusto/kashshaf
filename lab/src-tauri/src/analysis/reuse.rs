@@ -133,6 +133,15 @@ pub struct Params {
     /// Document frequency is still counted corpus-wide: how banal a phrase
     /// is does not depend on which book you are asking about.
     pub target_books: Vec<u64>,
+    /// Extractor confidence at which a chain becomes an isnād zone (0.5).
+    ///
+    /// The confidence formula scores `min(links, 5) / 5` for length, so a
+    /// two-link samāʿ chain -- the whole of ṭabaqāt and Sufi biography --
+    /// tops out around 0.5 however clean it is. At the 0.6 both callers used
+    /// to hardcode, those chains were found by the extractor and then
+    /// dropped before they could become a zone, which is why reuse reported
+    /// them as matches.
+    pub isnad_zone_confidence: f64,
     /// Pages either side of a candidate page that the alignment may run
     /// over (1). A quotation that crosses a page break in the quoted book is
     /// one passage in that book and has to be one alignment here; a page is
@@ -192,6 +201,7 @@ impl Default for Params {
             // a bigram needs a much lower one because it is commoner.
             anchor_slots: vec![AnchorSlot { gram: 3, anchors: 6, df_cap: 0 }, AnchorSlot { gram: 2, anchors: 4, df_cap: 200 }],
             target_books: Vec::new(),
+            isnad_zone_confidence: 0.5,
             target_neighbours: 1,
         }
     }
@@ -941,8 +951,16 @@ pub fn match_type(c: &Components) -> MatchType {
 /// out of the default report rather than out of the record. A long
 /// alignment inside an isnād is a different thing -- the whole chain
 /// genuinely copied -- and keeps its own type.
-pub fn match_type_in(c: &Components, zone: Option<Zone>, p: &Params) -> MatchType {
-    if zone == Some(Zone::Isnad) && c.aligned < p.min_aligned * 2 {
+pub fn match_type_in(c: &Components, zone: Option<Zone>, _p: &Params) -> MatchType {
+    // Two books that carry the same ḥadīth share its chain, and a shared
+    // chain is a fact about transmission rather than a passage one text took
+    // from the other. Length does not change that: `سمعت فلانا يقول سمعت
+    // فلانا يقول` is the same formula at thirteen tokens as at six, and the
+    // old rule -- formulaic only below twice the aligned floor -- reported
+    // every chain longer than that. `zone_of` already requires half the
+    // aligned tokens to sit in the zone, so a matn parallel that merely
+    // opens with a chain is not caught by this.
+    if zone == Some(Zone::Isnad) {
         return MatchType::Formulaic;
     }
     match_type(c)
@@ -1737,7 +1755,7 @@ mod tests {
     }
 
     #[test]
-    fn a_short_chain_inside_an_isnad_is_formulaic_not_a_quotation() {
+    fn a_chain_of_transmission_is_formulaic_at_any_length() {
         let f = freq(&[("عن", 1000), ("بن", 900)]);
         let p = Params { banality_rank: 2, ..Default::default() };
         let c = Components {
@@ -1755,9 +1773,15 @@ mod tests {
         // Seven aligned tokens of a chain of transmission: two unrelated
         // hadiths share that much and nothing else.
         assert_eq!(match_type_in(&c, Some(Zone::Isnad), &p), MatchType::Formulaic);
-        // A whole chain genuinely copied is not the same claim.
+        // Length does not rescue it. A twenty-token chain shared by two
+        // books is still a chain, and the rule that reported it -- formulaic
+        // only below twice the aligned floor -- is what filled a tabaqat
+        // comparison with matches of nothing but names.
         let long = Components { aligned: 20, ..c };
-        assert_eq!(match_type_in(&long, Some(Zone::Isnad), &p), MatchType::Verbatim);
+        assert_eq!(match_type_in(&long, Some(Zone::Isnad), &p), MatchType::Formulaic);
+        // The zone is decided on the aligned tokens, not on the page, so a
+        // matn parallel that merely opens with a chain is not caught: that
+        // is `zone_of`, tested in its own right.
     }
 
     #[test]

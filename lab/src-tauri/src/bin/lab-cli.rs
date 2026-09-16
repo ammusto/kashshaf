@@ -159,6 +159,9 @@ impl Ctx {
         if let Some(r) = arg(args, "--target-neighbours") {
             params.target_neighbours = r.parse().context("--target-neighbours")?;
         }
+        if let Some(r) = arg(args, "--isnad-zone-confidence") {
+            params.isnad_zone_confidence = r.parse().context("--isnad-zone-confidence")?;
+        }
         if let Some(r) = arg(args, "--rare-df") {
             params.rare_df = r.parse().context("--rare-df")?;
         }
@@ -205,7 +208,7 @@ impl Ctx {
         }
         let no = HashMap::new();
         for c in kashshaf_lab_lib::analysis::isnad::extract_page(&page.tokens, &page.body, &self.lex, &Default::default(), &no) {
-            if c.confidence.total >= 0.6 {
+            if c.confidence.total >= self.params.isnad_zone_confidence {
                 for x in c.tok_start..c.tok_end.min(n) {
                     if z[x].is_none() {
                         z[x] = Some(Zone::Isnad);
