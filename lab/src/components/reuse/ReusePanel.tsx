@@ -22,6 +22,7 @@ import { ReadPanel } from '../read/ReadPanel';
 import { VirtualTable, fmt, type Column } from '../stats/VirtualTable';
 import { HeavyRunModal, IDLE_RUN, LoadingOverlay, Notice, RunBar, isHeavy, type RunState } from '../ui/Running';
 import { useHeavyLimits } from '../../api/settings';
+import { BookPicker } from '../ui/BookPicker';
 
 /**
  * The reuse panel (spec §7.5, restructured by 1.5 §H).
@@ -863,6 +864,18 @@ function GearModal({
           <input type="checkbox" checked={excludeSameBook} onChange={(e) => setExcludeSameBook(e.target.checked)} />
           <span>Exclude this book</span>
         </label>
+
+        <div className="space-y-1">
+          <div className="flex items-start gap-2">
+            <span className="w-28 text-xs text-app-text-secondary pt-1.5">Search in</span>
+            <BookPicker value={params.target_books ?? []} onChange={(ids) => setParams({ ...params, target_books: ids })} placeholder="the whole corpus" />
+          </div>
+          <p className="text-[11px] text-app-text-secondary ltr:ml-[7.5rem]" data-testid="target-books-note">
+            {(params.target_books ?? []).length
+              ? `Only ${(params.target_books ?? []).length} text${(params.target_books ?? []).length > 1 ? 's' : ''} are searched, at the index. Much faster, and nothing outside them is read.`
+              : 'Name one or two texts to ask whether this book draws on those. Applied at the index, so the run reads only their pages.'}
+          </p>
+        </div>
 
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2">

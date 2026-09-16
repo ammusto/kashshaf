@@ -130,6 +130,12 @@ pub struct CandidateQuery {
     /// slop route, so api mode runs the exact phrase.
     #[serde(default)]
     pub slop: u32,
+    /// Restrict the search to these books, at the index rather than after
+    /// it. `None` is the whole corpus. This is what makes "does this text
+    /// draw on that one" a cheap question instead of a corpus-wide run
+    /// whose results are then thrown away.
+    #[serde(default)]
+    pub book_ids: Option<Vec<u64>>,
 }
 
 /// What a candidate query returns: up to `limit` pages, and how many pages

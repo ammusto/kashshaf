@@ -116,6 +116,11 @@ pub struct Params {
     pub anchor_slop: u32,
     pub anchor_df_cap: usize,
     pub anchor_skip: u32,
+    /// Books the run may match against; empty is the whole corpus. Applied
+    /// at the index, so a pairwise run reads only the target's pages.
+    /// Document frequency is still counted corpus-wide: how banal a phrase
+    /// is does not depend on which book you are asking about.
+    pub target_books: Vec<u64>,
 }
 
 impl Default for Params {
@@ -152,12 +157,18 @@ impl Default for Params {
             anchor_slop: 0,
             anchor_df_cap: 0,
             anchor_skip: 0,
+            target_books: Vec::new(),
         }
     }
 }
 
 impl Params {
     /// The document-frequency ceiling for a candidate anchor.
+    /// The index-side book restriction, `None` for the whole corpus.
+    pub fn book_filter(&self) -> Option<Vec<u64>> {
+        if self.target_books.is_empty() { None } else { Some(self.target_books.clone()) }
+    }
+
     pub fn df_cap(&self) -> usize {
         if self.anchor_df_cap > 0 { self.anchor_df_cap } else { self.max_candidates.max(1) }
     }
@@ -460,7 +471,7 @@ pub fn candidates(
     let mut hits: HashMap<(u64, u32, u64), usize> = HashMap::new();
     let mut rare: std::collections::HashSet<(u64, u32, u64)> = std::collections::HashSet::new();
     for a in anchors {
-        let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: a.terms.clone(), limit: params.max_candidates.max(1), slop: a.slop };
+        let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: a.terms.clone(), limit: params.max_candidates.max(1), slop: a.slop, book_ids: params.book_filter() };
         // A compound index expands a lemma into its triples, and a phrase
         // whose expansion is too wide cannot be run with slop at all. That
         // is a property of the phrase, not an error in the query: fall back
@@ -891,7 +902,7 @@ fn fallback_candidates(source: &dyn BookSource, tokens: &[Token], own: &PageRef,
         // The compound index refuses a slop phrase whose slots are too wide;
         // the exact lemma phrase is the next best thing, not an error.
         for (slop, label) in [(params.fallback_slop, "lemma-slop"), (0, "lemma")] {
-            let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: lemmas.clone(), limit: params.max_candidates.max(1), slop };
+            let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: lemmas.clone(), limit: params.max_candidates.max(1), slop, book_ids: params.book_filter() };
             let hits = match source.find_pages(&q) {
                 Ok(h) => h,
                 Err(_) if slop > 0 => continue,
@@ -908,7 +919,7 @@ fn fallback_candidates(source: &dyn BookSource, tokens: &[Token], own: &PageRef,
     }
     let surfaces: Vec<String> = tokens.iter().map(|t| normalize_arabic(&t.surface)).filter(|s| !s.is_empty()).collect();
     if surfaces.len() >= 2 {
-        let q = CandidateQuery { layer: crate::source::Layer::Surface, terms: surfaces, limit: params.max_candidates.max(1), slop: 0 };
+        let q = CandidateQuery { layer: crate::source::Layer::Surface, terms: surfaces, limit: params.max_candidates.max(1), slop: 0, book_ids: params.book_filter() };
         let pages: Vec<Candidate> = source.find_pages(&q)?.pages.into_iter().filter(keep).map(|page| Candidate { page, hits: 1 }).collect();
         if !pages.is_empty() {
             return Ok((pages, Some("surface")));
@@ -920,7 +931,7 @@ fn fallback_candidates(source: &dyn BookSource, tokens: &[Token], own: &PageRef,
 /// Document frequency of a lemma phrase, as `passage` needs it: one
 /// `find_pages` with limit 1, reading the total.
 pub fn phrase_df(source: &dyn BookSource, terms: &[String]) -> Result<usize> {
-    Ok(source.find_pages(&CandidateQuery { layer: crate::source::Layer::Lemma, terms: terms.to_vec(), limit: 1, slop: 0 })?.total)
+    Ok(source.find_pages(&CandidateQuery { layer: crate::source::Layer::Lemma, terms: terms.to_vec(), limit: 1, slop: 0, book_ids: None })?.total)
 }
 
 /// §4.3 single-passage mode over `page.tokens[range]`.
@@ -1418,6 +1429,7 @@ mod tests {
             let pages: Vec<PageRef> = self
                 .pages
                 .iter()
+                .filter(|p| q.book_ids.as_ref().map(|b| b.contains(&p.book_id)).unwrap_or(true))
                 .filter(|p| {
                     let l: Vec<String> = match q.layer {
                         crate::source::Layer::Surface => p.tokens.iter().map(|t| normalize_arabic(&t.surface)).collect(),
@@ -1429,6 +1441,30 @@ mod tests {
                 .collect();
             Ok(Hits { total: pages.len(), pages })
         }
+    }
+
+    #[test]
+    fn a_target_book_restricts_retrieval_and_not_the_frequency_count() {
+        // Pairwise mode. The restriction has to reach the index, or the run
+        // reads the whole corpus and throws most of it away; but document
+        // frequency is a fact about the corpus, and counting it inside one
+        // book would make every anchor look rare and none of them usable.
+        let f = freq(&[("و", 1000), ("في", 900)]);
+        let query = page(1, 0, 1, "", "و في مدينة الحكمة كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا");
+        let reuse = page(2, 0, 7, "", "قال و في مدينة الحكمة كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا ثم قال");
+        let partial = page(3, 0, 2, "", "كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا");
+        let fake = Fake { pages: vec![query.clone(), reuse, partial], calls: Mutex::new(vec![]) };
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let count = |t: &[String]| phrase_df(&fake, t);
+        let base = Params { banality_rank: 2, anchors: 6, min_anchors: 3, banality_baseline: Some(0.3), ..Default::default() };
+        let p = Params { target_books: vec![3], ..base.clone() };
+        let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| false).unwrap();
+        assert_eq!(run.candidates, 1);
+        assert!(run.matches.iter().all(|m| m.target.book_id == 3), "only the chosen book is searched");
+        // The same anchors, at the same corpus-wide frequencies, as the
+        // unrestricted run: nothing about the query has changed.
+        let wide = passage(&fake, &f, &base, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &|| false).unwrap();
+        assert_eq!(run.anchors, wide.anchors);
     }
 
     #[test]

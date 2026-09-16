@@ -474,11 +474,17 @@ impl BookSource for ApiSource {
             mode: &'a str,
         }
         #[derive(Serialize)]
+        struct Filters<'a> {
+            book_ids: &'a [u64],
+        }
+        #[derive(Serialize)]
         struct Req<'a> {
             and_terms: Vec<Term<'a>>,
             or_terms: Vec<Term<'a>>,
             limit: usize,
             offset: usize,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            filters: Option<Filters<'a>>,
         }
         #[derive(Deserialize)]
         struct Hit {
@@ -505,7 +511,13 @@ impl BookSource for ApiSource {
             if want == 0 {
                 break;
             }
-            let req = Req { and_terms: vec![Term { query: q.terms.join(" "), mode }], or_terms: vec![], limit: want, offset };
+            let req = Req {
+                and_terms: vec![Term { query: q.terms.join(" "), mode }],
+                or_terms: vec![],
+                limit: want,
+                offset,
+                filters: q.book_ids.as_deref().map(|b| Filters { book_ids: b }),
+            };
             let resp: Resp = self.post_json("/search/combined", &req)?;
             hits.total = resp.total_hits;
             let n = resp.results.len();

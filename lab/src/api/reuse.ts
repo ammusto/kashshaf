@@ -39,6 +39,8 @@ export interface ReuseParams {
   exclude_zones_from_anchoring: boolean;
   window: number;
   stride: number;
+  /** Books a run may match against; empty is the whole corpus. */
+  target_books: number[];
 }
 
 export const DEFAULT_REUSE_PARAMS: ReuseParams = {
@@ -65,6 +67,7 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   exclude_zones_from_anchoring: true,
   window: 60,
   stride: 30,
+  target_books: [],
 };
 
 export interface Components {

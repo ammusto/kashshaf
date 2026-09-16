@@ -4,7 +4,7 @@
 //! ```text
 //! lab-cli reuse-eval  [--corpus DIR] [--gold FILE] [--threshold 0.35]
 //! lab-cli reuse-find  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--min-score 0.35]
-//!                     [--target-book ID] [--jsonl FILE]
+//!                     [--target-book ID] [--pairwise] [--jsonl FILE]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
@@ -125,6 +125,13 @@ impl Ctx {
         }
         if let Some(r) = arg(args, "--anchor-skip") {
             params.anchor_skip = r.parse().context("--anchor-skip")?;
+        }
+        // Pairwise: push --target-book into retrieval instead of filtering
+        // results afterwards, so the index never leaves the two books.
+        if args.iter().any(|a| a == "--pairwise") {
+            if let Some(t) = arg(args, "--target-book") {
+                params.target_books = vec![t.parse().context("--target-book")?];
+            }
         }
         if let Some(r) = arg(args, "--rare-df") {
             params.rare_df = r.parse().context("--rare-df")?;
@@ -445,7 +452,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         // Did any single anchor reach that page at all?
         let mut anchor_hits: Vec<(String, usize, bool, usize)> = Vec::new();
         for a in &anchors {
-            let cq = kashshaf_lab_lib::source::CandidateQuery { layer: kashshaf_lab_lib::source::Layer::Lemma, terms: a.terms.clone(), limit: pr.max_candidates.max(1), slop: a.slop };
+            let cq = kashshaf_lab_lib::source::CandidateQuery { layer: kashshaf_lab_lib::source::Layer::Lemma, terms: a.terms.clone(), limit: pr.max_candidates.max(1), slop: a.slop, book_ids: pr.book_filter() };
             let probe = match ctx.source.find_pages(&cq) {
                 Ok(h) => h,
                 Err(_) if a.slop > 0 => ctx.source.find_pages(&kashshaf_lab_lib::source::CandidateQuery { slop: 0, ..cq.clone() })?,

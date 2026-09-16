@@ -386,10 +386,11 @@ impl BookSource for LocalSource {
             Layer::Root => SearchMode::Root,
         };
         let query = q.terms.join(" ");
+        let filters = SearchFilters { book_ids: q.book_ids.clone(), ..Default::default() };
         if q.slop > 0 && q.terms.len() > 1 {
             let (hits, total) = self
                 .engine
-                .phrase_hits(&query, mode, q.slop, &SearchFilters::default())
+                .phrase_hits(&query, mode, q.slop, &filters)
                 .with_context(|| format!("slop-{} phrase {:?} on {:?}", q.slop, query, q.layer))?;
             return Ok(Hits {
                 total,
@@ -398,7 +399,7 @@ impl BookSource for LocalSource {
         }
         let r = self
             .engine
-            .search(&query, mode, &SearchFilters::default(), q.limit.max(1), 0)
+            .search(&query, mode, &filters, q.limit.max(1), 0)
             .with_context(|| format!("candidate query {:?} on {:?}", query, q.layer))?;
         Ok(Hits {
             total: r.total_hits,

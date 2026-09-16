@@ -236,7 +236,7 @@ fn candidate_retrieval_is_identical_in_both_modes() {
     queries.push(vec!["قال".into(), "رسول".into(), "الله".into()]);
     for terms in queries {
         for limit in [5usize, 600] {
-            let q = CandidateQuery { layer: Layer::Lemma, terms: terms.clone(), limit, slop: 0 };
+            let q = CandidateQuery { layer: Layer::Lemma, terms: terms.clone(), limit, slop: 0, book_ids: None };
             let a = local.find_pages(&q).expect("local find_pages");
             let b = api.find_pages(&q).expect("api find_pages");
             assert_eq!(a.total, b.total, "total for {:?}", terms);

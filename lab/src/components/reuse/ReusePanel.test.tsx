@@ -30,6 +30,10 @@ const api = vi.hoisted(() => {
     listPageRefs: vi.fn(),
     listPages: vi.fn(),
     getPage: vi.fn(),
+    listBooks: vi.fn(async (): Promise<unknown[]> => [
+      { id: 230, title: 'غريب الحديث', death_ah: 224 },
+      { id: 1820, title: 'حلية الأولياء', death_ah: 430 },
+    ]),
     runSize: vi.fn(async () => ({ book_id: 4382, pages: 10, book_pages: 10, tokens: 4_000, book_tokens: 4_000 })),
     statsCancel: vi.fn(),
     statsPause: vi.fn(async () => {}),
@@ -198,6 +202,26 @@ describe('ReusePanel', () => {
 
     fireEvent.click(screen.getByLabelText('weak'));
     await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(1));
+  });
+
+  it('runs against one named text when the gear picks one', async () => {
+    // Pairwise mode: the reader names the book instead of reading the whole
+    // corpus and discarding it. The restriction has to travel with the run,
+    // which is what the assertion on the passage call checks.
+    api.reuse.passage.mockResolvedValue(passageResult([match(1, 0.74, 'verbatim')]));
+    render(<ReusePanel book={book} local />);
+    await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('reuse-gear'));
+    fireEvent.change(screen.getByLabelText('Target text'), { target: { value: 'غريب' } });
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
+    fireEvent.click(within(screen.getByRole('listbox')).getByText('غريب الحديث'));
+    await waitFor(() => expect(screen.getByTestId('target-books-note')).toHaveTextContent('Only 1 text'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await findReuseOver(0, 3);
+    const args = api.reuse.passage.mock.calls.at(-1)![0] as { params?: { target_books?: number[] } };
+    expect(args.params?.target_books).toEqual([230]);
   });
 
   it('keeps the text pane shrinkable when a long passage is selected (A4)', async () => {
