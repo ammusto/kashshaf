@@ -5,6 +5,7 @@
 //! lab-cli reuse-eval  [--corpus DIR] [--gold FILE] [--threshold 0.35]
 //! lab-cli reuse-find  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--min-score 0.35]
 //!                     [--target-book ID] [--pairwise] [--target-neighbours N] [--jsonl FILE]
+//!                     [--anchor-slots 3:4:500,2:4:200]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
@@ -115,6 +116,11 @@ impl Ctx {
         if args.iter().any(|a| a == "--anchor-zones") {
             params.exclude_zones_from_anchoring = false;
         }
+        // A single-key experiment: --anchor-gram / --anchor-skip mean one
+        // key, so they clear the two the default now carries.
+        if args.iter().any(|a| a == "--anchor-gram" || a == "--anchor-skip") {
+            params.anchor_slots.clear();
+        }
         for (flag, slot) in [("--anchor-gram", 0), ("--anchor-df-cap", 1)] {
             if let Some(r) = arg(args, flag) {
                 let v: usize = r.parse().with_context(|| flag.to_string())?;
@@ -136,6 +142,18 @@ impl Ctx {
             if let Some(t) = arg(args, "--target-book") {
                 params.target_books = vec![t.parse().context("--target-book")?];
             }
+        }
+        // --anchor-slots 3:4:500,2:4:200 -- gram:anchors:df_cap.
+        if let Some(spec) = arg(args, "--anchor-slots") {
+            let mut slots = Vec::new();
+            for part in spec.split(',').filter(|s| !s.is_empty()) {
+                let f: Vec<&str> = part.split(':').collect();
+                if f.len() != 3 {
+                    return Err(anyhow!("--anchor-slots wants gram:anchors:df_cap, got {:?}", part));
+                }
+                slots.push(reuse::AnchorSlot { gram: f[0].parse()?, anchors: f[1].parse()?, df_cap: f[2].parse()? });
+            }
+            params.anchor_slots = slots;
         }
         if let Some(r) = arg(args, "--target-neighbours") {
             params.target_neighbours = r.parse().context("--target-neighbours")?;
@@ -377,7 +395,7 @@ fn reuse_find(args: &[String]) -> Result<()> {
                             "t_book": m.target.book_id, "t_part": m.target.part_index, "t_page": m.target.page_id,
                             "t_end_part": m.target_end.map(|p| p.part_index), "t_end_page": m.target_end.map(|p| p.page_id),
                             "t_start": m.t_start, "t_end": m.t_end,
-                            "score": m.score, "kind": m.kind.as_str(),
+                            "score": m.score, "kind": m.kind.as_str(), "zone": m.zone.map(|z| z.as_str()),
                             "coverage": m.components.coverage,
                             "lemma_agree": m.components.lemma_agree,
                             "root_agree": m.components.root_agree,

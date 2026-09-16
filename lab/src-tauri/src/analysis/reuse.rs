@@ -46,6 +46,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// One key length and what it is allowed to spend.
+///
+/// `df_cap` has to come down as `gram` does: a bigram is commoner than the
+/// trigrams inside it, so the ceiling that keeps a trigram retrievable lets
+/// far too much through for a bigram.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnchorSlot {
+    pub gram: usize,
+    pub anchors: usize,
+    pub df_cap: usize,
+}
+
 /// Everything §4.3 lets the user set, with its default.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -126,6 +138,14 @@ pub struct Params {
     /// one passage in that book and has to be one alignment here; a page is
     /// a printing accident, not a unit of composition. 0 restores the old
     /// behaviour, one page at a time.
+    /// Anchor budget split by key length, in place of `anchors` on one
+    /// key. Empty keeps the single key `anchor_gram` describes.
+    ///
+    /// A merged pool cannot do this: the pick sorts by document frequency
+    /// ascending, and a trigram is always rarer than the bigrams inside it,
+    /// so every slot would go to trigrams and the shorter key would never
+    /// retrieve anything. The slots have to be reserved.
+    pub anchor_slots: Vec<AnchorSlot>,
     pub target_neighbours: usize,
 }
 
@@ -163,6 +183,14 @@ impl Default for Params {
             anchor_slop: 0,
             anchor_df_cap: 0,
             anchor_skip: 0,
+            // Six trigram anchors, as before, and four bigram ones on top.
+            // Not four and four: the budget is the trigram budget, and
+            // splitting it takes two anchors away from the key that works to
+            // pay for the key that only helps sometimes, which measures
+            // worse than leaving it alone. The second key is added, not
+            // carved out. df_cap 0 means the old ceiling, max_candidates;
+            // a bigram needs a much lower one because it is commoner.
+            anchor_slots: vec![AnchorSlot { gram: 3, anchors: 6, df_cap: 0 }, AnchorSlot { gram: 2, anchors: 4, df_cap: 200 }],
             target_books: Vec::new(),
             target_neighbours: 1,
         }
@@ -409,6 +437,31 @@ fn skipgrams(q: &Seq, tokens: &[Token], params: &Params) -> Vec<Anchor> {
 /// rarest by rank on ties — the rarest phrases of a passage cluster where
 /// its wording is peculiar, which is exactly where a parallel differs.
 pub fn anchors(q: &Seq, tokens: &[Token], params: &Params, count: &dyn Fn(&[String]) -> Result<usize>) -> Result<Vec<Anchor>> {
+    if params.anchor_slots.is_empty() {
+        return anchors_on_one_key(q, tokens, params, count);
+    }
+    // Each key gets its own budget and its own ceiling. Two keys that pick
+    // the same phrase are one anchor, not two queries.
+    let mut out: Vec<Anchor> = Vec::new();
+    for slot in &params.anchor_slots {
+        let p = Params {
+            anchor_gram: slot.gram,
+            anchors: slot.anchors,
+            min_anchors: slot.anchors.min(params.min_anchors),
+            anchor_df_cap: slot.df_cap,
+            anchor_slots: Vec::new(),
+            ..params.clone()
+        };
+        for a in anchors_on_one_key(q, tokens, &p, count)? {
+            if !out.iter().any(|x| x.terms == a.terms) {
+                out.push(a);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn anchors_on_one_key(q: &Seq, tokens: &[Token], params: &Params, count: &dyn Fn(&[String]) -> Result<usize>) -> Result<Vec<Anchor>> {
     let all = if params.anchor_skip > 0 { skipgrams(q, tokens, params) } else { trigrams(q, tokens, params) };
     if all.is_empty() {
         return Ok(Vec::new());
@@ -1257,7 +1310,8 @@ mod tests {
     #[test]
     fn anchors_are_the_lowest_df_trigrams_with_rank_as_tiebreaker() {
         let f = freq(&[("a", 100), ("b", 90), ("c", 80), ("d", 70), ("e", 60), ("z", 1)]);
-        let p = Params { banality_rank: 1, anchors: 2, min_anchors: 1, ..Default::default() };
+        // One key: this is the rule the slots are built out of.
+        let p = Params { banality_rank: 1, anchors: 2, min_anchors: 1, anchor_slots: Vec::new(), ..Default::default() };
         // Document frequencies from a fake index: `a b c` is rare (2 pages:
         // here and one other), `d e z` common (40), everything else 5;
         // `z b c` only on the query page itself (1) — useless.
@@ -1536,6 +1590,36 @@ mod tests {
     }
 
     #[test]
+    fn reserved_slots_keep_both_key_lengths_where_a_merged_pool_would_not() {
+        // The bigram run gained findings and lost others because switching
+        // the key replaced the six anchors rather than adding to them. A
+        // merged pool cannot fix that: the pick sorts by df ascending and a
+        // trigram is always rarer than the bigrams inside it, so every slot
+        // would go to trigrams. The slots have to be reserved.
+        let f = freq(&[("a", 100), ("b", 90), ("c", 80), ("d", 70), ("e", 60), ("z", 1)]);
+        let df = |t: &[String]| -> Result<usize> { Ok(if t.len() == 3 { 3 } else { 30 }) };
+        let pg = page(1, 0, 1, "", "a b c d e z b c a");
+        let mut it = Interner::default();
+
+        let one = Params { banality_rank: 1, anchors: 4, min_anchors: 1, anchor_df_cap: 500, anchor_slots: Vec::new(), ..Default::default() };
+        let s1 = Seq::build(&pg.tokens, &mut it, &f, &one, &[], &[]);
+        let wide = anchors(&s1, &pg.tokens, &one, &df).unwrap();
+        assert!(wide.iter().all(|a| a.terms.len() == 3), "one key, one length");
+
+        let split = Params {
+            anchor_slots: vec![AnchorSlot { gram: 3, anchors: 4, df_cap: 500 }, AnchorSlot { gram: 2, anchors: 4, df_cap: 200 }],
+            ..one.clone()
+        };
+        let got = anchors(&s1, &pg.tokens, &split, &df).unwrap();
+        assert!(got.iter().any(|a| a.terms.len() == 3), "trigrams kept");
+        assert!(got.iter().any(|a| a.terms.len() == 2), "bigrams added");
+        // Nothing the single key found is given up.
+        for a in &wide {
+            assert!(got.iter().any(|x| x.terms == a.terms), "{:?} survives the split", a.terms);
+        }
+    }
+
+    #[test]
     fn a_quotation_split_by_a_page_break_is_one_match_over_two_pages() {
         // The printer's break is not a boundary of the text. Half the
         // quotation sits at the foot of one page and half at the head of the
@@ -1684,11 +1768,14 @@ mod tests {
         let reuse = page(2, 0, 7, "", "قال و في مدينة الحكمة كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا ثم قال");
         let partial = page(3, 0, 2, "", "كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا");
         let noise = page(4, 0, 3, "", "لا شيء هنا يذكر عن مدينة");
+        // Six trigram anchors and four bigram ones: the shipped default.
         let fake = Fake { pages: vec![query.clone(), reuse, partial, noise], calls: Mutex::new(vec![]) };
         let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
         let count = |t: &[String]| phrase_df(&fake, t);
         let run = passage(&fake, &f, &p, &[], &query, 0..query.tokens.len(), &[], None, &count, &load, &alone, &|| false).unwrap();
-        assert_eq!(run.anchors.len(), 6, "{:?}", run.anchors);
+        assert_eq!(run.anchors.len(), 10, "{:?}", run.anchors);
+        assert_eq!(run.anchors.iter().filter(|a| a.terms.len() == 3).count(), 6);
+        assert_eq!(run.anchors.iter().filter(|a| a.terms.len() == 2).count(), 4);
         assert_eq!(run.candidates, 2, "the query's own page is excluded and noise hits nothing");
         assert!(run.anchors.iter().all(|a| a.df >= 2), "{:?}", run.anchors);
         assert_eq!(run.matches.len(), 2);
