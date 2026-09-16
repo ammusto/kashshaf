@@ -188,6 +188,24 @@ pub struct Params {
     /// share and cut. This is a bound on work, not a claim about relevance:
     /// a real parallel shares many.
     pub exhaustive_max_candidates: usize,
+    /// Corpus document frequency above which an n-gram is not looked up in
+    /// exhaustive mode; 0 is no ceiling.
+    ///
+    /// Removing anchor selection removed the only thing that kept a citation
+    /// formula out of retrieval: `وقال أبو عبيد في حديث` has a document
+    /// frequency in the thousands and can never be an anchor, but every one
+    /// of its n-grams is looked up here. The ceiling puts the frequency
+    /// signal back without putting selection back.
+    pub exhaustive_df_ceiling: usize,
+    /// Score each alignment's exact core as well as the span proximity
+    /// folding built from it, and keep whichever scores better.
+    ///
+    /// A nine-token verbatim quotation folded into a thirty-three token span
+    /// that is 59% banal scores 0.31 and is not reported; on its own it
+    /// scores well. The fold is right for a passage quoted with
+    /// interruptions and wrong for a short quotation inside divergent prose,
+    /// and which it is cannot be known before scoring both.
+    pub prefer_best_scoring_span: bool,
     /// The aligned floor in exhaustive mode (6).
     ///
     /// It was 4 on the argument that a four-token coincidence between two
@@ -268,6 +286,8 @@ impl Default for Params {
             exhaustive_max_books: 4,
             exhaustive_grams: vec![2, 3],
             exhaustive_max_candidates: 100,
+            exhaustive_df_ceiling: 0,
+            prefer_best_scoring_span: false,
             exhaustive_min_aligned: 6,
             type_formulaic: 0.3,
             type_verbatim: 0.9,
@@ -670,8 +690,13 @@ impl BookIndex {
     }
 
     /// Every page sharing an n-gram with these tokens, most shared first.
-    pub fn candidates(&self, tokens: &[Token], own: &[PageRef], params: &Params) -> Vec<Candidate> {
+    ///
+    /// `df` is the corpus document frequency of a phrase; it is consulted
+    /// only when `exhaustive_df_ceiling` is set, and an n-gram above the
+    /// ceiling is not looked up at all.
+    pub fn candidates(&self, tokens: &[Token], own: &[PageRef], params: &Params, df: &dyn Fn(&[String]) -> Result<usize>) -> Result<Vec<Candidate>> {
         let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
+        let ceiling = params.exhaustive_df_ceiling;
         let mut hits: HashMap<u32, usize> = HashMap::new();
         for &n in &self.lengths {
             if n == 0 || lemmas.len() < n {
@@ -680,6 +705,14 @@ impl BookIndex {
             for i in 0..=lemmas.len() - n {
                 if lemmas[i..i + n].iter().any(|l| l.is_empty()) {
                     continue;
+                }
+                // The ceiling is asked before the index, so a formula costs
+                // one cached frequency lookup rather than a page list.
+                if ceiling > 0 {
+                    let terms: Vec<String> = lemmas[i..i + n].iter().map(|l| l.to_string()).collect();
+                    if df(&terms)? > ceiling {
+                        continue;
+                    }
                 }
                 if let Some(ps) = self.grams.get(&gram_key(&lemmas[i..i + n])) {
                     for p in ps {
@@ -697,7 +730,7 @@ impl BookIndex {
             b.hits.cmp(&a.hits).then_with(|| (a.page.book_id, a.page.part_index, a.page.page_id).cmp(&(b.page.book_id, b.page.part_index, b.page.page_id)))
         });
         out.truncate(params.exhaustive_max_candidates.max(1));
-        out
+        Ok(out)
     }
 }
 
@@ -764,6 +797,9 @@ pub fn candidates(
 /// One local alignment: `(query index, target index)` pairs in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Aligned {
+    /// The pairs of the first Smith-Waterman run, before proximity folding
+    /// added anything. Empty when nothing was folded in.
+    pub core: Vec<(usize, usize)>,
     pub pairs: Vec<(usize, usize)>,
     pub score: i32,
 }
@@ -873,7 +909,7 @@ pub fn smith_waterman(q: &Seq, t: &Seq, t_range: Range<usize>, q_mask: &[bool], 
         }
     }
     pairs.reverse();
-    Some(Aligned { pairs, score: best.0 })
+    Some(Aligned { core: Vec::new(), pairs, score: best.0 })
 }
 
 /// The best local alignment on a page and, in proximity mode, further
@@ -927,6 +963,7 @@ fn align_one(q: &Seq, t: &Seq, q_mask: &mut [bool], t_mask: &mut [bool], p: &Par
         t_mask[*b] = true;
     }
     let mut all = first.clone();
+    all.core = first.pairs.clone();
     if p.proximity {
         let t_first = first.pairs[0].1;
         let lo = t_first.saturating_sub(p.proximity_window);
@@ -946,6 +983,9 @@ fn align_one(q: &Seq, t: &Seq, q_mask: &mut [bool], t_mask: &mut [bool], p: &Par
             all.pairs.extend(next.pairs);
         }
         all.pairs.sort_unstable();
+    }
+    if all.pairs.len() == all.core.len() {
+        all.core.clear();
     }
     Some(all)
 }
@@ -1320,7 +1360,7 @@ pub fn passage(
     // because a passage with no usable anchor is worth seeing either way.
     let anchors = anchors(&q, tokens, params, count)?;
     let mut cands = match index.filter(|_| params.exhaustive()) {
-        Some(ix) => ix.candidates(tokens, &own, params),
+        Some(ix) => ix.candidates(tokens, &own, params, count)?,
         None if anchors.is_empty() => Vec::new(),
         None => candidates(source, &anchors, &own, exclude_book, non_banal, params)?,
     };
@@ -1355,6 +1395,22 @@ pub fn passage(
             // were found inside a window of sixty or of six hundred, and
             // dividing by the window is what made a short quotation score
             // near zero and disappear.
+            // Proximity folding is right for a passage quoted with
+            // interruptions and wrong for a short quotation inside divergent
+            // prose, and which it is cannot be known before scoring both.
+            let mut pairs_of = al.pairs.clone();
+            if params.prefer_best_scoring_span && !al.core.is_empty() && al.core.len() >= params.aligned_floor() {
+                let pick = |ps: &[(usize, usize)]| {
+                    let lo = ps.iter().map(|p| p.0).min().unwrap();
+                    let hi = ps.iter().map(|p| p.0).max().unwrap() + 1;
+                    let nb = q.banal[lo..hi].iter().filter(|b| !**b).count().max(1);
+                    score(&components(&q, &t, ps, nb, params), params)
+                };
+                if pick(&al.core) > pick(&al.pairs) {
+                    pairs_of = al.core.clone();
+                }
+            }
+            let al = Aligned { core: Vec::new(), pairs: pairs_of, score: al.score };
             let q_lo = al.pairs.iter().map(|p| p.0).min().unwrap();
             let q_hi = al.pairs.iter().map(|p| p.0).max().unwrap() + 1;
             let non_banal_span = q.banal[q_lo..q_hi].iter().filter(|b| !**b).count().max(1);

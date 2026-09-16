@@ -7,7 +7,8 @@
 //!                     [--target-book ID] [--pairwise] [--target-neighbours N] [--jsonl FILE]
 //!                     [--anchor-slots 3:4:500,2:4:200]
 //!                     [--exhaustive] [--exhaustive-grams 2,3] [--exhaustive-max-candidates N]
-//!                     [--exhaustive-min-aligned N]
+//!                     [--exhaustive-min-aligned N] [--exhaustive-df-ceiling N]
+//!                     [--best-scoring-span]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
@@ -90,6 +91,8 @@ struct Ctx {
     source: LocalSource,
     /// The target book in memory, when the run is exhaustive.
     index: Option<reuse::BookIndex>,
+    /// Phrase frequencies, which the df ceiling asks for over and over.
+    dfs: std::cell::RefCell<HashMap<Vec<String>, usize>>,
     /// Candidate pages and book page lists, so spanning does not re-read a
     /// neighbour once per candidate.
     pages: std::cell::RefCell<HashMap<(u64, u32, u64), Option<Page>>>,
@@ -173,6 +176,12 @@ impl Ctx {
         if let Some(r) = arg(args, "--exhaustive-max-candidates") {
             params.exhaustive_max_candidates = r.parse().context("--exhaustive-max-candidates")?;
         }
+        if let Some(r) = arg(args, "--exhaustive-df-ceiling") {
+            params.exhaustive_df_ceiling = r.parse().context("--exhaustive-df-ceiling")?;
+        }
+        if args.iter().any(|a| a == "--best-scoring-span") {
+            params.prefer_best_scoring_span = true;
+        }
         if let Some(r) = arg(args, "--exhaustive-min-aligned") {
             params.exhaustive_min_aligned = r.parse().context("--exhaustive-min-aligned")?;
         }
@@ -227,7 +236,7 @@ impl Ctx {
         } else {
             None
         };
-        Ok(Self { source, index, pages: Default::default(), refs: Default::default(), freq, params, lex, quran })
+        Ok(Self { source, index, dfs: Default::default(), pages: Default::default(), refs: Default::default(), freq, params, lex, quran })
     }
 
     fn zones(&self, page: &Page) -> Vec<Option<Zone>> {
@@ -251,6 +260,19 @@ impl Ctx {
             }
         }
         z
+    }
+
+    fn df(&self, terms: &[String]) -> Result<usize> {
+        if let Some(n) = self.dfs.borrow().get(terms) {
+            return Ok(*n);
+        }
+        let n = reuse::phrase_df(&self.source, terms)?;
+        let mut c = self.dfs.borrow_mut();
+        if c.len() > 400_000 {
+            c.clear();
+        }
+        c.insert(terms.to_vec(), n);
+        Ok(n)
     }
 
     fn load(&self, r: &PageRef) -> Result<Option<Page>> {
@@ -285,7 +307,7 @@ impl Ctx {
     fn passage_over(&self, pages: &[Page], range: std::ops::Range<usize>, zones: &[Option<Zone>], exclude_book: Option<u64>) -> Result<reuse::PassageRun> {
         let load = |r: &PageRef| self.load(r);
         let around = |r: &PageRef, n: usize| self.around(r, n);
-        let count = |t: &[String]| reuse::phrase_df(&self.source, t);
+        let count = |t: &[String]| self.df(t);
         reuse::passage(&self.source, &self.freq, &self.params, &[], pages, range, zones, exclude_book, &count, &load, &around, self.index.as_ref(), &|| false)
     }
 }
