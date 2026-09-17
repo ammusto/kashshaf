@@ -30,6 +30,8 @@ export interface ReuseParams {
   proximity: boolean;
   proximity_window: number;
   min_aligned: number;
+  /** Length term on the part of the score above the threshold (0 = off). */
+  w_length: number;
   w_lemma: number;
   w_root: number;
   w_surface: number;
@@ -98,6 +100,7 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   proximity: true,
   proximity_window: 40,
   min_aligned: 6,
+  w_length: 0.5,
   w_lemma: 0.5,
   w_root: 0.3,
   w_surface: 0.2,

@@ -10,6 +10,7 @@
 //!                     [--exhaustive-min-aligned N] [--exhaustive-df-ceiling N] [--exhaustive-book-ceiling PCT]
 //!                     [--formulaic-book-pct PCT] [--formulaic-span-share F]
 //!                     [--discard-top-pct PCT] [--discard-density F] [--validate-merged]
+//!                     [--w-length W]
 //!                     [--best-scoring-span]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
@@ -178,6 +179,9 @@ impl Ctx {
         }
         if let Some(r) = arg(args, "--exhaustive-max-candidates") {
             params.exhaustive_max_candidates = r.parse().context("--exhaustive-max-candidates")?;
+        }
+        if let Some(r) = arg(args, "--w-length") {
+            params.w_length = r.parse().context("--w-length")?;
         }
         if let Some(r) = arg(args, "--discard-top-pct") {
             params.discard_common_top_pct = r.parse().context("--discard-top-pct")?;

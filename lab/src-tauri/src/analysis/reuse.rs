@@ -108,6 +108,14 @@ pub struct Params {
     pub proximity_window: usize,
     /// Aligned pairs a match needs (6).
     pub min_aligned: usize,
+    /// The length term. Above the threshold, the part of the score that
+    /// clears it is scaled by `1 - w_length * (1 - ln(1+aligned)/ln(1+window))`,
+    /// so among matches of equal agreement the longer ranks higher: at 0.5
+    /// and threshold 0.35 a four-token verbatim formula scores 0.80 and a
+    /// sixty-token passage 1.0. Below the threshold the score is the
+    /// agreement alone, so the term reorders what is shown and never drops
+    /// or admits anything. 0 turns it off.
+    pub w_length: f64,
     pub w_lemma: f64,
     pub w_root: f64,
     pub w_surface: f64,
@@ -312,6 +320,7 @@ impl Default for Params {
             proximity: true,
             proximity_window: 40,
             min_aligned: 6,
+            w_length: 0.5,
             w_lemma: 0.5,
             w_root: 0.3,
             w_surface: 0.2,
@@ -1256,8 +1265,30 @@ pub fn corpus_banal_share(freq: &FreqTable, rank: u32) -> f64 {
     banal as f64 / freq.total as f64
 }
 
-pub fn score(c: &Components, p: &Params) -> f64 {
+/// The score without the length term: what the threshold is applied to.
+pub fn base_score(c: &Components, p: &Params) -> f64 {
     c.coverage * (p.w_lemma * c.lemma_agree + p.w_root * c.root_agree + p.w_surface * c.surface_agree) * c.banality_factor
+}
+
+/// `1 - w_length * (1 - ln(1+aligned)/ln(1+window))`, clamped at 1.
+pub fn length_factor(aligned: usize, p: &Params) -> f64 {
+    if p.w_length <= 0.0 {
+        return 1.0;
+    }
+    let rel = ((1.0 + aligned as f64).ln() / (1.0 + p.window.max(1) as f64).ln()).min(1.0);
+    1.0 - p.w_length * (1.0 - rel)
+}
+
+/// The score a match is ranked by: agreement, with the length term applied
+/// to what clears the threshold. `score >= threshold` iff `base_score >=
+/// threshold`.
+pub fn score(c: &Components, p: &Params) -> f64 {
+    let b = base_score(c, p);
+    if b < p.threshold {
+        b
+    } else {
+        p.threshold + (b - p.threshold) * length_factor(c.aligned, p)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1999,8 +2030,13 @@ mod tests {
         assert!((c.coverage - 1.0).abs() < 1e-9);
         assert!((c.banal_share - 0.25).abs() < 1e-9);
         assert!((c.banality_factor - 0.5).abs() < 1e-9, "1 − 0.25/0.5 (baseline 0)");
+        let b = base_score(&c, &p);
+        assert!((b - 1.0 * (0.5 + 0.3 + 0.2 * 0.75) * 0.5).abs() < 1e-9);
+        // The length term scales what clears the threshold: four aligned
+        // tokens against the window.
         let s = score(&c, &p);
-        assert!((s - 1.0 * (0.5 + 0.3 + 0.2 * 0.75) * 0.5).abs() < 1e-9);
+        assert!((s - (p.threshold + (b - p.threshold) * length_factor(c.aligned, &p))).abs() < 1e-9);
+        assert!(s < b && s >= p.threshold);
         assert_eq!(match_type(&c, &p), MatchType::Inflected);
         // Banality wins over verbatim: three of four aligned tokens banal → factor 0.
         let mut c2 = c;
@@ -2459,7 +2495,9 @@ mod tests {
         assert!((best.components.coverage - 1.0).abs() < 1e-9);
         assert!((best.components.banal_share - 4.0 / 14.0).abs() < 1e-9);
         assert_eq!(best.components.banality_factor, 1.0, "4/14 banal is below the 0.3 baseline");
-        assert!((best.score - 0.7).abs() < 1e-9, "1 × (0.5·1 + 0.3·0 + 0.2·1) × 1: the fixture has no roots");
+        let b = base_score(&best.components, &p);
+        assert!((b - 0.7).abs() < 1e-9, "1 × (0.5·1 + 0.3·0 + 0.2·1) × 1: the fixture has no roots");
+        assert!((best.score - (p.threshold + (b - p.threshold) * length_factor(14, &p))).abs() < 1e-9);
         let second = &run.matches[1];
         assert_eq!(second.target.book_id, 3);
         // The partial page quotes ten of the query's words and stops. It is
