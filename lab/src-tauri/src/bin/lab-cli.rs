@@ -507,6 +507,11 @@ fn reuse_find(args: &[String]) -> Result<()> {
     let mut pending: HashMap<usize, Vec<(PageRef, reuse::Match)>> = HashMap::new();
     let mut zcache: HashMap<usize, Vec<Option<Zone>>> = HashMap::new();
     let mut flushed = 0usize;
+    // Where every candidate went: shown, hidden as formulaic, below the
+    // threshold, over the page limit (merged rows); dropped by the gate,
+    // dropped by the merged re-score (alignments, before the page merge).
+    let mut tally = [0usize; 4];
+    let (mut gate_dropped, mut validate_dropped) = (0usize, 0usize);
 
     for w in &wins {
         let mut pages: Vec<Page> = Vec::new();
@@ -524,6 +529,8 @@ fn reuse_find(args: &[String]) -> Result<()> {
             continue;
         }
         let run = ctx.passage_over(&pages, w.range.clone(), &zones, if exclude_same { Some(book) } else { None })?;
+        gate_dropped += run.discarded;
+        validate_dropped += run.validate_dropped;
         for m in run.matches {
             let pi = (w.first_page..=w.last_page)
                 .find(|&k| refs[k].part_index == m.query.part_index && refs[k].page_id == m.query.page_id)
@@ -531,17 +538,21 @@ fn reuse_find(args: &[String]) -> Result<()> {
             pending.entry(pi).or_default().push((m.query, m));
         }
         while flushed < w.first_page {
-            emit_page(&ctx, &refs, flushed, &mut pending, &mut found, &mut jsonl, limit, only, keep_formulaic)?;
+            emit_page(&ctx, &refs, flushed, &mut pending, &mut found, &mut jsonl, limit, only, keep_formulaic, &mut tally)?;
             flushed += 1;
         }
         zcache.retain(|k, _| *k >= w.first_page);
     }
     for pi in flushed..refs.len() {
-        emit_page(&ctx, &refs, pi, &mut pending, &mut found, &mut jsonl, limit, only, keep_formulaic)?;
+        emit_page(&ctx, &refs, pi, &mut pending, &mut found, &mut jsonl, limit, only, keep_formulaic, &mut tally)?;
     }
     if jsonl.is_some() {
         println!("{} matches in {} ms", found, started.elapsed().as_millis());
     }
+    println!(
+        "accounting: shown {} | hidden as formulaic {} | below threshold {} | over the page limit {} (merged rows); gate dropped {} | merged re-score dropped {} (alignments)",
+        tally[0], tally[1], tally[2], tally[3], gate_dropped, validate_dropped
+    );
     Ok(())
 }
 
@@ -558,25 +569,35 @@ fn emit_page(
     limit: usize,
     only: Option<u64>,
     keep_formulaic: bool,
+    tally: &mut [usize; 4],
 ) -> Result<()> {
     let Some(ms) = pending.remove(&pi) else { return Ok(()) };
     let Some(page) = ctx.load(&refs[pi])? else { return Ok(()) };
     let p = &ctx.params;
     let mut merged = reuse::merge_overlapping(ms);
     merged.sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal));
-    for m in merged
-        .iter()
-        .map(|(_, m)| m)
-        .filter(|m| {
-            m.score >= p.threshold
-                && only.map_or(true, |t| m.target.book_id == t)
-                // Formulaic is recorded, not reported -- the panel's type
-                // filter leaves it out by default, and a report that included
-                // it would not be the one a reader sees.
-                && (keep_formulaic || m.kind != reuse::MatchType::Formulaic)
-        })
-        .take(limit)
-    {
+    let mut kept = 0usize;
+    for m in merged.iter().map(|(_, m)| m) {
+        if m.score < p.threshold {
+            tally[2] += 1;
+            continue;
+        }
+        if only.map_or(false, |t| m.target.book_id != t) {
+            continue;
+        }
+        // Formulaic is recorded, not reported -- the panel's type filter
+        // leaves it out by default, and a report that included it would not
+        // be the one a reader sees.
+        if !keep_formulaic && m.kind == reuse::MatchType::Formulaic {
+            tally[1] += 1;
+            continue;
+        }
+        if kept >= limit {
+            tally[3] += 1;
+            continue;
+        }
+        kept += 1;
+        tally[0] += 1;
         *found += 1;
         if let Some(w) = jsonl.as_mut() {
             use std::io::Write;

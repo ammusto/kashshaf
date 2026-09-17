@@ -1691,6 +1691,10 @@ pub struct PassageRun {
     pub fallback: Option<&'static str>,
     /// What longest-rare-phrase retrieval did, when it was the retrieval.
     pub phrase: Option<PhraseReport>,
+    /// Alignments the discard gate dropped, and merged spans the re-score
+    /// dropped, so a run can account for every candidate it aligned.
+    pub discarded: usize,
+    pub validate_dropped: usize,
 }
 
 /// The whole passage as one index query (amendment 1.4): the lemma phrase
@@ -1901,6 +1905,7 @@ pub fn passage(
         }
     }
     let mut matches = Vec::new();
+    let (mut discarded, mut validate_dropped) = (0usize, 0usize);
     for c in &cands {
         if cancel() {
             break;
@@ -1952,6 +1957,7 @@ pub fn passage(
                 let t_lo = al.pairs.iter().map(|p| p.1).min().unwrap();
                 let t_hi = al.pairs.iter().map(|p| p.1).max().unwrap() + 1;
                 if ix.share_at_least(&span.tokens[t_lo..t_hi], cutoff) >= params.discard_common_density {
+                    discarded += 1;
                     continue;
                 }
             }
@@ -2017,6 +2023,7 @@ pub fn passage(
     // can carry a long banal one on its score; this asks whether the union
     // clears the threshold on its own coverage and banality.
     if params.validate_merged && matches.len() < before {
+        let before_validate = matches.len();
         let base = q_starts[0];
         matches.retain(|m| {
             let qi = own.iter().position(|o| *o == m.query).unwrap_or(0);
@@ -2033,9 +2040,10 @@ pub fn passage(
             c.banality_factor = banality_factor(c.banal_share, params);
             score(&c, params) >= params.threshold
         });
+        validate_dropped = before_validate - matches.len();
     }
     matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.components.aligned.cmp(&a.components.aligned)));
-    Ok(PassageRun { anchors, candidates: cands.len(), non_banal, tokens: tokens.len(), matches, fallback, phrase })
+    Ok(PassageRun { anchors, candidates: cands.len(), non_banal, tokens: tokens.len(), matches, fallback, phrase, discarded, validate_dropped })
 }
 
 // -------------------------------------------------------------- book mode ---
