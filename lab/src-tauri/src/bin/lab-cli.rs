@@ -7,7 +7,7 @@
 //!                     [--target-book ID] [--pairwise] [--target-neighbours N] [--jsonl FILE]
 //!                     [--anchor-slots 3:4:500,2:4:200]
 //!                     [--exhaustive] [--exhaustive-grams 2,3] [--exhaustive-max-candidates N]
-//!                     [--exhaustive-min-aligned N] [--exhaustive-df-ceiling N]
+//!                     [--exhaustive-min-aligned N] [--exhaustive-df-ceiling N] [--exhaustive-book-ceiling PCT]
 //!                     [--best-scoring-span]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
@@ -175,6 +175,9 @@ impl Ctx {
         }
         if let Some(r) = arg(args, "--exhaustive-max-candidates") {
             params.exhaustive_max_candidates = r.parse().context("--exhaustive-max-candidates")?;
+        }
+        if let Some(r) = arg(args, "--exhaustive-book-ceiling") {
+            params.exhaustive_book_ceiling_pct = r.parse().context("--exhaustive-book-ceiling")?;
         }
         if let Some(r) = arg(args, "--exhaustive-df-ceiling") {
             params.exhaustive_df_ceiling = r.parse().context("--exhaustive-df-ceiling")?;

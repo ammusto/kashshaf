@@ -188,6 +188,16 @@ pub struct Params {
     /// share and cut. This is a bound on work, not a claim about relevance:
     /// a real parallel shares many.
     pub exhaustive_max_candidates: usize,
+    /// Share of the target book's pages above which an n-gram is not looked
+    /// up, as a percentage; 0 is no ceiling.
+    ///
+    /// This is the frequency signal corpus document frequency could not
+    /// give. `قال أبو عبيد` is on 76% of Abū ʿUbayd's pages and `المعزى
+    /// تبهي` on one, but across 7,199 books the first is a specific name
+    /// below any ceiling worth setting, so corpus frequency sees them alike.
+    /// The index holds the page count of every n-gram already, so this costs
+    /// nothing to ask.
+    pub exhaustive_book_ceiling_pct: usize,
     /// Corpus document frequency above which an n-gram is not looked up in
     /// exhaustive mode; 0 is no ceiling.
     ///
@@ -287,6 +297,7 @@ impl Default for Params {
             exhaustive_max_books: 4,
             exhaustive_grams: vec![2, 3],
             exhaustive_max_candidates: 100,
+            exhaustive_book_ceiling_pct: 0,
             exhaustive_df_ceiling: 0,
             prefer_best_scoring_span: false,
             exhaustive_min_aligned: 4,
@@ -698,6 +709,13 @@ impl BookIndex {
     pub fn candidates(&self, tokens: &[Token], own: &[PageRef], params: &Params, df: &dyn Fn(&[String]) -> Result<usize>) -> Result<Vec<Candidate>> {
         let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
         let ceiling = params.exhaustive_df_ceiling;
+        // A posting list longer than this is a phrase the book says over and
+        // over, which is what a citation formula is.
+        let in_book = if params.exhaustive_book_ceiling_pct > 0 {
+            (self.pages.len() * params.exhaustive_book_ceiling_pct.min(100)) / 100
+        } else {
+            usize::MAX
+        };
         let mut hits: HashMap<u32, usize> = HashMap::new();
         for &n in &self.lengths {
             if n == 0 || lemmas.len() < n {
@@ -707,8 +725,8 @@ impl BookIndex {
                 if lemmas[i..i + n].iter().any(|l| l.is_empty()) {
                     continue;
                 }
-                // The ceiling is asked before the index, so a formula costs
-                // one cached frequency lookup rather than a page list.
+                // The corpus ceiling is asked after the in-book one,
+                // because it is the expensive of the two.
                 if ceiling > 0 {
                     let terms: Vec<String> = lemmas[i..i + n].iter().map(|l| l.to_string()).collect();
                     if df(&terms)? > ceiling {
@@ -716,6 +734,9 @@ impl BookIndex {
                     }
                 }
                 if let Some(ps) = self.grams.get(&gram_key(&lemmas[i..i + n])) {
+                    if ps.len() > in_book {
+                        continue;
+                    }
                     for p in ps {
                         *hits.entry(*p).or_insert(0) += 1;
                     }
@@ -2079,6 +2100,20 @@ mod tests {
         assert!(best.components.aligned >= 6, "{}", best.components.aligned);
         // The page that shares nothing is not a candidate at all.
         assert!(run.matches.iter().all(|m| m.target.page_id == 5));
+
+        // A phrase the target book says on most of its pages is a formula
+        // by the book's own evidence, and is not looked up.
+        let common = page(2, 0, 7, "", "قال ابو عبيد المربد كل شيء");
+        let ix2 = BookIndex::build(&[target.clone(), common], &[2, 3]);
+        let filtered = Params { exhaustive_book_ceiling_pct: 40, ..ex.clone() };
+        let q2 = page(1, 0, 2, "", "قال ابو عبيد وهذا كلام اخر لا يشبهه");
+        let mut it2 = Interner::default();
+        let s2 = Seq::build(&q2.tokens, &mut it2, &f, &ex, &[], &[]);
+        let _ = &s2;
+        let all = ix2.candidates(&q2.tokens, &[], &ex, &count).unwrap();
+        let cut = ix2.candidates(&q2.tokens, &[], &filtered, &count).unwrap();
+        assert!(!all.is_empty(), "with no ceiling the shared formula retrieves");
+        assert!(cut.is_empty(), "with one, a phrase on both pages is not looked up");
 
         // More books than the ceiling allows falls back to corpus mode.
         let many = Params { target_books: (1..=99).collect(), ..ex.clone() };

@@ -61,6 +61,8 @@ export interface ReuseParams {
   exhaustive_max_books: number;
   exhaustive_grams: number[];
   exhaustive_max_candidates: number;
+  /** Percentage of the target book's pages above which an n-gram is skipped. */
+  exhaustive_book_ceiling_pct: number;
   /** The aligned floor in exhaustive mode, against `min_aligned` in corpus. */
   exhaustive_min_aligned: number;
   /** Books a run may match against; empty is the whole corpus. */
@@ -97,6 +99,7 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   exhaustive_max_books: 4,
   exhaustive_grams: [2, 3],
   exhaustive_max_candidates: 100,
+  exhaustive_book_ceiling_pct: 0,
   exhaustive_min_aligned: 4,
   type_formulaic: 0.3,
   type_verbatim: 0.9,
