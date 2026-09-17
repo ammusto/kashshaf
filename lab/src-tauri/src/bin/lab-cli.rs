@@ -8,6 +8,7 @@
 //!                     [--anchor-slots 3:4:500,2:4:200]
 //!                     [--exhaustive] [--exhaustive-grams 2,3] [--exhaustive-max-candidates N]
 //!                     [--exhaustive-min-aligned N] [--exhaustive-df-ceiling N] [--exhaustive-book-ceiling PCT]
+//!                     [--formulaic-book-pct PCT] [--formulaic-span-share F]
 //!                     [--best-scoring-span]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
@@ -175,6 +176,12 @@ impl Ctx {
         }
         if let Some(r) = arg(args, "--exhaustive-max-candidates") {
             params.exhaustive_max_candidates = r.parse().context("--exhaustive-max-candidates")?;
+        }
+        if let Some(r) = arg(args, "--formulaic-book-pct") {
+            params.formulaic_book_pct = r.parse().context("--formulaic-book-pct")?;
+        }
+        if let Some(r) = arg(args, "--formulaic-span-share") {
+            params.formulaic_span_share = r.parse().context("--formulaic-span-share")?;
         }
         if let Some(r) = arg(args, "--exhaustive-book-ceiling") {
             params.exhaustive_book_ceiling_pct = r.parse().context("--exhaustive-book-ceiling")?;

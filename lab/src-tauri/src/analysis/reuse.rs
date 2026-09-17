@@ -188,6 +188,18 @@ pub struct Params {
     /// share and cut. This is a bound on work, not a claim about relevance:
     /// a real parallel shares many.
     pub exhaustive_max_candidates: usize,
+    /// Share of the target book's pages above which an n-gram counts as one
+    /// the book repeats, for typing; 0 turns the rule off.
+    ///
+    /// The page count of every n-gram is in `BookIndex` already. Asked at
+    /// retrieval it does nothing -- a page carrying a formula shares other
+    /// n-grams and is a candidate anyway, and the aligner then finds the
+    /// formula because it is in both texts. Asked here it is a statement
+    /// about the match: a span made of phrases this book says on most of its
+    /// pages is a formula, whatever it aligns against.
+    pub formulaic_book_pct: usize,
+    /// How much of a span must be such phrases before it is formulaic (0.5).
+    pub formulaic_span_share: f64,
     /// Share of the target book's pages above which an n-gram is not looked
     /// up, as a percentage; 0 is no ceiling.
     ///
@@ -297,6 +309,8 @@ impl Default for Params {
             exhaustive_max_books: 4,
             exhaustive_grams: vec![2, 3],
             exhaustive_max_candidates: 100,
+            formulaic_book_pct: 0,
+            formulaic_span_share: 0.5,
             exhaustive_book_ceiling_pct: 0,
             exhaustive_df_ceiling: 0,
             prefer_best_scoring_span: false,
@@ -699,6 +713,34 @@ impl BookIndex {
     /// Roughly what it occupies, for the run report.
     pub fn bytes(&self) -> usize {
         self.grams.len() * (8 + 24) + self.postings * 4 + self.pages.len() * 16
+    }
+
+    /// How much of this run of tokens is phrases the book repeats.
+    ///
+    /// The share of its lemma n-grams whose posting list covers more than
+    /// `pct` of the book's pages. 0 when there are no n-grams to judge.
+    pub fn repeated_share(&self, tokens: &[Token], pct: usize) -> f64 {
+        if pct == 0 || tokens.is_empty() {
+            return 0.0;
+        }
+        let bound = (self.pages.len() * pct.min(100)) / 100;
+        let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
+        let (mut seen, mut common) = (0usize, 0usize);
+        for &n in &self.lengths {
+            if n == 0 || lemmas.len() < n {
+                continue;
+            }
+            for i in 0..=lemmas.len() - n {
+                if lemmas[i..i + n].iter().any(|l| l.is_empty()) {
+                    continue;
+                }
+                seen += 1;
+                if self.grams.get(&gram_key(&lemmas[i..i + n])).map(|p| p.len() > bound).unwrap_or(false) {
+                    common += 1;
+                }
+            }
+        }
+        if seen == 0 { 0.0 } else { common as f64 / seen as f64 }
     }
 
     /// Every page sharing an n-gram with these tokens, most shared first.
@@ -1198,6 +1240,15 @@ pub fn match_type(c: &Components, p: &Params) -> MatchType {
 /// out of the default report rather than out of the record. A long
 /// alignment inside an isnād is a different thing -- the whole chain
 /// genuinely copied -- and keeps its own type.
+/// The type, knowing the zone and how much of the span is phrases the target
+/// book repeats. `repeated` is [`BookIndex::repeated_share`].
+pub fn match_type_seen(c: &Components, zone: Option<Zone>, repeated: f64, p: &Params) -> MatchType {
+    if p.formulaic_book_pct > 0 && repeated >= p.formulaic_span_share {
+        return MatchType::Formulaic;
+    }
+    match_type_in(c, zone, p)
+}
+
 pub fn match_type_in(c: &Components, zone: Option<Zone>, p: &Params) -> MatchType {
     // Two books that carry the same ḥadīth share its chain, and a shared
     // chain is a fact about transmission rather than a passage one text took
@@ -1475,7 +1526,17 @@ pub fn passage(
                 pairs,
                 components: comp,
                 score: s,
-                kind: match_type_in(&comp, zone, params),
+                // A span made of phrases the quoted book says on most of
+                // its pages is a formula, whatever it aligns against.
+                kind: match_type_seen(
+                    &comp,
+                    zone,
+                    index
+                        .filter(|_| params.exhaustive() && params.formulaic_book_pct > 0)
+                        .map(|ix| ix.repeated_share(&span.tokens[t_lo..t_hi], params.formulaic_book_pct))
+                        .unwrap_or(0.0),
+                    params,
+                ),
                 anchor_hits: c.hits,
             });
         }
@@ -2100,6 +2161,23 @@ mod tests {
         assert!(best.components.aligned >= 6, "{}", best.components.aligned);
         // The page that shares nothing is not a candidate at all.
         assert!(run.matches.iter().all(|m| m.target.page_id == 5));
+
+        // The same signal asked of a span rather than of retrieval: a run of
+        // tokens made of phrases the book repeats is a formula, whatever it
+        // aligns against.
+        let formula = page(2, 0, 8, "", "قال ابو عبيد في حديث النبي");
+        let ix3 = BookIndex::build(&[formula.clone(), formula.clone(), target.clone()], &[2, 3]);
+        let comp = Components { surface_agree: 1.0, lemma_agree: 1.0, root_agree: 1.0, coverage: 1.0, banal_share: 0.1, banality_factor: 1.0, aligned: 6 };
+        let typing = Params { formulaic_book_pct: 50, formulaic_span_share: 0.5, ..ex.clone() };
+        let rep = ix3.repeated_share(&formula.tokens, typing.formulaic_book_pct);
+        assert!(rep >= 0.5, "the formula is on two of three pages: {}", rep);
+        assert_eq!(match_type_seen(&comp, None, rep, &typing), MatchType::Formulaic);
+        // The quotation, which is on one page, is untouched.
+        let quiet = ix3.repeated_share(&target.tokens, typing.formulaic_book_pct);
+        assert!(quiet < 0.5, "{}", quiet);
+        assert_eq!(match_type_seen(&comp, None, quiet, &typing), MatchType::Verbatim);
+        // And with the rule off, the formula types as what it aligns like.
+        assert_eq!(match_type_seen(&comp, None, rep, &ex), MatchType::Verbatim);
 
         // A phrase the target book says on most of its pages is a formula
         // by the book's own evidence, and is not looked up.
