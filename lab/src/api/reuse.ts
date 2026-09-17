@@ -63,6 +63,12 @@ export interface ReuseParams {
   exhaustive_max_candidates: number;
   /** Percentage of the target book's pages above which an n-gram is skipped. */
   exhaustive_book_ceiling_pct: number;
+  /** alNaql's discard gate: top-p% of repeated n-grams are common; a span at
+   *  least `discard_common_density` common is dropped, not typed. 0 is off. */
+  discard_common_top_pct: number;
+  discard_common_density: number;
+  /** Re-score the assembled span after merging, as its own gate. */
+  validate_merged: boolean;
   /** Pages-share above which an n-gram counts as one the target book repeats. */
   formulaic_book_pct: number;
   /** How much of a span must be such phrases before it is typed formulaic. */
@@ -104,6 +110,9 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   exhaustive_grams: [2, 3],
   exhaustive_max_candidates: 100,
   exhaustive_book_ceiling_pct: 0,
+  discard_common_top_pct: 0,
+  discard_common_density: 0.8,
+  validate_merged: false,
   formulaic_book_pct: 50,
   formulaic_span_share: 0.65,
   exhaustive_min_aligned: 4,

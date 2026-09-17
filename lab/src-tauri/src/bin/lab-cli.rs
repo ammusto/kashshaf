@@ -9,6 +9,7 @@
 //!                     [--exhaustive] [--exhaustive-grams 2,3] [--exhaustive-max-candidates N]
 //!                     [--exhaustive-min-aligned N] [--exhaustive-df-ceiling N] [--exhaustive-book-ceiling PCT]
 //!                     [--formulaic-book-pct PCT] [--formulaic-span-share F]
+//!                     [--discard-top-pct PCT] [--discard-density F] [--validate-merged]
 //!                     [--best-scoring-span]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
@@ -176,6 +177,15 @@ impl Ctx {
         }
         if let Some(r) = arg(args, "--exhaustive-max-candidates") {
             params.exhaustive_max_candidates = r.parse().context("--exhaustive-max-candidates")?;
+        }
+        if let Some(r) = arg(args, "--discard-top-pct") {
+            params.discard_common_top_pct = r.parse().context("--discard-top-pct")?;
+        }
+        if let Some(r) = arg(args, "--discard-density") {
+            params.discard_common_density = r.parse().context("--discard-density")?;
+        }
+        if args.iter().any(|a| a == "--validate-merged") {
+            params.validate_merged = true;
         }
         if let Some(r) = arg(args, "--formulaic-book-pct") {
             params.formulaic_book_pct = r.parse().context("--formulaic-book-pct")?;

@@ -212,6 +212,23 @@ pub struct Params {
     /// and withholds 54. The coverage loss is exact and the precision gain
     /// is inside its interval on fifteen items, so 0.65.
     pub formulaic_span_share: f64,
+    /// alNaql's discard gate, ported (§2 of the final measurements). Among
+    /// the n-grams the target book repeats, the top `discard_common_top_pct`
+    /// by page count are "common"; a match whose target span is at least
+    /// `discard_common_density` common n-grams is dropped, not typed. His
+    /// values are 5 and 0.8. 0 turns it off.
+    ///
+    /// On our texts his own gate discards nothing -- 0 of 167 -- and the
+    /// collapse his paper reports (321,279 initial n-gram matches to 167
+    /// shipped here) is validation and merging. This is measured because
+    /// the question was asked, not because the premise held.
+    pub discard_common_top_pct: usize,
+    pub discard_common_density: f64,
+    /// His second gate: after merging, re-score the assembled span against
+    /// the threshold, separately from the per-alignment scores that built
+    /// it. Coverage and the banal share are recomputed over the merged
+    /// query span; the agreement rates stay the best member's.
+    pub validate_merged: bool,
     /// Share of the target book's pages above which an n-gram is not looked
     /// up, as a percentage; 0 is no ceiling.
     ///
@@ -323,6 +340,9 @@ impl Default for Params {
             exhaustive_max_candidates: 100,
             formulaic_book_pct: 50,
             formulaic_span_share: 0.65,
+            discard_common_top_pct: 0,
+            discard_common_density: 0.8,
+            validate_merged: false,
             exhaustive_book_ceiling_pct: 0,
             exhaustive_df_ceiling: 0,
             prefer_best_scoring_span: false,
@@ -676,6 +696,9 @@ pub struct BookIndex {
     /// Lengths held, and how many postings there are, for the run report.
     pub lengths: Vec<usize>,
     pub postings: usize,
+    /// Posting-list lengths of every n-gram on more than one page, sorted
+    /// descending, so a "top p% of repeated n-grams" cutoff is one lookup.
+    repeated: Vec<u32>,
 }
 
 fn gram_key(lemmas: &[&str]) -> u64 {
@@ -711,7 +734,44 @@ impl BookIndex {
                 }
             }
         }
+        ix.repeated = ix.grams.values().filter(|p| p.len() > 1).map(|p| p.len() as u32).collect();
+        ix.repeated.sort_unstable_by(|a, b| b.cmp(a));
         ix
+    }
+
+    /// The page count at which an n-gram is in the top `pct` of those the
+    /// book repeats -- alNaql's "common" line, on this quantity.
+    pub fn common_cutoff(&self, pct: usize) -> usize {
+        if pct == 0 || self.repeated.is_empty() {
+            return usize::MAX;
+        }
+        let k = ((self.repeated.len() * pct.min(100)) + 99) / 100;
+        self.repeated[k.clamp(1, self.repeated.len()) - 1] as usize
+    }
+
+    /// The share of a run of tokens' lemma n-grams whose posting list is at
+    /// least `bound` pages long. 0 when there are no n-grams to judge.
+    pub fn share_at_least(&self, tokens: &[Token], bound: usize) -> f64 {
+        if tokens.is_empty() || bound == usize::MAX {
+            return 0.0;
+        }
+        let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
+        let (mut seen, mut common) = (0usize, 0usize);
+        for &n in &self.lengths {
+            if n == 0 || lemmas.len() < n {
+                continue;
+            }
+            for i in 0..=lemmas.len() - n {
+                if lemmas[i..i + n].iter().any(|l| l.is_empty()) {
+                    continue;
+                }
+                seen += 1;
+                if self.grams.get(&gram_key(&lemmas[i..i + n])).map(|p| p.len() >= bound).unwrap_or(false) {
+                    common += 1;
+                }
+            }
+        }
+        if seen == 0 { 0.0 } else { common as f64 / seen as f64 }
     }
 
     pub fn pages(&self) -> usize {
@@ -1509,6 +1569,16 @@ pub fn passage(
             }
             let s = score(&comp, params);
             let zone = zone_of(&q, &al.pairs);
+            // alNaql's gate: a span that is mostly the book's commonest
+            // phrases is dropped here, not stored and hidden.
+            if let Some(ix) = index.filter(|_| params.exhaustive() && params.discard_common_top_pct > 0) {
+                let cutoff = ix.common_cutoff(params.discard_common_top_pct);
+                let t_lo = al.pairs.iter().map(|p| p.1).min().unwrap();
+                let t_hi = al.pairs.iter().map(|p| p.1).max().unwrap() + 1;
+                if ix.share_at_least(&span.tokens[t_lo..t_hi], cutoff) >= params.discard_common_density {
+                    continue;
+                }
+            }
             // Re-base on the page the alignment starts on, which is not
             // always the page retrieval found: a quotation running back over
             // a break belongs to the page it begins on.
@@ -1555,10 +1625,33 @@ pub fn passage(
     }
     matches.retain(|m| !own.contains(&m.target));
     // Two alignments that overlap are one passage seen twice.
+    let before = matches.len();
     matches = merge_overlapping(matches.into_iter().map(|m| (m.query, m)).collect())
         .into_iter()
         .map(|(_, m)| m)
         .collect();
+    // The assembled span, re-scored as a whole. A merge keeps the better
+    // member's components and widens the span, so a strong short alignment
+    // can carry a long banal one on its score; this asks whether the union
+    // clears the threshold on its own coverage and banality.
+    if params.validate_merged && matches.len() < before {
+        let base = q_starts[0];
+        matches.retain(|m| {
+            let qi = own.iter().position(|o| *o == m.query).unwrap_or(0);
+            let lo = (q_starts[qi] + m.q_start).saturating_sub(range.start + base).min(q.len());
+            let hi = (q_starts[qi] + m.q_end).saturating_sub(range.start + base).clamp(lo, q.len());
+            if hi <= lo {
+                return true;
+            }
+            let non_banal = q.banal[lo..hi].iter().filter(|b| !**b).count().max(1);
+            let banal = q.banal[lo..hi].iter().filter(|b| **b).count();
+            let mut c = m.components;
+            c.coverage = (m.pairs.len() as f64 / non_banal as f64).min(1.0);
+            c.banal_share = banal as f64 / (hi - lo) as f64;
+            c.banality_factor = banality_factor(c.banal_share, params);
+            score(&c, params) >= params.threshold
+        });
+    }
     matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.components.aligned.cmp(&a.components.aligned)));
     Ok(PassageRun { anchors, candidates: cands.len(), non_banal, tokens: tokens.len(), matches, fallback })
 }
@@ -2205,6 +2298,15 @@ mod tests {
         let cut = ix2.candidates(&q2.tokens, &[], &filtered, &count).unwrap();
         assert!(!all.is_empty(), "with no ceiling the shared formula retrieves");
         assert!(cut.is_empty(), "with one, a phrase on both pages is not looked up");
+
+        // alNaql's gate on the same index: the formula page is common, the
+        // quotation page is not, and the gate drops rather than types.
+        assert!(ix3.common_cutoff(50) <= 2, "two of three pages: {}", ix3.common_cutoff(50));
+        assert!(ix3.share_at_least(&formula.tokens, ix3.common_cutoff(50)) >= 0.8);
+        assert!(ix3.share_at_least(&target.tokens, ix3.common_cutoff(50)) < 0.8);
+        let gated = Params { discard_common_top_pct: 50, discard_common_density: 0.8, ..ex.clone() };
+        let run_g = passage(&fake, &f, &gated, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, Some(&ix), &|| false).unwrap();
+        assert!(run_g.matches.iter().any(|m| m.target.page_id == 5), "the quotation survives the gate");
 
         // More books than the ceiling allows falls back to corpus mode.
         let many = Params { target_books: (1..=99).collect(), ..ex.clone() };
