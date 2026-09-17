@@ -719,7 +719,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         let t_ret = std::time::Instant::now();
         let (cands, phrase_rep) = if pr.phrase_retrieval {
             let (mut c, mut rep) = reuse::phrase_candidates(&ctx.source, tokens, &page_zones, &own, None, &pr)?;
-            if c.len() < pr.phrase_min_pages && !anchors.is_empty() {
+            if !anchors.is_empty() {
                 rep.anchors_too = true;
                 for a in reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)? {
                     if !c.iter().any(|x| x.page == a.page) {

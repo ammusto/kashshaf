@@ -346,15 +346,14 @@ pub struct Params {
     pub phrase_retrieval: bool,
     pub phrase_df_cap: usize,
     pub phrase_min_len: usize,
-    /// Measured on pair 1, the first length with hits is often another
-    /// page's exact quotation, and the target -- one word different -- sits
-    /// under a shorter phrase the descent never reaches. So when the phrase
-    /// stage reaches fewer than `phrase_min_pages` pages, the anchors run
-    /// too and the candidates are the union. And the descent is bounded:
+    /// The anchors run as well, every time, and the candidates are the
+    /// union: a target one word different from the selection in its
+    /// edition can sit under no five-gram and still under a rare trigram.
+    /// (A version that ran them only below a page count was measured and
+    /// dropped: the threshold bought nothing.) The descent is bounded:
     /// past `phrase_max_queries` phrase queries (about 16 ms each on the
-    /// local index) it stops and the anchors take over, so a long selection
-    /// with no long hit does not cost ten seconds.
-    pub phrase_min_pages: usize,
+    /// local index) it stops, so a long selection with no long hit does
+    /// not cost ten seconds.
     pub phrase_max_queries: usize,
     /// The descent as first specified -- every length from n down to the
     /// minimum, stopping at the first that reaches a page -- measured and
@@ -419,7 +418,6 @@ impl Default for Params {
             phrase_retrieval: false,
             phrase_df_cap: 500,
             phrase_min_len: 5,
-            phrase_min_pages: 20,
             phrase_max_queries: 150,
             phrase_descent: false,
             selection_min_aligned: 5,
@@ -1742,7 +1740,7 @@ pub struct PhraseReport {
     pub hits: usize,
     /// The descent stopped on the query budget before reaching a page.
     pub exhausted: bool,
-    /// The anchors ran as well, because too few pages were reached.
+    /// The anchors ran as well (always, in selection mode).
     pub anchors_too: bool,
 }
 
@@ -1873,7 +1871,7 @@ pub fn passage(
         Some(ix) => ix.candidates(tokens, &own, params, count)?,
         None if params.phrase_retrieval => {
             let (mut c, mut rep) = phrase_candidates(source, tokens, &page_zones, &own, exclude_book, params)?;
-            if c.len() < params.phrase_min_pages && !anchors.is_empty() {
+            if !anchors.is_empty() {
                 rep.anchors_too = true;
                 for a in candidates(source, &anchors, &own, exclude_book, non_banal, params)? {
                     if !c.iter().any(|x| x.page == a.page) {

@@ -90,7 +90,6 @@ export interface ReuseParams {
   phrase_retrieval: boolean;
   phrase_df_cap: number;
   phrase_min_len: number;
-  phrase_min_pages: number;
   phrase_max_queries: number;
   phrase_descent: boolean;
   /** Aligned floor in selection mode: a five-gram that reached the page is a five-token run. */
@@ -148,7 +147,6 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   phrase_retrieval: false,
   phrase_df_cap: 500,
   phrase_min_len: 5,
-  phrase_min_pages: 20,
   phrase_max_queries: 150,
   phrase_descent: false,
   selection_min_aligned: 5,
