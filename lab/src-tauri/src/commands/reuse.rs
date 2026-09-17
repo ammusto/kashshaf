@@ -65,6 +65,11 @@ fn setup(h: &Handles, conn: &Connection, params: Option<Params>, window: Option<
     // First use in local mode builds the snapshot (spec 1.4, fix 4).
     let freq = crate::commands::stats::ensure_freq(h, window, FreqLayer::Lemma)?;
     let mut params = params.unwrap_or_default();
+    // The mode names the implementation; the choice a reader makes is where
+    // to search. Naming one text or a few reads them into memory; naming
+    // none searches the corpus by anchor. Derived here so no caller has to
+    // keep the two in step.
+    params.retrieval = if params.target_books.is_empty() { reuse::RetrievalMode::Corpus } else { reuse::RetrievalMode::Exhaustive };
     if params.banality_baseline.is_none() {
         params.banality_baseline = Some(reuse::corpus_banal_share(&freq, params.banality_rank));
     }
@@ -212,6 +217,13 @@ fn build_index(h: &Handles, params: &Params) -> Result<Option<reuse::BookIndex>,
     let mut pages: Vec<Page> = Vec::new();
     for b in &params.target_books {
         pages.extend(h.source.book_pages(*b, &|_, _| {}).map_err(|e| LabError::Source(e.to_string()))?);
+    }
+    let tokens: usize = pages.iter().map(|p| p.tokens.len()).sum();
+    if tokens > params.exhaustive_max_tokens.max(1) {
+        return Err(LabError::Source(format!(
+            "Those texts hold {} tokens together; reading them into memory is capped at {}. Name fewer texts, or search the corpus.",
+            tokens, params.exhaustive_max_tokens
+        )));
     }
     Ok(Some(reuse::BookIndex::build(&pages, &params.exhaustive_grams)))
 }
@@ -772,6 +784,14 @@ pub async fn reuse_book(
         let started = std::time::Instant::now();
         let conn = db(&h)?;
         let s = setup(&h, &conn, params, Some(&window))?;
+        // Whole text against the whole corpus is hours to days on a laptop
+        // and produced every unreadable result list in the comparison. It
+        // is the one combination not offered: a section, or a named text.
+        if span.is_none() && s.params.target_books.is_empty() {
+            return Err(LabError::Source(
+                "Searching a whole text against the whole corpus is hours to days on a laptop. Search from a section, or search in a named text.".to_string(),
+            ));
+        }
         let book = crate::commands::stats::load_book(&h, Some(&window), book_id)?;
         let windows: Vec<reuse::StreamWindow> = book_windows(&book, &s.params)
             .into_iter()

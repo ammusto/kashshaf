@@ -16,6 +16,7 @@
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
 //! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--rare-one-df N] [--jsonl FILE]
 //! lab-cli isnad-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--groups core,sama,…] [--show] [--jsonl FILE]
+//! lab-cli index-bench [--corpus DIR] --books N [--grams 2,3]
 //! ```
 //!
 //! `--corpus` defaults to `KASHSHAF_SAMPLE_DIR`, then Kashshaf's data
@@ -245,6 +246,10 @@ impl Ctx {
             let mut pages: Vec<Page> = Vec::new();
             for b in &params.target_books {
                 pages.extend(source.book_pages(*b, &|_, _| {})?);
+            }
+            let tokens: usize = pages.iter().map(|p| p.tokens.len()).sum();
+            if tokens > params.exhaustive_max_tokens.max(1) {
+                return Err(anyhow!("those texts hold {} tokens; the in-memory index is capped at {}", tokens, params.exhaustive_max_tokens));
             }
             let t0 = std::time::Instant::now();
             let ix = reuse::BookIndex::build(&pages, &params.exhaustive_grams);
@@ -811,6 +816,34 @@ fn isnad_scan(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// The cost of reading N books into an exhaustive index, so the ceiling on
+/// "a set of texts" is measured rather than guessed. Books are taken at a
+/// fixed stride through the catalogue, so each N is a cross-section of sizes
+/// rather than the N largest or smallest.
+fn index_bench(args: &[String]) -> Result<()> {
+    let ctx = Ctx::open(args)?;
+    let n: usize = arg(args, "--books").ok_or_else(|| anyhow!("--books N"))?.parse()?;
+    let grams: Vec<usize> = arg(args, "--grams").map(|g| g.split(',').filter(|x| !x.is_empty()).map(|x| x.parse()).collect::<Result<Vec<_>, _>>()).transpose()?.unwrap_or(vec![2, 3]);
+    let all: Vec<u64> = ctx.source.books()?.into_iter().map(|b| b.id).collect();
+    let stride = (all.len() / n.max(1)).max(1);
+    let picked: Vec<u64> = all.iter().step_by(stride).take(n).copied().collect();
+    let t0 = std::time::Instant::now();
+    let mut pages: Vec<Page> = Vec::new();
+    for b in &picked {
+        pages.extend(ctx.source.book_pages(*b, &|_, _| {})?);
+    }
+    let loaded = t0.elapsed().as_millis();
+    let tokens: usize = pages.iter().map(|p| p.tokens.len()).sum();
+    let t1 = std::time::Instant::now();
+    let ix = reuse::BookIndex::build(&pages, &grams);
+    let built = t1.elapsed().as_millis();
+    println!(
+        "{} books, {} pages, {} tokens: loaded in {} ms, index built in {} ms, {} keys, {} postings, ~{:.1} MB",
+        picked.len(), pages.len(), tokens, loaded, built, ix.keys(), ix.postings, ix.bytes() as f64 / 1e6
+    );
+    Ok(())
+}
+
 fn quran_scan(args: &[String]) -> Result<()> {
     let ctx = Ctx::open(args)?;
     let (qt, qi) = ctx.quran.as_ref().ok_or_else(|| anyhow!("the Qurʾān is not available"))?;
@@ -870,6 +903,7 @@ fn main() -> Result<()> {
         Some("reuse-find") => reuse_find(&args[1..]),
         Some("reuse-trace") => reuse_trace(&args[1..]),
         Some("isnad-scan") => isnad_scan(&args[1..]),
+        Some("index-bench") => index_bench(&args[1..]),
         Some("quran-scan") => quran_scan(&args[1..]),
         _ => {
             eprintln!("usage: lab-cli reuse-eval|reuse-find|quran-scan [options]  (see the module doc)");

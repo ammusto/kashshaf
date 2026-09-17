@@ -218,19 +218,17 @@ describe('ReusePanel', () => {
     fireEvent.change(screen.getByLabelText('Target text'), { target: { value: 'غريب' } });
     await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
     fireEvent.click(within(screen.getByRole('listbox')).getByText('غريب الحديث'));
-    await waitFor(() => expect(screen.getByTestId('target-books-note')).toHaveTextContent('Only 1 text'));
+    await waitFor(() => expect(screen.getByTestId('target-books-note')).toHaveTextContent('1 text'));
 
-    // Naming a text offers exhaustive retrieval; without one it is not on.
-    const exhaustive = screen.getByLabelText('Exhaustive retrieval') as HTMLInputElement;
-    expect(exhaustive).toBeEnabled();
-    fireEvent.click(exhaustive);
-
+    // Naming a text is the mode: the note says the texts are read whole, and
+    // the whole-text run, refused against the corpus, is offered now.
+    expect(screen.getByTestId('target-books-note')).toHaveTextContent('read into memory');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByTestId('analyse-whole')).toBeEnabled();
     await findReuseOver(0, 3);
-    await waitFor(() => expect(screen.getByTestId('run-mode')).toHaveTextContent('exhaustive retrieval'));
+    await waitFor(() => expect(screen.getByTestId('run-mode')).toHaveTextContent('in named texts'));
     const args = api.reuse.passage.mock.calls[api.reuse.passage.mock.calls.length - 1][0] as { params?: { target_books?: number[]; retrieval?: string } };
     expect(args.params?.target_books).toEqual([230]);
-    expect(args.params?.retrieval).toBe('exhaustive');
   });
 
   it('reads a target span that runs over a page break as one passage', async () => {
@@ -269,6 +267,14 @@ describe('ReusePanel', () => {
     expect(side).toHaveTextContent('ابو');
     await waitFor(() => expect(side).toHaveTextContent('الثاني'));
     expect(within(side).getByTestId('page-break')).toHaveTextContent('6261');
+  });
+
+  it('refuses a whole text against the whole corpus, and says why', async () => {
+    render(<ReusePanel book={book} local />);
+    await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
+    const whole = screen.getByTestId('analyse-whole');
+    expect(whole).toBeDisabled();
+    expect(whole.getAttribute('title')).toMatch(/hours to days/);
   });
 
   it('keeps the text pane shrinkable when a long passage is selected (A4)', async () => {
@@ -411,6 +417,12 @@ describe('ReusePanel', () => {
     api.reuse.matches.mockResolvedValue([match(7, 0.74, 'verbatim')]);
 
     const { unmount } = render(<ReusePanel book={book} local />);
+    // A whole text runs only in named texts; the size warning is the same.
+    fireEvent.click(screen.getByTestId('reuse-gear'));
+    fireEvent.change(screen.getByLabelText('Target text'), { target: { value: 'غريب' } });
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
+    fireEvent.click(within(screen.getByRole('listbox')).getByText('غريب الحديث'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Find in whole text' }));
 
     // Over the Settings thresholds, so it asks first (spec 1.5 F4).

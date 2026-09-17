@@ -173,12 +173,16 @@ pub struct Params {
     /// Corpus or exhaustive retrieval; see [`RetrievalMode`]. Exhaustive is
     /// refused unless `target_books` names at most `exhaustive_max_books`.
     pub retrieval: RetrievalMode,
-    /// Books a pairwise run may index in memory (4).
+    /// Books a pairwise run may index in memory (50), and the tokens they
+    /// may hold between them (4,000,000).
     ///
-    /// The index is every lemma bigram and trigram of every page, so it is
-    /// linear in the text: a few hundred pages is nothing, a hundred books
-    /// is a corpus and the point of the mode has gone.
+    /// The index is every n-gram of every page, so its cost is linear in
+    /// the text and the book count is only a sanity bound. Measured on a
+    /// stride sample of the catalogue: 800k tokens is 27 MB and 0.2 s,
+    /// 3.5M tokens is 121 MB and 1 s to build after 2 s to load. Four
+    /// million tokens keeps both under 200 MB and a few seconds.
     pub exhaustive_max_books: usize,
+    pub exhaustive_max_tokens: usize,
     /// Which n-gram lengths the exhaustive index holds (2 and 3).
     pub exhaustive_grams: Vec<usize>,
     /// Candidate pages kept per window in exhaustive mode (100).
@@ -335,7 +339,8 @@ impl Default for Params {
             anchor_slots: vec![AnchorSlot { gram: 3, anchors: 6, df_cap: 0 }, AnchorSlot { gram: 2, anchors: 4, df_cap: 200 }],
             target_books: Vec::new(),
             retrieval: RetrievalMode::Corpus,
-            exhaustive_max_books: 4,
+            exhaustive_max_books: 50,
+            exhaustive_max_tokens: 4_000_000,
             exhaustive_grams: vec![2, 3],
             exhaustive_max_candidates: 100,
             formulaic_book_pct: 50,

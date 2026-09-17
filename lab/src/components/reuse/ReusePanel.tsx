@@ -440,9 +440,16 @@ async function loadSpan(bookId: number, from: { part_index: number; page_id: num
           </button>
           <button
             onClick={() => void proposeRun('Analysing the whole text', null)}
-            disabled={!local || !!busy}
-            title={local ? 'Every 60-word window of the text (§4.3)' : 'Whole-book reuse needs the local corpus (spec §4.3)'}
+            disabled={!local || !!busy || !(params.target_books ?? []).length}
+            title={
+              !local
+                ? 'Whole-book reuse needs the local corpus (spec §4.3)'
+                : (params.target_books ?? []).length
+                  ? 'Every window of the text, against the named texts'
+                  : 'A whole text against the whole corpus is hours to days on a laptop. Search from a section, or name a text in the gear.'
+            }
             className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
+            data-testid="analyse-whole"
           >
             Find in whole text
           </button>
@@ -543,9 +550,9 @@ async function loadSpan(bookId: number, from: { part_index: number; page_id: num
               <span className="flex-[2] min-w-0">Text</span>
               <span className="flex-1 min-w-0">Book</span>
               <span className="shrink-0 normal-case tracking-normal font-normal" dir="ltr" data-testid="run-mode">
-                {(runs.find((r) => r.id === shownRun)?.params?.retrieval ?? params.retrieval) === 'exhaustive'
-                  ? 'exhaustive retrieval'
-                  : 'corpus retrieval'}
+                {((runs.find((r) => r.id === shownRun)?.params ?? params).target_books ?? []).length
+                  ? 'in named texts, read whole'
+                  : 'in the corpus, by anchor'}
               </span>
             </div>
 
@@ -942,27 +949,13 @@ function GearModal({
         <div className="space-y-1">
           <div className="flex items-start gap-2">
             <span className="w-28 text-xs text-app-text-secondary pt-1.5">Search in</span>
-            <BookPicker value={params.target_books ?? []} onChange={(ids) => setParams({ ...params, target_books: ids })} placeholder="the whole corpus" />
+            <BookPicker value={params.target_books ?? []} onChange={(ids) => setParams({ ...params, target_books: ids })} placeholder="the whole corpus" max={50} />
           </div>
           <p className="text-[11px] text-app-text-secondary ltr:ml-[7.5rem]" data-testid="target-books-note">
             {(params.target_books ?? []).length
-              ? `Only ${(params.target_books ?? []).length} text${(params.target_books ?? []).length > 1 ? 's' : ''} are searched, at the index. Much faster, and nothing outside them is read.`
-              : 'Name one or two texts to ask whether this book draws on those. Applied at the index, so the run reads only their pages.'}
+              ? `${(params.target_books ?? []).length} text${(params.target_books ?? []).length > 1 ? 's' : ''}, read into memory: every phrase of every window is looked up, which finds short quotations the corpus search cannot reach. Up to about four million tokens between them.`
+              : 'The whole corpus, by anchor: a few rare phrases of each window are looked up on the index. Name a text or a few to read them instead.'}
           </p>
-          <label className="flex items-start gap-2 text-[11px] ltr:ml-[7.5rem]">
-            <input
-              type="checkbox"
-              checked={params.retrieval === 'exhaustive'}
-              disabled={!(params.target_books ?? []).length}
-              onChange={(e) => setParams({ ...params, retrieval: e.target.checked ? 'exhaustive' : 'corpus' })}
-              aria-label="Exhaustive retrieval"
-            />
-            <span className={(params.target_books ?? []).length ? '' : 'opacity-50'}>
-              Read those texts instead of searching for them. Every phrase of every window is looked up rather than a
-              chosen few, which finds short quotations the corpus search cannot reach and reports a great deal more
-              formula with them. Needs a target text; runs in the two modes are not comparable.
-            </span>
-          </label>
         </div>
 
         <div className="flex items-center gap-4">

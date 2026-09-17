@@ -59,6 +59,8 @@ export interface ReuseParams {
    */
   retrieval: 'corpus' | 'exhaustive';
   exhaustive_max_books: number;
+  /** Tokens the named texts may hold between them; the real ceiling. */
+  exhaustive_max_tokens: number;
   exhaustive_grams: number[];
   exhaustive_max_candidates: number;
   /** Percentage of the target book's pages above which an n-gram is skipped. */
@@ -106,7 +108,8 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   window: 60,
   stride: 30,
   retrieval: 'corpus',
-  exhaustive_max_books: 4,
+  exhaustive_max_books: 50,
+  exhaustive_max_tokens: 4000000,
   exhaustive_grams: [2, 3],
   exhaustive_max_candidates: 100,
   exhaustive_book_ceiling_pct: 0,
