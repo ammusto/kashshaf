@@ -82,6 +82,8 @@ export interface ReuseParams {
   /** Books a run may match against; empty is the whole corpus. */
   target_books: number[];
   /** Pages either side of a candidate page the alignment may run over. */
+  /** Each third of the query contributes at least this many anchors per slot (0 = plain pick). */
+  anchor_thirds_min: number;
   target_neighbours: number;
 }
 
@@ -128,6 +130,7 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   type_paraphrase: 0.7,
   isnad_zone_confidence: 0.5,
   target_books: [],
+  anchor_thirds_min: 0,
   target_neighbours: 1,
 };
 

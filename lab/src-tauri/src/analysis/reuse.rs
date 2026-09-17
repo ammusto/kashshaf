@@ -300,6 +300,19 @@ pub struct Params {
     /// so every slot would go to trigrams and the shorter key would never
     /// retrieve anything. The slots have to be reserved.
     pub anchor_slots: Vec<AnchorSlot>,
+    /// Positional reservation: each third of the query contributes at least
+    /// this many anchors of a slot (the rarest within the third), the rest
+    /// of the slot's budget going to the rarest anywhere. Capped at a third
+    /// of the slot's budget. 0 is the plain pick.
+    ///
+    /// Built for the four retrieval misses read on pair 1, on the idea that
+    /// the rarest-first pick left the quotation's end of the window with no
+    /// anchor. Measured, it had not: the plain pick already had anchors on
+    /// each passage, and they do not reach the page because the quoted
+    /// book's edition differs at the rare word inside them. The reservation
+    /// reaches none of the four. On the corpus run it adds six matches to
+    /// 119 and changes nothing at the top. Off.
+    pub anchor_thirds_min: usize,
     pub target_neighbours: usize,
 }
 
@@ -346,6 +359,7 @@ impl Default for Params {
             // carved out. df_cap 0 means the old ceiling, max_candidates;
             // a bigram needs a much lower one because it is commoner.
             anchor_slots: vec![AnchorSlot { gram: 3, anchors: 6, df_cap: 0 }, AnchorSlot { gram: 2, anchors: 4, df_cap: 200 }],
+            anchor_thirds_min: 0,
             target_books: Vec::new(),
             retrieval: RetrievalMode::Corpus,
             exhaustive_max_books: 50,
@@ -670,6 +684,25 @@ fn anchors_on_one_key(q: &Seq, tokens: &[Token], params: &Params, count: &dyn Fn
     let mut usable: Vec<&Anchor> = counted.iter().filter(|a| a.df >= 2 && a.df <= cap).collect();
     usable.sort_by(|a, b| a.df.cmp(&b.df).then_with(|| b.rank_sum.cmp(&a.rank_sum)).then_with(|| a.start.cmp(&b.start)));
     let mut picked: Vec<Anchor> = Vec::new();
+    // The reserved picks first: the rarest of each third, so a quotation at
+    // the far end of the window still puts an anchor into the index.
+    let per_third = params.anchor_thirds_min.min(k / 3);
+    if per_third > 0 {
+        let third = q.len().div_ceil(3).max(1);
+        for t in 0..3 {
+            let (lo, hi) = (t * third, (t + 1) * third);
+            let mut got = 0;
+            for a in usable.iter().filter(|a| a.start >= lo && a.start < hi) {
+                if got >= per_third {
+                    break;
+                }
+                if picked.iter().all(|p| p.start.abs_diff(a.start) >= 3) {
+                    picked.push((*a).clone());
+                    got += 1;
+                }
+            }
+        }
+    }
     for a in &usable {
         if picked.len() >= k {
             break;
@@ -2160,6 +2193,30 @@ mod tests {
                 .collect();
             Ok(Hits { total: pages.len(), pages })
         }
+    }
+
+    #[test]
+    fn thirds_reserve_an_anchor_in_the_far_end_of_the_query() {
+        // Every rare trigram is in the first half; the last third holds only
+        // a common one. The plain pick never reaches the last third; the
+        // reservation puts its rarest there.
+        let words: Vec<String> = (0..30).map(|i| format!("w{i}")).collect();
+        let pg = page(1, 0, 1, "", &words.join(" "));
+        let f = freq(&[("a", 100)]);
+        let count = |terms: &[String]| -> Result<usize> {
+            let i: usize = terms[0][1..].parse().unwrap();
+            Ok(if i < 15 { 2 + i } else { 150 })
+        };
+        let plain = Params { banality_rank: 1, anchors: 3, min_anchors: 1, anchor_df_cap: 500, anchor_slots: Vec::new(), count_budget: 300, ..Default::default() };
+        let mut it = Interner::default();
+        let q = Seq::build(&pg.tokens, &mut it, &f, &plain, &[], &[]);
+        let got = anchors(&q, &pg.tokens, &plain, &count).unwrap();
+        assert!(got.iter().all(|a| a.start < 20), "plain: {:?}", got.iter().map(|a| a.start).collect::<Vec<_>>());
+        let thirds = Params { anchor_thirds_min: 1, ..plain };
+        let got = anchors(&q, &pg.tokens, &thirds, &count).unwrap();
+        assert_eq!(got.len(), 3);
+        assert!(got.iter().any(|a| a.start >= 20), "thirds: {:?}", got.iter().map(|a| a.start).collect::<Vec<_>>());
+        assert!(got.iter().any(|a| a.start < 10));
     }
 
     #[test]

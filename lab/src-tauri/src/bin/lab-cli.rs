@@ -10,12 +10,12 @@
 //!                     [--exhaustive-min-aligned N] [--exhaustive-df-ceiling N] [--exhaustive-book-ceiling PCT]
 //!                     [--formulaic-book-pct PCT] [--formulaic-span-share F]
 //!                     [--discard-top-pct PCT] [--discard-density F] [--validate-merged]
-//!                     [--w-length W]
+//!                     [--w-length W] [--anchor-thirds N]
 //!                     [--best-scoring-span]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
-//! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--rare-one-df N] [--jsonl FILE]
+//! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--selection] [--rare-one-df N] [--jsonl FILE]
 //! lab-cli isnad-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--groups core,sama,…] [--show] [--jsonl FILE]
 //! lab-cli index-bench [--corpus DIR] --books N [--grams 2,3]
 //! ```
@@ -179,6 +179,9 @@ impl Ctx {
         }
         if let Some(r) = arg(args, "--exhaustive-max-candidates") {
             params.exhaustive_max_candidates = r.parse().context("--exhaustive-max-candidates")?;
+        }
+        if let Some(r) = arg(args, "--anchor-thirds") {
+            params.anchor_thirds_min = r.parse().context("--anchor-thirds")?;
         }
         if let Some(r) = arg(args, "--w-length") {
             params.w_length = r.parse().context("--w-length")?;
@@ -601,6 +604,9 @@ fn reuse_trace(args: &[String]) -> Result<()> {
     let book: u64 = arg(args, "--book").ok_or_else(|| anyhow!("--book ID"))?.parse()?;
     let spans_path = arg(args, "--spans").ok_or_else(|| anyhow!("--spans FILE"))?;
     let rare_one: Option<usize> = arg(args, "--rare-one-df").map(|s| s.parse()).transpose()?;
+    // The span itself as the query, as the app's selection mode would have
+    // it, instead of the window Lab's book mode would cut around it.
+    let selection = args.iter().any(|a| a == "--selection");
     let mut out = match arg(args, "--jsonl") {
         Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p)?)),
         None => None,
@@ -627,11 +633,14 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         };
         // The window Lab would have used: the one covering most of the span.
         let ws = reuse::windows(page.tokens.len(), p.window, p.stride, p.min_aligned);
-        let w = ws
-            .iter()
-            .max_by_key(|w| w.end.min(qb).saturating_sub(w.start.max(qa)))
-            .cloned()
-            .unwrap_or(0..page.tokens.len());
+        let w = if selection {
+            qa.min(page.tokens.len())..qb.min(page.tokens.len())
+        } else {
+            ws.iter()
+                .max_by_key(|w| w.end.min(qb).saturating_sub(w.start.max(qa)))
+                .cloned()
+                .unwrap_or(0..page.tokens.len())
+        };
 
         let zones = ctx.zones(&page);
         let mut intern = reuse::Interner::default();
