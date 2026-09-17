@@ -105,7 +105,7 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   exhaustive_max_candidates: 100,
   exhaustive_book_ceiling_pct: 0,
   formulaic_book_pct: 50,
-  formulaic_span_share: 0.5,
+  formulaic_span_share: 0.65,
   exhaustive_min_aligned: 4,
   type_formulaic: 0.3,
   type_verbatim: 0.9,

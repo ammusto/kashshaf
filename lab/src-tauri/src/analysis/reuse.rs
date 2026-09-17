@@ -201,14 +201,16 @@ pub struct Params {
     /// about the match: a span made of phrases this book says on most of its
     /// pages is a formula, whatever it aligns against.
     pub formulaic_book_pct: usize,
-    /// How much of a span must be such phrases before it is formulaic (0.5).
+    /// How much of a span must be such phrases before it is formulaic
+    /// (0.65).
     ///
     /// This is the expensive half of the rule, because a genuine quotation
     /// opens with the citation formula that introduces it. At 0.5 the rule
     /// withholds 164 of 299 formula matches and costs four of alNaql's
-    /// seventy clusters; at 0.65 it keeps all seventy and withholds 54. The
-    /// first is taken: 493 rows at 27% precision read is more genuine
-    /// findings in less reading than 603 at about 16%.
+    /// seventy clusters -- the four short quotations that are exhaustive
+    /// retrieval's only measured advantage. At 0.65 it keeps all seventy
+    /// and withholds 54. The coverage loss is exact and the precision gain
+    /// is inside its interval on fifteen items, so 0.65.
     pub formulaic_span_share: f64,
     /// Share of the target book's pages above which an n-gram is not looked
     /// up, as a percentage; 0 is no ceiling.
@@ -320,7 +322,7 @@ impl Default for Params {
             exhaustive_grams: vec![2, 3],
             exhaustive_max_candidates: 100,
             formulaic_book_pct: 50,
-            formulaic_span_share: 0.5,
+            formulaic_span_share: 0.65,
             exhaustive_book_ceiling_pct: 0,
             exhaustive_df_ceiling: 0,
             prefer_best_scoring_span: false,
