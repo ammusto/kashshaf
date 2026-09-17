@@ -440,7 +440,12 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
     blocking(move || {
         let started = std::time::Instant::now();
         let conn = db(&h)?;
-        let s = setup(&h, &conn, args.params.clone(), Some(&window))?;
+        let mut s = setup(&h, &conn, args.params.clone(), Some(&window))?;
+        // A selection against the corpus retrieves by the longest rare
+        // phrase; anchors stay for the windows of book mode.
+        if s.params.target_books.is_empty() {
+            s.params.phrase_retrieval = true;
+        }
         let page = h
             .source
             .page(args.book_id, args.part_index, args.page_id)

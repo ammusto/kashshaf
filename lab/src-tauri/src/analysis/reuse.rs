@@ -333,6 +333,38 @@ pub struct Params {
     /// reaches none of the four. On the corpus run it adds six matches to
     /// 119 and changes nothing at the top. Off.
     pub anchor_thirds_min: usize,
+    /// Selection mode retrieves by the longest rare phrase instead of by
+    /// anchors: the whole selection as one lemma phrase query, then every
+    /// sub-phrase of length n-1, n-2, ... down to `phrase_min_len`, stopping
+    /// at the first length that reaches a page. A sub-phrase on more than
+    /// `phrase_df_cap` pages is a formula and is skipped. Anchors are
+    /// fixed-length n-grams chosen by rarity, so a verbatim quotation made
+    /// of common words never qualifies; a long phrase of common words is
+    /// rare as a phrase. Set by the selection command in corpus mode; book
+    /// mode keeps anchors, where the window count makes enumeration too
+    /// expensive.
+    pub phrase_retrieval: bool,
+    pub phrase_df_cap: usize,
+    pub phrase_min_len: usize,
+    /// Measured on pair 1, the first length with hits is often another
+    /// page's exact quotation, and the target -- one word different -- sits
+    /// under a shorter phrase the descent never reaches. So when the phrase
+    /// stage reaches fewer than `phrase_min_pages` pages, the anchors run
+    /// too and the candidates are the union. And the descent is bounded:
+    /// past `phrase_max_queries` phrase queries (about 16 ms each on the
+    /// local index) it stops and the anchors take over, so a long selection
+    /// with no long hit does not cost ten seconds.
+    pub phrase_min_pages: usize,
+    pub phrase_max_queries: usize,
+    /// The descent as first specified -- every length from n down to the
+    /// minimum, stopping at the first that reaches a page -- measured and
+    /// left off: it stops on another page's exact quotation before the
+    /// target's shorter phrase is tried, and costs n²/2 queries when nothing
+    /// long hits. Off, the retrieval is the whole selection plus every
+    /// sub-phrase of `phrase_min_len`: a verbatim run of that length or
+    /// longer always contains one, so every page holding such a run is
+    /// reached, in n queries.
+    pub phrase_descent: bool,
     pub target_neighbours: usize,
 }
 
@@ -380,6 +412,12 @@ impl Default for Params {
             // a bigram needs a much lower one because it is commoner.
             anchor_slots: vec![AnchorSlot { gram: 3, anchors: 6, df_cap: 0 }, AnchorSlot { gram: 2, anchors: 4, df_cap: 200 }],
             anchor_thirds_min: 0,
+            phrase_retrieval: false,
+            phrase_df_cap: 500,
+            phrase_min_len: 5,
+            phrase_min_pages: 20,
+            phrase_max_queries: 150,
+            phrase_descent: false,
             target_books: Vec::new(),
             retrieval: RetrievalMode::Corpus,
             exhaustive_max_books: 50,
@@ -1642,6 +1680,8 @@ pub struct PassageRun {
     /// Which whole-passage query retrieved the candidates, when the
     /// passage was short or had no anchor: `lemma-slop` or `surface`.
     pub fallback: Option<&'static str>,
+    /// What longest-rare-phrase retrieval did, when it was the retrieval.
+    pub phrase: Option<PhraseReport>,
 }
 
 /// The whole passage as one index query (amendment 1.4): the lemma phrase
@@ -1677,6 +1717,84 @@ fn fallback_candidates(source: &dyn BookSource, tokens: &[Token], own: &[PageRef
         }
     }
     Ok((Vec::new(), None))
+}
+
+/// What longest-rare-phrase retrieval did, for the run report.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhraseReport {
+    /// The phrase length that reached a page; 0 when none did.
+    pub length: usize,
+    /// Phrase queries run, and how many were skipped as formulaic.
+    pub queries: usize,
+    pub skipped: usize,
+    /// Pages reached at that length.
+    pub hits: usize,
+    /// The descent stopped on the query budget before reaching a page.
+    pub exhausted: bool,
+    /// The anchors ran as well, because too few pages were reached.
+    pub anchors_too: bool,
+}
+
+/// Longest-rare-phrase retrieval (see `Params::phrase_retrieval`). Every
+/// page a qualifying phrase reaches is a candidate, counted once per
+/// phrase that reaches it. Sub-phrases do not cross a token without a
+/// lemma, because the index holds no such phrase.
+pub fn phrase_candidates(source: &dyn BookSource, tokens: &[Token], own: &[PageRef], exclude_book: Option<u64>, params: &Params) -> Result<(Vec<Candidate>, PhraseReport)> {
+    let keep = |p: &PageRef| !own.contains(p) && exclude_book.map(|x| x != p.book_id).unwrap_or(true);
+    let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
+    let n = lemmas.len();
+    let min = params.phrase_min_len.max(2);
+    let mut rep = PhraseReport::default();
+    if n < 2 {
+        return Ok((Vec::new(), rep));
+    }
+    let mut hits: HashMap<(u64, u32, u64), (PageRef, usize)> = HashMap::new();
+    let lengths: Vec<usize> = if params.phrase_descent {
+        (min..=n).rev().collect()
+    } else if n > min {
+        vec![n, min]
+    } else {
+        vec![n]
+    };
+    'descent: for &len in &lengths {
+        for i in 0..=n - len {
+            if params.phrase_max_queries > 0 && rep.queries >= params.phrase_max_queries {
+                rep.exhausted = true;
+                break 'descent;
+            }
+            let terms = &lemmas[i..i + len];
+            if terms.iter().any(|l| l.is_empty()) {
+                continue;
+            }
+            let q = CandidateQuery {
+                layer: crate::source::Layer::Lemma,
+                terms: terms.iter().map(|l| l.to_string()).collect(),
+                limit: params.max_candidates.max(1),
+                slop: 0,
+                book_ids: params.book_filter(),
+            };
+            rep.queries += 1;
+            let found = source.find_pages(&q)?;
+            if params.phrase_df_cap > 0 && found.total > params.phrase_df_cap {
+                rep.skipped += 1;
+                continue;
+            }
+            for p in found.pages.into_iter().filter(keep) {
+                hits.entry((p.book_id, p.part_index, p.page_id)).or_insert((p, 0)).1 += 1;
+            }
+        }
+        if !hits.is_empty() {
+            rep.length = len;
+            if params.phrase_descent {
+                break;
+            }
+        }
+    }
+    rep.hits = hits.len();
+    let mut out: Vec<Candidate> = hits.into_values().map(|(page, hits)| Candidate { page, hits }).collect();
+    out.sort_by(|a, b| b.hits.cmp(&a.hits).then_with(|| (a.page.book_id, a.page.part_index, a.page.page_id).cmp(&(b.page.book_id, b.page.part_index, b.page.page_id))));
+    out.truncate(params.max_candidates.max(1));
+    Ok((out, rep))
 }
 
 /// Document frequency of a lemma phrase, as `passage` needs it: one
@@ -1734,15 +1852,29 @@ pub fn passage(
     // Anchors are still computed, because the run report shows them and
     // because a passage with no usable anchor is worth seeing either way.
     let anchors = anchors(&q, tokens, params, count)?;
+    let mut phrase = None;
     let mut cands = match index.filter(|_| params.exhaustive()) {
         Some(ix) => ix.candidates(tokens, &own, params, count)?,
+        None if params.phrase_retrieval => {
+            let (mut c, mut rep) = phrase_candidates(source, tokens, &own, exclude_book, params)?;
+            if c.len() < params.phrase_min_pages && !anchors.is_empty() {
+                rep.anchors_too = true;
+                for a in candidates(source, &anchors, &own, exclude_book, non_banal, params)? {
+                    if !c.iter().any(|x| x.page == a.page) {
+                        c.push(a);
+                    }
+                }
+            }
+            phrase = Some(rep);
+            c
+        }
         None if anchors.is_empty() => Vec::new(),
         None => candidates(source, &anchors, &own, exclude_book, non_banal, params)?,
     };
     // A short passage, or one with no anchor, also goes to the index whole;
     // its hits join the anchor candidates.
     let mut fallback = None;
-    if !params.exhaustive() && (tokens.len() < params.fallback_max_tokens || anchors.is_empty()) {
+    if !params.exhaustive() && !params.phrase_retrieval && (tokens.len() < params.fallback_max_tokens || anchors.is_empty()) {
         let (extra, f) = fallback_candidates(source, tokens, &own, exclude_book, params)?;
         if !extra.is_empty() {
             fallback = f;
@@ -1889,7 +2021,7 @@ pub fn passage(
         });
     }
     matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.components.aligned.cmp(&a.components.aligned)));
-    Ok(PassageRun { anchors, candidates: cands.len(), non_banal, tokens: tokens.len(), matches, fallback })
+    Ok(PassageRun { anchors, candidates: cands.len(), non_banal, tokens: tokens.len(), matches, fallback, phrase })
 }
 
 // -------------------------------------------------------------- book mode ---

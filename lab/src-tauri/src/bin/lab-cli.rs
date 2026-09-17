@@ -16,7 +16,7 @@
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
 //! lab-cli quran-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE]
-//! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--selection] [--rare-one-df N] [--jsonl FILE]
+//! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--selection] [--phrase] [--full] [--rare-one-df N] [--jsonl FILE]
 //! lab-cli isnad-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--groups core,sama,…] [--show] [--jsonl FILE]
 //! lab-cli index-bench [--corpus DIR] --books N [--grams 2,3]
 //! ```
@@ -186,6 +186,15 @@ impl Ctx {
         }
         if let Some(r) = arg(args, "--pattern-min-share") {
             params.pattern_min_share = r.parse().context("--pattern-min-share")?;
+        }
+        if args.iter().any(|a| a == "--phrase") {
+            params.phrase_retrieval = true;
+        }
+        if args.iter().any(|a| a == "--phrase-descent") {
+            params.phrase_descent = true;
+        }
+        if let Some(r) = arg(args, "--phrase-df-cap") {
+            params.phrase_df_cap = r.parse().context("--phrase-df-cap")?;
         }
         if let Some(r) = arg(args, "--anchor-thirds") {
             params.anchor_thirds_min = r.parse().context("--anchor-thirds")?;
@@ -628,6 +637,9 @@ fn reuse_trace(args: &[String]) -> Result<()> {
     // The span itself as the query, as the app's selection mode would have
     // it, instead of the window Lab's book mode would cut around it.
     let selection = args.iter().any(|a| a == "--selection");
+    // `--full` also runs the whole passage mode on the query, timed, and
+    // reports what else it found: the false positives a reader would see.
+    let full = args.iter().any(|a| a == "--full");
     let mut out = match arg(args, "--jsonl") {
         Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p)?)),
         None => None,
@@ -680,11 +692,13 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         let mut all_tokens = Vec::new();
         let mut all_zones: Vec<Option<Zone>> = Vec::new();
         let mut own: Vec<PageRef> = Vec::new();
+        let mut pages_vec: Vec<Page> = Vec::new();
         for i in w.first_page..=w.last_page {
             let Some(pg) = ctx.load(&refs[i])? else { continue };
             all_zones.extend(ctx.zones(&pg));
             all_tokens.extend(pg.tokens.iter().cloned());
             own.push(refs[i]);
+            pages_vec.push(pg);
         }
         // The window's start relative to the row's page (negative when it
         // begins on an earlier page), for the report.
@@ -702,11 +716,24 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         if let Some(n) = rare_one {
             pr.rare_df = n;
         }
-        let cands = if anchors.is_empty() {
-            Vec::new()
+        let t_ret = std::time::Instant::now();
+        let (cands, phrase_rep) = if pr.phrase_retrieval {
+            let (mut c, mut rep) = reuse::phrase_candidates(&ctx.source, tokens, &own, None, &pr)?;
+            if c.len() < pr.phrase_min_pages && !anchors.is_empty() {
+                rep.anchors_too = true;
+                for a in reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)? {
+                    if !c.iter().any(|x| x.page == a.page) {
+                        c.push(a);
+                    }
+                }
+            }
+            (c, Some(rep))
+        } else if anchors.is_empty() {
+            (Vec::new(), None)
         } else {
-            reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)?
+            (reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)?, None)
         };
+        let retrieval_ms = t_ret.elapsed().as_millis();
         let hit = cands.iter().find(|c| c.page.part_index == want.part_index && c.page.page_id == want.page_id && c.page.book_id != book);
 
         // Did any single anchor reach that page at all?
@@ -725,7 +752,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
             anchor_hits.push((a.terms.join(" "), a.df, reached, a.start));
         }
 
-        let mut cause = "retrieval: no anchor reaches the page";
+        let mut cause = if pr.phrase_retrieval { "retrieval: no phrase reaches the page" } else { "retrieval: no anchor reaches the page" };
         let mut aligned = 0usize;
         let mut score = 0.0f64;
         let mut kind = String::new();
@@ -763,8 +790,31 @@ fn reuse_trace(args: &[String]) -> Result<()> {
             }
         }
 
+        // The whole passage mode, as the reader would run it.
+        let (mut full_ms, mut full_matches, mut full_target, mut full_others) = (0u128, 0usize, 0usize, Vec::new());
+        if full {
+            let t_full = std::time::Instant::now();
+            let run = ctx.passage_over(&pages_vec, w.range.clone(), &all_zones, None)?;
+            full_ms = t_full.elapsed().as_millis();
+            let shown: Vec<&reuse::Match> = run.matches.iter().filter(|m| m.kind != reuse::MatchType::Formulaic && m.score >= p.threshold).collect();
+            full_matches = shown.len();
+            for m in &shown {
+                if m.target.book_id != book && m.target.part_index == want.part_index && m.target.page_id == want.page_id {
+                    full_target += 1;
+                } else {
+                    full_others.push(serde_json::json!({ "book": m.target.book_id, "page": m.target.page_id, "score": m.score, "kind": m.kind.as_str(), "aligned": m.components.aligned }));
+                }
+            }
+        }
+
         let record = serde_json::json!({
             "row": row,
+            "retrieval_ms": retrieval_ms,
+            "phrase": phrase_rep,
+            "full_ms": full_ms,
+            "full_matches": full_matches,
+            "full_target": full_target,
+            "full_others": full_others,
             "q": format!("{}:{} [{}..{})", qpart, qpage, qa, qb),
             "window": format!("{}..{}", w_start, w_end),
             "target": format!("{}:{}", tpart, tpage),
@@ -783,7 +833,20 @@ fn reuse_trace(args: &[String]) -> Result<()> {
             "cause": cause,
             "text": f.get(8).copied().unwrap_or(""),
         });
-        println!("{:2}  {:<20} {:<9} cand={:<5} hits={} aligned={:<3} score={:.3} {}", row, record["q"].as_str().unwrap(), record["target"].as_str().unwrap(), hit.is_some(), record["candidate_hits"], aligned, score, cause);
+        println!(
+            "{:2}  {:<20} {:<9} cand={:<5} hits={} aligned={:<3} score={:.3} ret={}ms{} {}{}",
+            row,
+            record["q"].as_str().unwrap(),
+            record["target"].as_str().unwrap(),
+            hit.is_some(),
+            record["candidate_hits"],
+            aligned,
+            score,
+            retrieval_ms,
+            phrase_rep.map(|r| format!(" len={} q={} skip={} pages={}{}{}", r.length, r.queries, r.skipped, r.hits, if r.exhausted { " budget" } else { "" }, if r.anchors_too { " +anchors" } else { "" })).unwrap_or_default(),
+            if full { format!("full={}ms {} shown, {} on target, {} others | ", full_ms, full_matches, full_target, full_others.len()) } else { String::new() },
+            cause
+        );
         if let Some(w) = out.as_mut() {
             use std::io::Write;
             writeln!(w, "{}", record)?;

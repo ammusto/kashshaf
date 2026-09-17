@@ -86,6 +86,13 @@ export interface ReuseParams {
   /** Books a run may match against; empty is the whole corpus. */
   target_books: number[];
   /** Pages either side of a candidate page the alignment may run over. */
+  /** Selection mode: retrieve by the longest rare lemma phrase (set by the selection command in corpus mode). */
+  phrase_retrieval: boolean;
+  phrase_df_cap: number;
+  phrase_min_len: number;
+  phrase_min_pages: number;
+  phrase_max_queries: number;
+  phrase_descent: boolean;
   /** Each third of the query contributes at least this many anchors per slot (0 = plain pick). */
   anchor_thirds_min: number;
   target_neighbours: number;
@@ -136,6 +143,12 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   type_paraphrase: 0.7,
   isnad_zone_confidence: 0.5,
   target_books: [],
+  phrase_retrieval: false,
+  phrase_df_cap: 500,
+  phrase_min_len: 5,
+  phrase_min_pages: 20,
+  phrase_max_queries: 150,
+  phrase_descent: false,
   anchor_thirds_min: 0,
   target_neighbours: 1,
 };
