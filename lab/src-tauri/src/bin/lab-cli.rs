@@ -10,7 +10,7 @@
 //!                     [--exhaustive-min-aligned N] [--exhaustive-df-ceiling N] [--exhaustive-book-ceiling PCT]
 //!                     [--formulaic-book-pct PCT] [--formulaic-span-share F]
 //!                     [--discard-top-pct PCT] [--discard-density F] [--validate-merged]
-//!                     [--w-length W] [--anchor-thirds N]
+//!                     [--w-length W] [--anchor-thirds N] [--three-layer] [--pattern-min-share F]
 //!                     [--best-scoring-span]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
@@ -180,6 +180,12 @@ impl Ctx {
         if let Some(r) = arg(args, "--exhaustive-max-candidates") {
             params.exhaustive_max_candidates = r.parse().context("--exhaustive-max-candidates")?;
         }
+        if args.iter().any(|a| a == "--three-layer") {
+            params.exhaustive_three_layer = true;
+        }
+        if let Some(r) = arg(args, "--pattern-min-share") {
+            params.pattern_min_share = r.parse().context("--pattern-min-share")?;
+        }
         if let Some(r) = arg(args, "--anchor-thirds") {
             params.anchor_thirds_min = r.parse().context("--anchor-thirds")?;
         }
@@ -259,7 +265,7 @@ impl Ctx {
                 return Err(anyhow!("those texts hold {} tokens; the in-memory index is capped at {}", tokens, params.exhaustive_max_tokens));
             }
             let t0 = std::time::Instant::now();
-            let ix = reuse::BookIndex::build(&pages, &params.exhaustive_grams);
+            let ix = reuse::BookIndex::build_layers(&pages, &params.exhaustive_grams, params.exhaustive_three_layer);
             eprintln!(
                 "[exhaustive] {} pages, {} n-gram keys, {} postings, ~{:.1} MB, built in {} ms",
                 ix.pages(), ix.keys(), ix.postings, ix.bytes() as f64 / 1e6, t0.elapsed().as_millis()
@@ -568,6 +574,7 @@ fn emit_page(
                     "surface_agree": m.components.surface_agree,
                     "banal_share": m.components.banal_share,
                     "aligned": m.components.aligned,
+                    "pattern": m.pattern,
                 })
             )?;
             continue;

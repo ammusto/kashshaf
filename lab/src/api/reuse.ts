@@ -73,6 +73,10 @@ export interface ReuseParams {
   discard_common_density: number;
   /** Re-score the assembled span after merging, as its own gate. */
   validate_merged: boolean;
+  /** Hold surface and root beside lemma in the in-memory index; type on the agreement pattern. */
+  exhaustive_three_layer: boolean;
+  /** Share of a span's found n-grams that must be verbatim for the repetition rule to apply. */
+  pattern_min_share: number;
   /** Pages-share above which an n-gram counts as one the target book repeats. */
   formulaic_book_pct: number;
   /** How much of a span must be such phrases before it is typed formulaic. */
@@ -118,9 +122,11 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   exhaustive_grams: [2, 3],
   exhaustive_max_candidates: 100,
   exhaustive_book_ceiling_pct: 0,
-  discard_common_top_pct: 0,
+  discard_common_top_pct: 5,
   discard_common_density: 0.8,
-  validate_merged: false,
+  validate_merged: true,
+  exhaustive_three_layer: false,
+  pattern_min_share: 0.5,
   formulaic_book_pct: 50,
   formulaic_span_share: 0.65,
   exhaustive_min_aligned: 4,

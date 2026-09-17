@@ -225,7 +225,7 @@ fn build_index(h: &Handles, params: &Params) -> Result<Option<reuse::BookIndex>,
             tokens, params.exhaustive_max_tokens
         )));
     }
-    Ok(Some(reuse::BookIndex::build(&pages, &params.exhaustive_grams)))
+    Ok(Some(reuse::BookIndex::build_layers(&pages, &params.exhaustive_grams, params.exhaustive_three_layer)))
 }
 
 fn insert_match(conn: &Connection, run_id: i64, corpus_version: &str, page: &Page, m: &Match) -> Result<i64, LabError> {
@@ -889,6 +889,7 @@ pub async fn reuse_book(
                 query_end: r.query_end,
                 target_end: r.target_end,
                 target: r.target.clone(),
+                pattern: None,
                 q_start: r.tok_start,
                 q_end: r.tok_end,
                 t_start: r.t_start,

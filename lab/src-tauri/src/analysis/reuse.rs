@@ -232,8 +232,10 @@ pub struct Params {
     ///
     /// On our texts his own gate discards nothing -- 0 of 167 -- and the
     /// collapse his paper reports (321,279 initial n-gram matches to 167
-    /// shipped here) is validation and merging. This is measured because
-    /// the question was asked, not because the premise held.
+    /// shipped here) is validation and merging. Ported here it does work,
+    /// on our matches: with the merged re-score it drops 85 of 603 on pair
+    /// 1, 71 of them the citation formula against itself, and loses nothing
+    /// of the fixed frame. The text-to-text default, at his values.
     pub discard_common_top_pct: usize,
     pub discard_common_density: f64,
     /// His second gate: after merging, re-score the assembled span against
@@ -278,6 +280,24 @@ pub struct Params {
     /// `align_one` accepts *first* on a page, and a short first alignment is
     /// what unlocks the longer ones behind it.
     pub exhaustive_min_aligned: usize,
+    /// The three-layer index: every n-gram of the target held on surface,
+    /// lemma and root, looked up on all three, and the pattern of which
+    /// layers hold a span's n-grams kept as typing evidence. A span the
+    /// page holds verbatim (all three) may be the book's own formula, and
+    /// repetition decides; a span held on lemma or root but not surface is
+    /// the other text's wording of the same matter, which a formula never
+    /// is. Three times the index.
+    ///
+    /// Measured on pair 1 and left off: on normalised surface, 699 of 748
+    /// spans are verbatim on most of their n-grams, 21 inflected, 16 root
+    /// only, so the rule almost never fires; what the three lookups add is
+    /// retrieval -- 748 matches for 603, 330 formula-only for 245, one
+    /// cluster of the seventy lost -- and the top 30 is no better than the
+    /// discard gate's. A documented dead end.
+    pub exhaustive_three_layer: bool,
+    /// Share of a span's found n-grams that must be verbatim (✓✓✓) for the
+    /// repetition rule to be asked at all (0.5).
+    pub pattern_min_share: f64,
     /// Extractor confidence at which a chain becomes an isnād zone (0.5).
     ///
     /// The confidence formula scores `min(links, 5) / 5` for length, so a
@@ -368,10 +388,12 @@ impl Default for Params {
             exhaustive_max_candidates: 100,
             formulaic_book_pct: 50,
             formulaic_span_share: 0.65,
-            discard_common_top_pct: 0,
+            discard_common_top_pct: 5,
             discard_common_density: 0.8,
-            validate_merged: false,
+            validate_merged: true,
             exhaustive_book_ceiling_pct: 0,
+            exhaustive_three_layer: false,
+            pattern_min_share: 0.5,
             exhaustive_df_ceiling: 0,
             prefer_best_scoring_span: false,
             exhaustive_min_aligned: 4,
@@ -746,6 +768,49 @@ pub struct BookIndex {
     /// Posting-list lengths of every n-gram on more than one page, sorted
     /// descending, so a "top p% of repeated n-grams" cutoff is one lookup.
     repeated: Vec<u32>,
+    /// The other two layers, held only when `three_layer`.
+    surface: HashMap<u64, Vec<u32>>,
+    root: HashMap<u64, Vec<u32>>,
+    pub three_layer: bool,
+    page_of: HashMap<(u64, u32, u64), u32>,
+}
+
+/// Which layers of the target page hold a span's n-grams: counts over the
+/// span's bigrams and trigrams. `sss` verbatim, `xll` lemma and root but
+/// not surface (inflected), `xxr` root only (paraphrase or coincidence),
+/// `sxx` surface but not lemma (names, fixed phrases the analyser reads
+/// two ways). `seen` is every n-gram judged, found or not.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Pattern {
+    pub sss: u32,
+    pub xll: u32,
+    pub xxr: u32,
+    pub sxx: u32,
+    pub seen: u32,
+}
+
+impl Pattern {
+    pub fn found(&self) -> u32 {
+        self.sss + self.xll + self.xxr + self.sxx
+    }
+}
+
+fn index_layer(map: &mut HashMap<u64, Vec<u32>>, keys: &[&str], lengths: &[usize], pi: u32, postings: &mut usize) {
+    for &n in lengths {
+        if n == 0 || keys.len() < n {
+            continue;
+        }
+        for i in 0..=keys.len() - n {
+            if keys[i..i + n].iter().any(|k| k.is_empty()) {
+                continue;
+            }
+            let e = map.entry(gram_key(&keys[i..i + n])).or_default();
+            if e.last() != Some(&pi) {
+                e.push(pi);
+                *postings += 1;
+            }
+        }
+    }
 }
 
 fn gram_key(lemmas: &[&str]) -> u64 {
@@ -761,9 +826,22 @@ fn gram_key(lemmas: &[&str]) -> u64 {
 impl BookIndex {
     /// One pass over the book. `lengths` are the n-gram lengths to hold.
     pub fn build(pages: &[Page], lengths: &[usize]) -> Self {
-        let mut ix = BookIndex { lengths: lengths.to_vec(), ..Default::default() };
+        Self::build_layers(pages, lengths, false)
+    }
+
+    /// The same, holding surface and root beside lemma when `three`.
+    pub fn build_layers(pages: &[Page], lengths: &[usize], three: bool) -> Self {
+        let mut ix = BookIndex { lengths: lengths.to_vec(), three_layer: three, ..Default::default() };
         for (pi, page) in pages.iter().enumerate() {
             ix.pages.push(PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id });
+            ix.page_of.insert((page.book_id, page.part_index, page.page_id), pi as u32);
+            if three {
+                let norm: Vec<String> = page.tokens.iter().map(|t| normalize_arabic(&t.surface)).collect();
+                let surface: Vec<&str> = norm.iter().map(|s| s.as_str()).collect();
+                index_layer(&mut ix.surface, &surface, lengths, pi as u32, &mut ix.postings);
+                let roots: Vec<&str> = page.tokens.iter().map(|t| t.root.as_deref().unwrap_or("")).collect();
+                index_layer(&mut ix.root, &roots, lengths, pi as u32, &mut ix.postings);
+            }
             let lemmas: Vec<&str> = page.tokens.iter().map(|t| t.lemma.as_str()).collect();
             for &n in lengths {
                 if n == 0 || lemmas.len() < n {
@@ -831,7 +909,46 @@ impl BookIndex {
 
     /// Roughly what it occupies, for the run report.
     pub fn bytes(&self) -> usize {
-        self.grams.len() * (8 + 24) + self.postings * 4 + self.pages.len() * 16
+        (self.grams.len() + self.surface.len() + self.root.len()) * (8 + 24) + self.postings * 4 + self.pages.len() * 16
+    }
+
+    /// The index's own number for a page it holds.
+    pub fn page_index(&self, r: &PageRef) -> Option<u32> {
+        self.page_of.get(&(r.book_id, r.part_index, r.page_id)).copied()
+    }
+
+    /// Which layers of page `page` hold each n-gram of `tokens`.
+    pub fn pattern(&self, tokens: &[Token], page: u32) -> Pattern {
+        let mut pat = Pattern::default();
+        if !self.three_layer {
+            return pat;
+        }
+        let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
+        let norm: Vec<String> = tokens.iter().map(|t| normalize_arabic(&t.surface)).collect();
+        let surface: Vec<&str> = norm.iter().map(|s| s.as_str()).collect();
+        let roots: Vec<&str> = tokens.iter().map(|t| t.root.as_deref().unwrap_or("")).collect();
+        let has = |map: &HashMap<u64, Vec<u32>>, keys: &[&str]| -> bool {
+            !keys.iter().any(|k| k.is_empty()) && map.get(&gram_key(keys)).map(|ps| ps.binary_search(&page).is_ok()).unwrap_or(false)
+        };
+        for &n in &self.lengths {
+            if n == 0 || tokens.len() < n {
+                continue;
+            }
+            for i in 0..=tokens.len() - n {
+                pat.seen += 1;
+                let s = has(&self.surface, &surface[i..i + n]);
+                let l = has(&self.grams, &lemmas[i..i + n]);
+                let rt = has(&self.root, &roots[i..i + n]);
+                match (s, l, rt) {
+                    (true, true, _) | (true, false, true) => pat.sss += 1,
+                    (false, true, _) => pat.xll += 1,
+                    (false, false, true) => pat.xxr += 1,
+                    (true, false, false) => pat.sxx += 1,
+                    (false, false, false) => {}
+                }
+            }
+        }
+        pat
     }
 
     /// How much of this run of tokens is phrases the book repeats.
@@ -877,29 +994,56 @@ impl BookIndex {
         } else {
             usize::MAX
         };
+        let norm: Vec<String> = if self.three_layer { tokens.iter().map(|t| normalize_arabic(&t.surface)).collect() } else { Vec::new() };
+        let surface: Vec<&str> = norm.iter().map(|s| s.as_str()).collect();
+        let roots: Vec<&str> = if self.three_layer { tokens.iter().map(|t| t.root.as_deref().unwrap_or("")).collect() } else { Vec::new() };
         let mut hits: HashMap<u32, usize> = HashMap::new();
         for &n in &self.lengths {
             if n == 0 || lemmas.len() < n {
                 continue;
             }
             for i in 0..=lemmas.len() - n {
-                if lemmas[i..i + n].iter().any(|l| l.is_empty()) {
+                let lem_ok = !lemmas[i..i + n].iter().any(|l| l.is_empty());
+                if !lem_ok && !self.three_layer {
                     continue;
                 }
                 // The corpus ceiling is asked after the in-book one,
                 // because it is the expensive of the two.
-                if ceiling > 0 {
+                if lem_ok && ceiling > 0 {
                     let terms: Vec<String> = lemmas[i..i + n].iter().map(|l| l.to_string()).collect();
                     if df(&terms)? > ceiling {
                         continue;
                     }
                 }
-                if let Some(ps) = self.grams.get(&gram_key(&lemmas[i..i + n])) {
-                    if ps.len() > in_book {
-                        continue;
+                // A page counts once per n-gram position, whichever layers
+                // hold it.
+                let mut here: Vec<u32> = Vec::new();
+                if lem_ok {
+                    if let Some(ps) = self.grams.get(&gram_key(&lemmas[i..i + n])) {
+                        if ps.len() > in_book {
+                            continue;
+                        }
+                        for p in ps {
+                            *hits.entry(*p).or_insert(0) += 1;
+                        }
+                        if self.three_layer {
+                            here.extend_from_slice(ps);
+                        }
                     }
-                    for p in ps {
-                        *hits.entry(*p).or_insert(0) += 1;
+                }
+                if self.three_layer {
+                    for (map, keys) in [(&self.surface, &surface), (&self.root, &roots)] {
+                        if keys[i..i + n].iter().any(|k| k.is_empty()) {
+                            continue;
+                        }
+                        if let Some(ps) = map.get(&gram_key(&keys[i..i + n])) {
+                            for p in ps {
+                                if !here.contains(p) {
+                                    here.push(*p);
+                                    *hits.entry(*p).or_insert(0) += 1;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1390,6 +1534,20 @@ pub fn match_type_seen(c: &Components, zone: Option<Zone>, repeated: f64, p: &Pa
     match_type_in(c, zone, p)
 }
 
+/// Typing with the three-layer evidence. Only a span the target page holds
+/// verbatim on most of its n-grams can be the book's own formula, and for
+/// that repetition decides as before; a span held on lemma or root but not
+/// surface is the other text's wording of the same matter, so the
+/// repetition rule is not asked. A span with no n-gram found on any layer
+/// (a short one, or a merged one) falls back to the plain rule.
+pub fn match_type_pattern(c: &Components, zone: Option<Zone>, repeated: f64, pat: &Pattern, p: &Params) -> MatchType {
+    let found = pat.found();
+    if found == 0 || pat.sss as f64 / found as f64 >= p.pattern_min_share {
+        return match_type_seen(c, zone, repeated, p);
+    }
+    match_type_in(c, zone, p)
+}
+
 pub fn match_type_in(c: &Components, zone: Option<Zone>, p: &Params) -> MatchType {
     // Two books that carry the same ḥadīth share its chain, and a shared
     // chain is a fact about transmission rather than a passage one text took
@@ -1447,6 +1605,9 @@ pub struct Match {
     pub kind: MatchType,
     pub zone: Option<Zone>,
     pub anchor_hits: usize,
+    /// Three-layer evidence, when the index held three layers.
+    #[serde(default)]
+    pub pattern: Option<Pattern>,
 }
 
 /// The zone the aligned query tokens mostly fall in, if any.
@@ -1664,6 +1825,10 @@ pub fn passage(
             let qj = page_of(qb - 1);
             let q_base = q_starts[qi];
             let pairs: Vec<(usize, usize)> = al.pairs.iter().map(|(i, j)| (i + range.start - q_base, j - base)).collect();
+            let pattern = match index {
+                Some(ix) if ix.three_layer => ix.page_index(&c.page).map(|pi| ix.pattern(&span.tokens[t_lo..t_hi], pi)),
+                _ => None,
+            };
             matches.push(Match {
                 query: own[qi],
                 query_end: if qj > qi { Some(own[qj]) } else { None },
@@ -1679,15 +1844,17 @@ pub fn passage(
                 score: s,
                 // A span made of phrases the quoted book says on most of
                 // its pages is a formula, whatever it aligns against.
-                kind: match_type_seen(
-                    &comp,
-                    zone,
-                    index
+                kind: {
+                    let repeated = index
                         .filter(|_| params.exhaustive() && params.formulaic_book_pct > 0)
                         .map(|ix| ix.repeated_share(&span.tokens[t_lo..t_hi], params.formulaic_book_pct))
-                        .unwrap_or(0.0),
-                    params,
-                ),
+                        .unwrap_or(0.0);
+                    match pattern {
+                        Some(ref pat) => match_type_pattern(&comp, zone, repeated, pat, params),
+                        None => match_type_seen(&comp, zone, repeated, params),
+                    }
+                },
+                pattern,
                 anchor_hits: c.hits,
             });
         }
@@ -2117,6 +2284,7 @@ mod tests {
             query_end: None,
             target_end: None,
             target: tp.clone(),
+            pattern: None,
             q_start: qs,
             q_end: qe,
             t_start: ts,
@@ -2193,6 +2361,36 @@ mod tests {
                 .collect();
             Ok(Hits { total: pages.len(), pages })
         }
+    }
+
+    #[test]
+    fn three_layers_type_an_inflected_span_off_the_repetition_rule() {
+        // The book says `a b c d e f` on both its pages, so on lemma the
+        // phrase is one it repeats. The query says it with two words
+        // inflected: surface differs, lemma agrees. On the pattern that is
+        // ✗✓✓ on most n-grams, and the repetition rule is not asked.
+        let pages = vec![page(2, 0, 1, "", "a b c d e f g"), page(2, 0, 2, "", "h a b c d e f")];
+        let ix = BookIndex::build_layers(&pages, &[2, 3], true);
+        assert!(ix.three_layer);
+        let mut q = page(1, 0, 1, "", "a b c d e f");
+        let verbatim = ix.pattern(&q.tokens, 0);
+        assert_eq!((verbatim.sss, verbatim.xll, verbatim.found()), (9, 0, 9));
+        q.tokens[2].surface = "c1".into();
+        q.tokens[3].surface = "d1".into();
+        let inflected = ix.pattern(&q.tokens, 0);
+        assert_eq!((inflected.sss, inflected.xll), (2, 7), "{:?}", inflected);
+        let p = Params { formulaic_book_pct: 50, formulaic_span_share: 0.65, ..Default::default() };
+        let c = Components { surface_agree: 0.67, lemma_agree: 1.0, root_agree: 1.0, coverage: 1.0, banal_share: 0.0, banality_factor: 1.0, aligned: 6 };
+        let repeated = ix.repeated_share(&q.tokens, 50);
+        assert!(repeated >= 0.65, "{}", repeated);
+        assert_eq!(match_type_seen(&c, None, repeated, &p), MatchType::Formulaic);
+        assert_eq!(match_type_pattern(&c, None, repeated, &verbatim, &p), MatchType::Formulaic);
+        assert_ne!(match_type_pattern(&c, None, repeated, &inflected, &p), MatchType::Formulaic);
+        // Looked up on three layers, the inflected query still reaches both pages.
+        let ex = Params { target_books: vec![2], retrieval: RetrievalMode::Exhaustive, ..Default::default() };
+        let count = |_: &[String]| -> Result<usize> { Ok(1) };
+        let cands = ix.candidates(&q.tokens, &[], &ex, &count).unwrap();
+        assert_eq!(cands.len(), 2);
     }
 
     #[test]
