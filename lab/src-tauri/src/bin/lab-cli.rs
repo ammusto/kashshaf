@@ -11,6 +11,7 @@
 //!                     [--formulaic-book-pct PCT] [--formulaic-span-share F]
 //!                     [--discard-top-pct PCT] [--discard-density F] [--validate-merged]
 //!                     [--w-length W] [--anchor-thirds N] [--three-layer] [--pattern-min-share F]
+//!                     [--page-windows]
 //!                     [--best-scoring-span]
 //!                     [--window N] [--stride N] [--min-aligned N] [--fallback-max-tokens N]
 //!                     [--include-formulaic]
@@ -480,7 +481,20 @@ fn reuse_find(args: &[String]) -> Result<()> {
     for r in &refs {
         lens.push(ctx.load(r)?.map(|x| x.tokens.len()).unwrap_or(0));
     }
-    let wins = reuse::stream_windows(&lens, p.window, p.stride, p.min_aligned);
+    // `--page-windows` cuts the old way, one page at a time, for measuring
+    // what the stream windows changed.
+    let wins: Vec<reuse::StreamWindow> = if args.iter().any(|a| a == "--page-windows") {
+        lens.iter()
+            .enumerate()
+            .flat_map(|(pi, &n)| {
+                reuse::windows(n, p.window, p.stride, p.min_aligned)
+                    .into_iter()
+                    .map(move |r| reuse::StreamWindow { first_page: pi, last_page: pi, range: r })
+            })
+            .collect()
+    } else {
+        reuse::stream_windows(&lens, p.window, p.stride, p.min_aligned)
+    };
     let mut pending: HashMap<usize, Vec<(PageRef, reuse::Match)>> = HashMap::new();
     let mut zcache: HashMap<usize, Vec<Option<Zone>>> = HashMap::new();
     let mut flushed = 0usize;
@@ -620,6 +634,17 @@ fn reuse_trace(args: &[String]) -> Result<()> {
     };
     let p = &ctx.params;
     let text = std::fs::read_to_string(&spans_path)?;
+    // The windows Lab's book mode cuts: against the book's token stream.
+    let refs = page_range(args, &ctx.source, book)?;
+    let mut lens: Vec<usize> = Vec::with_capacity(refs.len());
+    for r in &refs {
+        lens.push(ctx.load(r)?.map(|x| x.tokens.len()).unwrap_or(0));
+    }
+    let mut starts = vec![0usize];
+    for n in &lens {
+        starts.push(starts.last().unwrap() + n);
+    }
+    let wins = reuse::stream_windows(&lens, p.window, p.stride, p.min_aligned);
 
     for (row, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
@@ -634,28 +659,42 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         let (tpart, tpage): (u32, u64) = (f[4].parse()?, f[5].parse()?);
         let want = PageRef { book_id: 0, part_index: tpart, page_id: tpage };
 
-        let Some(page) = ctx.source.page(book, qpart, qpage)? else {
+        let Some(pi) = refs.iter().position(|r| r.part_index == qpart && r.page_id == qpage) else {
             eprintln!("row {}: no page {}:{}", row, qpart, qpage);
             continue;
         };
-        // The window Lab would have used: the one covering most of the span.
-        let ws = reuse::windows(page.tokens.len(), p.window, p.stride, p.min_aligned);
+        // The window Lab would have used: the one covering most of the span,
+        // in the book's token stream.
+        let (abs_a, abs_b) = (starts[pi] + qa.min(lens[pi]), starts[pi] + qb.min(lens[pi]));
         let w = if selection {
-            qa.min(page.tokens.len())..qb.min(page.tokens.len())
+            reuse::StreamWindow { first_page: pi, last_page: pi, range: qa.min(lens[pi])..qb.min(lens[pi]) }
         } else {
-            ws.iter()
-                .max_by_key(|w| w.end.min(qb).saturating_sub(w.start.max(qa)))
+            wins.iter()
+                .max_by_key(|w| {
+                    let (s, e) = (starts[w.first_page] + w.range.start, starts[w.first_page] + w.range.end);
+                    e.min(abs_b).saturating_sub(s.max(abs_a))
+                })
                 .cloned()
-                .unwrap_or(0..page.tokens.len())
+                .unwrap_or(reuse::StreamWindow { first_page: pi, last_page: pi, range: 0..lens[pi] })
         };
-
-        let zones = ctx.zones(&page);
+        let mut all_tokens = Vec::new();
+        let mut all_zones: Vec<Option<Zone>> = Vec::new();
+        let mut own: Vec<PageRef> = Vec::new();
+        for i in w.first_page..=w.last_page {
+            let Some(pg) = ctx.load(&refs[i])? else { continue };
+            all_zones.extend(ctx.zones(&pg));
+            all_tokens.extend(pg.tokens.iter().cloned());
+            own.push(refs[i]);
+        }
+        // The window's start relative to the row's page (negative when it
+        // begins on an earlier page), for the report.
+        let w_start = (starts[w.first_page] + w.range.start) as isize - starts[pi] as isize;
+        let w_end = w_start + w.range.len() as isize;
         let mut intern = reuse::Interner::default();
-        let tokens = &page.tokens[w.clone()];
-        let page_zones: Vec<Option<Zone>> = w.clone().map(|i| zones.get(i).copied().flatten()).collect();
+        let tokens = &all_tokens[w.range.clone()];
+        let page_zones: Vec<Option<Zone>> = w.range.clone().map(|i| all_zones.get(i).copied().flatten()).collect();
         let q = reuse::Seq::build(tokens, &mut intern, &ctx.freq, p, &[], &page_zones);
         let non_banal = q.non_banal();
-        let own = PageRef { book_id: page.book_id, part_index: page.part_index, page_id: page.page_id };
         let count = |t: &[String]| reuse::phrase_df(&ctx.source, t);
         let anchors = reuse::anchors(&q, tokens, p, &count)?;
 
@@ -666,7 +705,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         let cands = if anchors.is_empty() {
             Vec::new()
         } else {
-            reuse::candidates(&ctx.source, &anchors, std::slice::from_ref(&own), None, non_banal, &pr)?
+            reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)?
         };
         let hit = cands.iter().find(|c| c.page.part_index == want.part_index && c.page.page_id == want.page_id && c.page.book_id != book);
 
@@ -727,7 +766,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         let record = serde_json::json!({
             "row": row,
             "q": format!("{}:{} [{}..{})", qpart, qpage, qa, qb),
-            "window": format!("{}..{}", w.start, w.end),
+            "window": format!("{}..{}", w_start, w_end),
             "target": format!("{}:{}", tpart, tpage),
             "candidate": hit.is_some(),
             "candidate_hits": hit.map(|c| c.hits).unwrap_or(0),
@@ -736,7 +775,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
                 "terms": t, "df": d, "reaches": r, "start": st,
                 // Does this anchor sit on the passage somebody else found,
                 // or elsewhere in the window that retrieved it?
-                "on_passage": *st + w.start + 2 >= qa && *st + w.start < qb,
+                "on_passage": *st as isize + w_start + 2 >= qa as isize && (*st as isize + w_start) < qb as isize,
             })).collect::<Vec<_>>(),
             "aligned": aligned,
             "score": score,
