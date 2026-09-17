@@ -77,6 +77,9 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   const [threshold, setThreshold] = useState(DEFAULT_REUSE_PARAMS.threshold);
   const [banalityScale, setBanalityScale] = useState(DEFAULT_REUSE_PARAMS.banality_scale);
   const [typeFilter, setTypeFilter] = useState<Set<MatchType>>(new Set(['verbatim', 'inflected', 'paraphrase', 'weak']));
+  // Rows under the mode's view cutoff are behind a toggle, not gone: the
+  // same mechanism as the formulaic type.
+  const [showLow, setShowLow] = useState(false);
   const [gear, setGear] = useState(false);
 
   const [section, setSection] = useState<TocRow | null>(null);
@@ -296,6 +299,17 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
         .sort((a, b) => b.score - a.score || (a.target_title ?? '').localeCompare(b.target_title ?? '', 'ar') || typeRank(a.kind) - typeRank(b.kind)),
     [matches, threshold, typeFilter]
   );
+  // The default view's cutoff, per mode, from the shown run's settings. A
+  // threshold the reader has dragged under the run's own is an explicit
+  // ask for more, and the line follows it.
+  const viewCutoff = useMemo(() => {
+    const p = { ...DEFAULT_REUSE_PARAMS, ...(runs.find((r) => r.id === shownRun)?.params ?? params) };
+    if (threshold < (p.threshold ?? DEFAULT_REUSE_PARAMS.threshold)) return threshold;
+    return Math.max(threshold, (p.target_books ?? []).length ? p.view_cutoff_text : p.view_cutoff_corpus);
+  }, [runs, shownRun, params, threshold]);
+  const confident = useMemo(() => visible.filter((m) => m.score >= viewCutoff), [visible, viewCutoff]);
+  const lowCount = visible.length - confident.length;
+  const shown = showLow ? visible : confident;
 
   // The phrase with its context needs the target pages. Fetch the distinct
   // ones the visible rows land on, up to a budget: a run over a whole book can
@@ -557,9 +571,19 @@ async function loadSpan(bookId: number, from: { part_index: number; page_id: num
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              {visible.map((m) => (
+              {shown.map((m) => (
                 <ResultRow key={m.id} m={m} ctx={contexts.get(m.id)} onClick={() => void openTarget(m)} />
               ))}
+              {lowCount > 0 && (
+                <button
+                  onClick={() => setShowLow((v) => !v)}
+                  className="w-full p-2 text-xs text-app-text-secondary border-t border-app-border-light hover:bg-app-bg-hover"
+                  title={`Scoring under ${viewCutoff.toFixed(2)}, where fewer than nine in ten read as genuine on the calibration pair`}
+                  data-testid="show-low"
+                >
+                  {showLow ? 'Hide' : 'Show'} {lowCount} lower-confidence {lowCount === 1 ? 'match' : 'matches'}
+                </button>
+              )}
               {visible.length === 0 && shownRun != null && <p className="p-4 text-sm text-app-text-secondary">No matches at this threshold.</p>}
               {shownRun == null && !busy && (
                 <p className="p-4 text-sm text-app-text-secondary">

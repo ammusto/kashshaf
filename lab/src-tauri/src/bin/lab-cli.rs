@@ -510,7 +510,7 @@ fn reuse_find(args: &[String]) -> Result<()> {
     // Where every candidate went: shown, hidden as formulaic, below the
     // threshold, over the page limit (merged rows); dropped by the gate,
     // dropped by the merged re-score (alignments, before the page merge).
-    let mut tally = [0usize; 4];
+    let mut tally = [0usize; 5];
     let (mut gate_dropped, mut validate_dropped) = (0usize, 0usize);
 
     for w in &wins {
@@ -550,8 +550,8 @@ fn reuse_find(args: &[String]) -> Result<()> {
         println!("{} matches in {} ms", found, started.elapsed().as_millis());
     }
     println!(
-        "accounting: shown {} | hidden as formulaic {} | below threshold {} | over the page limit {} (merged rows); gate dropped {} | merged re-score dropped {} (alignments)",
-        tally[0], tally[1], tally[2], tally[3], gate_dropped, validate_dropped
+        "accounting: shown {} (of which {} lower-confidence, under the view cutoff {:.2}) | hidden as formulaic {} | below threshold {} | over the page limit {} (merged rows); gate dropped {} | merged re-score dropped {} (alignments)",
+        tally[0], tally[4], p.view_cutoff(), tally[1], tally[2], tally[3], gate_dropped, validate_dropped
     );
     Ok(())
 }
@@ -569,7 +569,7 @@ fn emit_page(
     limit: usize,
     only: Option<u64>,
     keep_formulaic: bool,
-    tally: &mut [usize; 4],
+    tally: &mut [usize; 5],
 ) -> Result<()> {
     let Some(ms) = pending.remove(&pi) else { return Ok(()) };
     let Some(page) = ctx.load(&refs[pi])? else { return Ok(()) };
@@ -598,6 +598,9 @@ fn emit_page(
         }
         kept += 1;
         tally[0] += 1;
+        if m.score < p.view_cutoff() {
+            tally[4] += 1;
+        }
         *found += 1;
         if let Some(w) = jsonl.as_mut() {
             use std::io::Write;

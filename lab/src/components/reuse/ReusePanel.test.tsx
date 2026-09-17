@@ -231,6 +231,26 @@ describe('ReusePanel', () => {
     expect(args.params?.target_books).toEqual([230]);
   });
 
+  it('keeps the lower-confidence rows of a named-text run behind a toggle', async () => {
+    // Text-to-text calibrates to 0.70 on pair 1; the corpus view does not
+    // hide anything. Rows under the line are a click away, not gone.
+    api.reuse.passage.mockResolvedValue(passageResult([match(1, 0.9, 'verbatim'), match(2, 0.7, 'inflected'), match(3, 0.5, 'paraphrase')]));
+    render(<ReusePanel book={book} local />);
+    await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('reuse-gear'));
+    fireEvent.change(screen.getByLabelText('Target text'), { target: { value: 'غريب' } });
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
+    fireEvent.click(within(screen.getByRole('listbox')).getByText('غريب الحديث'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await findReuseOver(0, 3);
+    await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(2));
+    const toggle = screen.getByTestId('show-low');
+    expect(toggle).toHaveTextContent('Show 1 lower-confidence match');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(3));
+    expect(screen.getByTestId('show-low')).toHaveTextContent('Hide 1 lower-confidence match');
+  });
+
   it('reads a target span that runs over a page break as one passage', async () => {
     // A quotation split by the printer is still one quotation. The match
     // names both pages, the words come from both, and the break is marked

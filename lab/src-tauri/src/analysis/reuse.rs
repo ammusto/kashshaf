@@ -128,6 +128,17 @@ pub struct Params {
     /// Display threshold on `score` (0.35). Matches below it are still
     /// returned and stored so the UI can lower the bar without re-running.
     pub threshold: f64,
+    /// The default view: rows scoring under this are shown only behind a
+    /// "show n lower-confidence matches" toggle, the way the formulaic type
+    /// is, not discarded. Calibrated on pair 1 as the lowest 0.05 band
+    /// above which cumulative precision on the labelled rows is 90%, then
+    /// verified by a fresh decile read of the rows above it and re-run with
+    /// that read folded in: in text-to-text mode 0.70 (76 of 518 rows shown,
+    /// 96% genuine on the fresh read; 31 of the 79 frame clusters the run
+    /// covers sit only under the line); in corpus mode the whole list clears
+    /// 90%, so the cutoff is the threshold.
+    pub view_cutoff_corpus: f64,
+    pub view_cutoff_text: f64,
     /// Tokens inside a Qurʾān or isnād zone are not used as anchors. Off by
     /// default since anchors are chosen by document frequency (amendment
     /// 1.4): a Qurʾānic trigram that hundreds of pages quote sorts itself
@@ -395,6 +406,8 @@ impl Default for Params {
             banality_scale: 0.5,
             banality_baseline: None,
             threshold: 0.35,
+            view_cutoff_corpus: 0.35,
+            view_cutoff_text: 0.70,
             exclude_zones_from_anchoring: false,
             count_budget: 24,
             fallback_max_tokens: 12,
@@ -466,6 +479,11 @@ impl Params {
         } else {
             self.min_aligned.max(1)
         }
+    }
+
+    /// The default view's cutoff for this mode.
+    pub fn view_cutoff(&self) -> f64 {
+        if self.exhaustive() { self.view_cutoff_text } else { self.view_cutoff_corpus }.max(self.threshold)
     }
 
     /// The index-side book restriction, `None` for the whole corpus.

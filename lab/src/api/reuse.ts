@@ -38,6 +38,9 @@ export interface ReuseParams {
   banality_scale: number;
   banality_baseline: number | null;
   threshold: number;
+  /** Rows under this score sit behind a "show n lower-confidence matches" toggle; per mode. */
+  view_cutoff_corpus: number;
+  view_cutoff_text: number;
   exclude_zones_from_anchoring: boolean;
   window: number;
   stride: number;
@@ -121,6 +124,8 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   banality_scale: 0.5,
   banality_baseline: null,
   threshold: 0.35,
+  view_cutoff_corpus: 0.35,
+  view_cutoff_text: 0.7,
   exclude_zones_from_anchoring: true,
   window: 60,
   stride: 30,
