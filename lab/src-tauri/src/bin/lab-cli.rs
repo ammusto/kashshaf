@@ -718,7 +718,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         }
         let t_ret = std::time::Instant::now();
         let (cands, phrase_rep) = if pr.phrase_retrieval {
-            let (mut c, mut rep) = reuse::phrase_candidates(&ctx.source, tokens, &own, None, &pr)?;
+            let (mut c, mut rep) = reuse::phrase_candidates(&ctx.source, tokens, &page_zones, &own, None, &pr)?;
             if c.len() < pr.phrase_min_pages && !anchors.is_empty() {
                 rep.anchors_too = true;
                 for a in reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)? {
@@ -802,7 +802,15 @@ fn reuse_trace(args: &[String]) -> Result<()> {
                 if m.target.book_id != book && m.target.part_index == want.part_index && m.target.page_id == want.page_id {
                     full_target += 1;
                 } else {
-                    full_others.push(serde_json::json!({ "book": m.target.book_id, "page": m.target.page_id, "score": m.score, "kind": m.kind.as_str(), "aligned": m.components.aligned }));
+                    // The short ones carry their target text, so a reader
+                    // can say whether a five-token run is a quotation or
+                    // a coincidence.
+                    let text = if m.components.aligned <= 6 && full_others.iter().filter(|o: &&serde_json::Value| o["text"].is_string()).count() < 8 {
+                        ctx.load(&m.target)?.map(|pg| pg.tokens[m.t_start.min(pg.tokens.len())..m.t_end.min(pg.tokens.len())].iter().map(|t| t.surface.as_str()).collect::<Vec<_>>().join(" "))
+                    } else {
+                        None
+                    };
+                    full_others.push(serde_json::json!({ "book": m.target.book_id, "page": m.target.page_id, "score": m.score, "kind": m.kind.as_str(), "aligned": m.components.aligned, "text": text }));
                 }
             }
         }

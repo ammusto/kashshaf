@@ -93,6 +93,8 @@ export interface ReuseParams {
   phrase_min_pages: number;
   phrase_max_queries: number;
   phrase_descent: boolean;
+  /** Aligned floor in selection mode: a five-gram that reached the page is a five-token run. */
+  selection_min_aligned: number;
   /** Each third of the query contributes at least this many anchors per slot (0 = plain pick). */
   anchor_thirds_min: number;
   target_neighbours: number;
@@ -149,6 +151,7 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   phrase_min_pages: 20,
   phrase_max_queries: 150,
   phrase_descent: false,
+  selection_min_aligned: 5,
   anchor_thirds_min: 0,
   target_neighbours: 1,
 };

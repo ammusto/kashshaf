@@ -365,6 +365,10 @@ pub struct Params {
     /// longer always contains one, so every page holding such a run is
     /// reached, in n queries.
     pub phrase_descent: bool,
+    /// The aligned floor in selection mode (5). A five-gram that reached
+    /// the page is already a five-token exact run; the corpus-mode floor of
+    /// six, set for windows, would reach it and not show it.
+    pub selection_min_aligned: usize,
     pub target_neighbours: usize,
 }
 
@@ -418,6 +422,7 @@ impl Default for Params {
             phrase_min_pages: 20,
             phrase_max_queries: 150,
             phrase_descent: false,
+            selection_min_aligned: 5,
             target_books: Vec::new(),
             retrieval: RetrievalMode::Corpus,
             exhaustive_max_books: 50,
@@ -456,7 +461,13 @@ impl Params {
 
     /// Aligned pairs a match needs, which is a different claim in each mode.
     pub fn aligned_floor(&self) -> usize {
-        if self.exhaustive() { self.exhaustive_min_aligned.max(2) } else { self.min_aligned.max(1) }
+        if self.exhaustive() {
+            self.exhaustive_min_aligned.max(2)
+        } else if self.phrase_retrieval {
+            self.selection_min_aligned.max(2)
+        } else {
+            self.min_aligned.max(1)
+        }
     }
 
     /// The index-side book restriction, `None` for the whole corpus.
@@ -1735,11 +1746,13 @@ pub struct PhraseReport {
     pub anchors_too: bool,
 }
 
-/// Longest-rare-phrase retrieval (see `Params::phrase_retrieval`). Every
-/// page a qualifying phrase reaches is a candidate, counted once per
-/// phrase that reaches it. Sub-phrases do not cross a token without a
-/// lemma, because the index holds no such phrase.
-pub fn phrase_candidates(source: &dyn BookSource, tokens: &[Token], own: &[PageRef], exclude_book: Option<u64>, params: &Params) -> Result<(Vec<Candidate>, PhraseReport)> {
+/// Phrase retrieval (see `Params::phrase_retrieval`). Every page a
+/// qualifying phrase reaches is a candidate, counted once per phrase that
+/// reaches it. Sub-phrases do not cross a token without a lemma, because
+/// the index holds no such phrase; and, as anchors do, a sub-phrase lying
+/// wholly inside a Qurʾān or isnād zone is not asked, because every book
+/// that quotes the āya would answer. `zones` is per token of `tokens`.
+pub fn phrase_candidates(source: &dyn BookSource, tokens: &[Token], zones: &[Option<Zone>], own: &[PageRef], exclude_book: Option<u64>, params: &Params) -> Result<(Vec<Candidate>, PhraseReport)> {
     let keep = |p: &PageRef| !own.contains(p) && exclude_book.map(|x| x != p.book_id).unwrap_or(true);
     let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
     let n = lemmas.len();
@@ -1764,6 +1777,9 @@ pub fn phrase_candidates(source: &dyn BookSource, tokens: &[Token], own: &[PageR
             }
             let terms = &lemmas[i..i + len];
             if terms.iter().any(|l| l.is_empty()) {
+                continue;
+            }
+            if params.exclude_zones_from_anchoring && zones.len() >= i + len && zones[i..i + len].iter().all(|z| z.is_some()) {
                 continue;
             }
             let q = CandidateQuery {
@@ -1856,7 +1872,7 @@ pub fn passage(
     let mut cands = match index.filter(|_| params.exhaustive()) {
         Some(ix) => ix.candidates(tokens, &own, params, count)?,
         None if params.phrase_retrieval => {
-            let (mut c, mut rep) = phrase_candidates(source, tokens, &own, exclude_book, params)?;
+            let (mut c, mut rep) = phrase_candidates(source, tokens, &page_zones, &own, exclude_book, params)?;
             if c.len() < params.phrase_min_pages && !anchors.is_empty() {
                 rep.anchors_too = true;
                 for a in candidates(source, &anchors, &own, exclude_book, non_banal, params)? {
