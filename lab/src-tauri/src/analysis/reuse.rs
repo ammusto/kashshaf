@@ -189,7 +189,10 @@ pub struct Params {
     /// a real parallel shares many.
     pub exhaustive_max_candidates: usize,
     /// Share of the target book's pages above which an n-gram counts as one
-    /// the book repeats, for typing; 0 turns the rule off.
+    /// the book repeats, for typing (50); 0 turns the rule off.
+    ///
+    /// 25 and 50 type identically on the pair this was measured on, so the
+    /// weaker claim is taken.
     ///
     /// The page count of every n-gram is in `BookIndex` already. Asked at
     /// retrieval it does nothing -- a page carrying a formula shares other
@@ -199,6 +202,13 @@ pub struct Params {
     /// pages is a formula, whatever it aligns against.
     pub formulaic_book_pct: usize,
     /// How much of a span must be such phrases before it is formulaic (0.5).
+    ///
+    /// This is the expensive half of the rule, because a genuine quotation
+    /// opens with the citation formula that introduces it. At 0.5 the rule
+    /// withholds 164 of 299 formula matches and costs four of alNaql's
+    /// seventy clusters; at 0.65 it keeps all seventy and withholds 54. The
+    /// first is taken: 493 rows at 27% precision read is more genuine
+    /// findings in less reading than 603 at about 16%.
     pub formulaic_span_share: f64,
     /// Share of the target book's pages above which an n-gram is not looked
     /// up, as a percentage; 0 is no ceiling.
@@ -309,7 +319,7 @@ impl Default for Params {
             exhaustive_max_books: 4,
             exhaustive_grams: vec![2, 3],
             exhaustive_max_candidates: 100,
-            formulaic_book_pct: 0,
+            formulaic_book_pct: 50,
             formulaic_span_share: 0.5,
             exhaustive_book_ceiling_pct: 0,
             exhaustive_df_ceiling: 0,
@@ -2177,7 +2187,8 @@ mod tests {
         assert!(quiet < 0.5, "{}", quiet);
         assert_eq!(match_type_seen(&comp, None, quiet, &typing), MatchType::Verbatim);
         // And with the rule off, the formula types as what it aligns like.
-        assert_eq!(match_type_seen(&comp, None, rep, &ex), MatchType::Verbatim);
+        let off = Params { formulaic_book_pct: 0, ..ex.clone() };
+        assert_eq!(match_type_seen(&comp, None, rep, &off), MatchType::Verbatim);
 
         // A phrase the target book says on most of its pages is a formula
         // by the book's own evidence, and is not looked up.
