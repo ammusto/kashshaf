@@ -139,6 +139,12 @@ pub struct Params {
     /// 90%, so the cutoff is the threshold.
     pub view_cutoff_corpus: f64,
     pub view_cutoff_text: f64,
+    /// The middle tier: rows from here up to the cutoff collapse under
+    /// "n probable matches", with the band's measured precision in the
+    /// tooltip -- on pair 1, 0.50-0.70 is 94 positive to 73 negative on
+    /// the labelled rows, about six in ten. Under this, lower-confidence.
+    pub view_probable_corpus: f64,
+    pub view_probable_text: f64,
     /// Tokens inside a Qurʾān or isnād zone are not used as anchors. Off by
     /// default since anchors are chosen by document frequency (amendment
     /// 1.4): a Qurʾānic trigram that hundreds of pages quote sorts itself
@@ -408,6 +414,8 @@ impl Default for Params {
             threshold: 0.35,
             view_cutoff_corpus: 0.35,
             view_cutoff_text: 0.70,
+            view_probable_corpus: 0.35,
+            view_probable_text: 0.50,
             exclude_zones_from_anchoring: false,
             count_budget: 24,
             fallback_max_tokens: 12,
@@ -484,6 +492,11 @@ impl Params {
     /// The default view's cutoff for this mode.
     pub fn view_cutoff(&self) -> f64 {
         if self.exhaustive() { self.view_cutoff_text } else { self.view_cutoff_corpus }.max(self.threshold)
+    }
+
+    /// The floor of the probable tier for this mode.
+    pub fn view_probable(&self) -> f64 {
+        if self.exhaustive() { self.view_probable_text } else { self.view_probable_corpus }.max(self.threshold).min(self.view_cutoff())
     }
 
     /// The index-side book restriction, `None` for the whole corpus.

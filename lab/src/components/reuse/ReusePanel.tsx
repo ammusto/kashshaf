@@ -80,6 +80,7 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   // Rows under the mode's view cutoff are behind a toggle, not gone: the
   // same mechanism as the formulaic type.
   const [showLow, setShowLow] = useState(false);
+  const [showProbable, setShowProbable] = useState(false);
   const [gear, setGear] = useState(false);
 
   const [section, setSection] = useState<TocRow | null>(null);
@@ -302,14 +303,21 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   // The default view's cutoff, per mode, from the shown run's settings. A
   // threshold the reader has dragged under the run's own is an explicit
   // ask for more, and the line follows it.
-  const viewCutoff = useMemo(() => {
+  const [viewCutoff, viewProbable] = useMemo(() => {
     const p = { ...DEFAULT_REUSE_PARAMS, ...(runs.find((r) => r.id === shownRun)?.params ?? params) };
-    if (threshold < (p.threshold ?? DEFAULT_REUSE_PARAMS.threshold)) return threshold;
-    return Math.max(threshold, (p.target_books ?? []).length ? p.view_cutoff_text : p.view_cutoff_corpus);
+    if (threshold < (p.threshold ?? DEFAULT_REUSE_PARAMS.threshold)) return [threshold, threshold];
+    const text = (p.target_books ?? []).length;
+    const cutoff = Math.max(threshold, text ? p.view_cutoff_text : p.view_cutoff_corpus);
+    const probable = Math.min(cutoff, Math.max(threshold, text ? p.view_probable_text : p.view_probable_corpus));
+    return [cutoff, probable];
   }, [runs, shownRun, params, threshold]);
   const confident = useMemo(() => visible.filter((m) => m.score >= viewCutoff), [visible, viewCutoff]);
-  const lowCount = visible.length - confident.length;
-  const shown = showLow ? visible : confident;
+  const probable = useMemo(() => visible.filter((m) => m.score >= viewProbable && m.score < viewCutoff), [visible, viewCutoff, viewProbable]);
+  const lowCount = visible.length - confident.length - probable.length;
+  const shown = useMemo(
+    () => (showLow ? visible : showProbable ? visible.filter((m) => m.score >= viewProbable) : confident),
+    [showLow, showProbable, visible, confident, viewProbable]
+  );
 
   // The phrase with its context needs the target pages. Fetch the distinct
   // ones the visible rows land on, up to a budget: a run over a whole book can
@@ -574,11 +582,21 @@ async function loadSpan(bookId: number, from: { part_index: number; page_id: num
               {shown.map((m) => (
                 <ResultRow key={m.id} m={m} ctx={contexts.get(m.id)} onClick={() => void openTarget(m)} />
               ))}
+              {probable.length > 0 && (
+                <button
+                  onClick={() => setShowProbable((v) => !v)}
+                  className="w-full p-2 text-xs text-app-text-secondary border-t border-app-border-light hover:bg-app-bg-hover"
+                  title={`Scoring ${viewProbable.toFixed(2)}-${viewCutoff.toFixed(2)}: about six in ten read as genuine on the calibration pair`}
+                  data-testid="show-probable"
+                >
+                  {showProbable || showLow ? 'Hide' : 'Show'} {probable.length} probable {probable.length === 1 ? 'match' : 'matches'}
+                </button>
+              )}
               {lowCount > 0 && (
                 <button
                   onClick={() => setShowLow((v) => !v)}
                   className="w-full p-2 text-xs text-app-text-secondary border-t border-app-border-light hover:bg-app-bg-hover"
-                  title={`Scoring under ${viewCutoff.toFixed(2)}, where fewer than nine in ten read as genuine on the calibration pair`}
+                  title={`Scoring under ${viewProbable.toFixed(2)}, where about a third read as genuine on the calibration pair`}
                   data-testid="show-low"
                 >
                   {showLow ? 'Hide' : 'Show'} {lowCount} lower-confidence {lowCount === 1 ? 'match' : 'matches'}

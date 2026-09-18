@@ -41,6 +41,9 @@ export interface ReuseParams {
   /** Rows under this score sit behind a "show n lower-confidence matches" toggle; per mode. */
   view_cutoff_corpus: number;
   view_cutoff_text: number;
+  /** The probable tier's floor: rows from here to the cutoff collapse under "n probable matches". */
+  view_probable_corpus: number;
+  view_probable_text: number;
   exclude_zones_from_anchoring: boolean;
   window: number;
   stride: number;
@@ -126,6 +129,8 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   threshold: 0.35,
   view_cutoff_corpus: 0.35,
   view_cutoff_text: 0.7,
+  view_probable_corpus: 0.35,
+  view_probable_text: 0.5,
   exclude_zones_from_anchoring: true,
   window: 60,
   stride: 30,

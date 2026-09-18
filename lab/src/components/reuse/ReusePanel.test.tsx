@@ -234,7 +234,7 @@ describe('ReusePanel', () => {
   it('keeps the lower-confidence rows of a named-text run behind a toggle', async () => {
     // Text-to-text calibrates to 0.70 on pair 1; the corpus view does not
     // hide anything. Rows under the line are a click away, not gone.
-    api.reuse.passage.mockResolvedValue(passageResult([match(1, 0.9, 'verbatim'), match(2, 0.7, 'inflected'), match(3, 0.5, 'paraphrase')]));
+    api.reuse.passage.mockResolvedValue(passageResult([match(1, 0.9, 'verbatim'), match(2, 0.7, 'inflected'), match(3, 0.55, 'paraphrase'), match(4, 0.4, 'paraphrase')]));
     render(<ReusePanel book={book} local />);
     await waitFor(() => expect(document.querySelector('[data-token="0"]')).toBeTruthy());
     fireEvent.click(screen.getByTestId('reuse-gear'));
@@ -244,10 +244,16 @@ describe('ReusePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     await findReuseOver(0, 3);
     await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(2));
+    // Three tiers: shown, probable (0.50-0.70), lower-confidence (under 0.50).
+    const probable = screen.getByTestId('show-probable');
+    expect(probable).toHaveTextContent('Show 1 probable match');
+    expect(probable.getAttribute('title')).toMatch(/six in ten/);
+    fireEvent.click(probable);
+    await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(3));
     const toggle = screen.getByTestId('show-low');
     expect(toggle).toHaveTextContent('Show 1 lower-confidence match');
     fireEvent.click(toggle);
-    await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(3));
+    await waitFor(() => expect(screen.getAllByTestId('reuse-row')).toHaveLength(4));
     expect(screen.getByTestId('show-low')).toHaveTextContent('Hide 1 lower-confidence match');
   });
 
