@@ -104,7 +104,6 @@ export function installLayout(options: LayoutOptions = {}): FakeLayout {
     this.dispatchEvent(new Event('scroll'));
   } as Element['scrollTo'];
 
-  const attach = (_c: HTMLElement) => {};
 
   /**
    * Let the reader react. It answers a scroll in an animation frame, and
@@ -124,7 +123,6 @@ export function installLayout(options: LayoutOptions = {}): FakeLayout {
     async scrollTo(top: number) {
       const c = container();
       if (!c) throw new Error('the reader has not rendered');
-      attach(c);
       c.scrollTop = top;
       await act(async () => {
         c.dispatchEvent(new Event('scroll'));
@@ -137,8 +135,6 @@ export function installLayout(options: LayoutOptions = {}): FakeLayout {
       await this.scrollTo(Math.max(0, top + pageHeight(index) / 2 - viewportHeight / 2));
     },
     async settle() {
-      const c = container();
-      if (c) attach(c);
       await flush();
     },
     mounted() {
