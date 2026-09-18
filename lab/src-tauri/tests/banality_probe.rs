@@ -13,10 +13,11 @@
 //! ```
 
 use kashshaf_lab_lib::analysis::reuse::{self, Params};
-use kashshaf_lab_lib::source::{local::LocalSource, BookSource, FreqLayer, PageRef};
+use kashshaf_lab_lib::source::{local::LocalSource, BookSource, FreqLayer, Page, PageRef};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 struct GoldChain {
@@ -134,7 +135,13 @@ fn formulae_through_passage_mode() {
     let spec_params = Params { banality_baseline: Some(0.0), ..params.clone() };
     println!("=== baseline {:.3} (corpus share of the top-{} lemmas)", params.banality_baseline.unwrap(), params.banality_rank);
     let around = |r: &PageRef, _n: usize| Ok(vec![*r]);
-    let load = |r: &PageRef| source.page(r.book_id, r.part_index, r.page_id);
+    // `reuse::` takes pages shared, not owned: a candidate page is looked at
+    // by several spans, and the retrieval index hands out the ones it already
+    // holds (`held_page`) rather than a copy. The probe has no cache of its
+    // own, so it just wraps each fetch.
+    let load = |r: &PageRef| -> anyhow::Result<Option<Arc<Page>>> {
+        Ok(source.page(r.book_id, r.part_index, r.page_id)?.map(Arc::new))
+    };
     let count = |t: &[String]| reuse::phrase_df(&source, t);
 
     let report = |title: &str, runs: &[(String, reuse::PassageRun)], p: &Params| {

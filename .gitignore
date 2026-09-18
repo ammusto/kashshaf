@@ -5,7 +5,9 @@ venv/
 node_modules/
 target/
 # `cargo test --workspace` writes here, so a running debug build is not
-# relinked out from under the user (9 GB; delete it when done).
+# relinked out from under the user. Keep it: it is a warm build cache, and
+# rebuilding it from cold costs 15-25 minutes before a test runs. See
+# CLAUDE.md, "Testing".
 target-test/
 
 # Build outputs
