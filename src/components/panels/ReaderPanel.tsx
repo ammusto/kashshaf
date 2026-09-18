@@ -7,6 +7,7 @@ import { useBooks } from '../../contexts/BooksContext';
 import { CitationBlock } from '../shared/CitationBlock';
 import { BookDetailView } from '../modals/MetadataBrowser';
 import { usePageStack, type PageAnchor } from '../../hooks/usePageStack';
+import type { ClickedMatches } from '../../types/search';
 import { ContinuousReader, pageLabel, type ContinuousReaderHandle } from '../reader/ContinuousReader';
 
 interface ReaderPanelProps {
@@ -15,8 +16,8 @@ interface ReaderPanelProps {
   bookId: number | null;
   /** Where the reader should be: a clicked result, or a jump. */
   anchor: PageAnchor | null;
-  /** Highlights for the page the reader opened on, from the clicked result. */
-  anchorMatches?: readonly number[];
+  /** The clicked result's own highlights, and the page they are on. */
+  clickedMatches?: ClickedMatches | null;
   /** Highlights for any page of the book, for the search that is running. */
   matchesFor?: (entry: PageEntry) => readonly number[] | undefined;
   /** Told which pages are mounted, so their highlights can be fetched. */
@@ -41,7 +42,7 @@ export function ReaderPanel({
   api,
   bookId,
   anchor,
-  anchorMatches,
+  clickedMatches,
   matchesFor,
   onMountedPages,
   onActivePage,
@@ -94,16 +95,19 @@ export function ReaderPanel({
     (index: number): readonly number[] => {
       const entry = stack.spine[index];
       if (!entry) return [];
-      const fromSearch = matchesFor?.(entry);
-      if (fromSearch) return fromSearch;
-      // The page the reader opened on carries the clicked result's own
-      // highlights until the per-page lookup answers for it.
-      if (anchor && entry.part_index === anchor.part_index && entry.page_id === anchor.page_id) {
-        return anchorMatches ?? [];
+      // The clicked result already answered for its own page: show that at
+      // once rather than waiting for the lookup to repeat it.
+      if (
+        clickedMatches &&
+        clickedMatches.indices.length > 0 &&
+        clickedMatches.part_index === entry.part_index &&
+        clickedMatches.page_id === entry.page_id
+      ) {
+        return clickedMatches.indices;
       }
-      return [];
+      return matchesFor?.(entry) ?? [];
     },
-    [stack.spine, matchesFor, anchor, anchorMatches]
+    [stack.spine, matchesFor, clickedMatches]
   );
 
   const handleGoClick = async () => {

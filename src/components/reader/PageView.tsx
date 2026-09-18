@@ -135,6 +135,7 @@ export function PageView({
               <span
                 key={i}
                 data-token={run.token}
+                data-highlight={run.highlighted ? 'true' : undefined}
                 data-highlight-first={isFirst ? 'true' : undefined}
                 onClick={token ? (e) => onWordClick(e, token) : undefined}
                 className={`cursor-pointer rounded px-0.5 transition-colors duration-100

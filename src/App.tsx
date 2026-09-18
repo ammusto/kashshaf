@@ -8,6 +8,7 @@ import { useOperatingMode, saveOnlineModePreference } from './contexts/Operating
 import { BooksProvider } from './contexts/BooksContext';
 import { useSearch } from './hooks/useSearch';
 import { useReaderNavigation } from './hooks/useReaderNavigation';
+import { usePageHighlights } from './hooks/usePageHighlights';
 import { Sidebar } from './components/Sidebar';
 import { ReaderPanel, ResultsPanel, HelpPanel } from './components/panels';
 import { DraggableSplitter, UpdateBanner } from './components/ui';
@@ -109,6 +110,14 @@ function App() {
         : null,
     [activeTab?.currentBookId, activeTab?.currentPartIndex, activeTab?.currentPageId]
   );
+
+  // Highlights for whatever page scrolls into view, for the search this tab
+  // is running: reading on from a hit marks the hits on the pages after it.
+  const highlights = usePageHighlights({
+    api,
+    bookId: activeTab?.currentBookId ?? null,
+    searchContext: activeTab?.searchContext ?? null,
+  });
 
   // The reader scrolled onto another page: remember it, so the tab comes back
   // where it was left and the citation follows the page in view.
@@ -632,7 +641,9 @@ function App() {
                   api={api}
                   bookId={activeTab?.currentBookId ?? null}
                   anchor={readerAnchor}
-                  anchorMatches={activeTab?.matchedTokenIndices ?? []}
+                  clickedMatches={activeTab?.clickedMatches ?? null}
+                  matchesFor={highlights.matchesFor}
+                  onMountedPages={highlights.onMountedPages}
                   onActivePage={handleActivePage}
                   onNavigate={handleNavigatePage}
                   onNavigateToLabel={handleNavigateToLabel}

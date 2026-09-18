@@ -10,6 +10,13 @@ export interface SearchContext {
   wildcardQuery?: string;
 }
 
+/** Highlights a search returned for one page, with that page's coordinates. */
+export interface ClickedMatches {
+  part_index: number;
+  page_id: number;
+  indices: number[];
+}
+
 /**
  * Where the reader is in this tab: the page in view, as the header and the
  * citation describe it. The page's text and tokens are not here — the reader
@@ -37,9 +44,9 @@ export interface SearchTab {
 
   // Reader state
   currentPage: PageData | null;
-  /** Highlights for the page a result was clicked on; the reader looks the
-   *  rest up per page as they scroll into view. */
-  matchedTokenIndices: number[];
+  /** The clicked result's own highlights, and the page they belong to. The
+   *  reader looks every other page up as it scrolls into view. */
+  clickedMatches: ClickedMatches | null;
   currentBookId: number | null;
   currentPartIndex: number;
   currentPageId: number;

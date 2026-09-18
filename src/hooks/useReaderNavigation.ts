@@ -69,7 +69,11 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
       currentBookId: result.id,
       currentPartIndex: result.part_index,
       currentPageId: result.page_id,
-      matchedTokenIndices: result.matched_token_indices ?? [],
+      clickedMatches: {
+        part_index: result.part_index,
+        page_id: result.page_id,
+        indices: result.matched_token_indices ?? [],
+      },
       currentPage: {
         bookId: result.id,
         meta: `${result.part_label}:${result.page_number}`,
@@ -98,7 +102,11 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
           matched = await api.getMatchPositionsCombined(result.id, result.part_index, result.page_id, terms);
         }
       }
-      if (matched.length > 0) updateTab(tabId, { matchedTokenIndices: matched });
+      if (matched.length > 0) {
+        updateTab(tabId, {
+          clickedMatches: { part_index: result.part_index, page_id: result.page_id, indices: matched },
+        });
+      }
     } catch (err) {
       console.warn('Failed to fetch match positions:', err);
     }
@@ -116,7 +124,7 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
     updateTab(activeTab.id, {
       errorMessage: '',
       currentPageId: newPageId,
-      matchedTokenIndices: [],
+      clickedMatches: null,
       currentPage: {
         bookId: page.id,
         meta: `${page.part_label}:${page.page_number}`,
@@ -136,7 +144,7 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
         errorMessage: '',
         currentPartIndex: page.part_index,
         currentPageId: page.page_id,
-        matchedTokenIndices: [],
+        clickedMatches: null,
         currentPage: {
           bookId: page.id,
           meta: `${page.part_label}:${page.page_number}`,
