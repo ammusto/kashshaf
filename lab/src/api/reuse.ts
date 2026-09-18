@@ -100,6 +100,9 @@ export interface ReuseParams {
   phrase_descent: boolean;
   /** Aligned floor in selection mode: a five-gram that reached the page is a five-token run. */
   selection_min_aligned: number;
+  /** A page reached by one lookup phrase only is not aligned when that phrase's df is above this (0 = off). */
+  single_phrase_df_max: number;
+  single_gram_pages_max: number;
   /** Each third of the query contributes at least this many anchors per slot (0 = plain pick). */
   anchor_thirds_min: number;
   target_neighbours: number;
@@ -160,6 +163,8 @@ export const DEFAULT_REUSE_PARAMS: ReuseParams = {
   phrase_max_queries: 150,
   phrase_descent: false,
   selection_min_aligned: 5,
+  single_phrase_df_max: 0,
+  single_gram_pages_max: 0,
   anchor_thirds_min: 0,
   target_neighbours: 1,
 };

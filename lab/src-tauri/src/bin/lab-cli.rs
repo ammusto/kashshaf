@@ -199,6 +199,12 @@ impl Ctx {
         if let Some(r) = arg(args, "--phrase-df-cap") {
             params.phrase_df_cap = r.parse().context("--phrase-df-cap")?;
         }
+        if let Some(r) = arg(args, "--single-df") {
+            params.single_phrase_df_max = r.parse().context("--single-df")?;
+        }
+        if let Some(r) = arg(args, "--single-pages") {
+            params.single_gram_pages_max = r.parse().context("--single-pages")?;
+        }
         if let Some(r) = arg(args, "--anchor-thirds") {
             params.anchor_thirds_min = r.parse().context("--anchor-thirds")?;
         }
@@ -758,11 +764,16 @@ fn reuse_trace(args: &[String]) -> Result<()> {
             if !anchors.is_empty() {
                 rep.anchors_too = true;
                 for a in reuse::candidates(&ctx.source, &anchors, &own, None, non_banal, &pr)? {
-                    if !c.iter().any(|x| x.page == a.page) {
-                        c.push(a);
+                    match c.iter_mut().find(|x| x.page == a.page) {
+                        Some(x) => {
+                            x.hits += a.hits;
+                            x.min_df = x.min_df.min(a.min_df);
+                        }
+                        None => c.push(a),
                     }
                 }
             }
+            reuse::drop_single_common(&mut c, pr.single_phrase_df_max);
             (c, Some(rep))
         } else if anchors.is_empty() {
             (Vec::new(), None)
@@ -846,7 +857,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
                     } else {
                         None
                     };
-                    full_others.push(serde_json::json!({ "book": m.target.book_id, "page": m.target.page_id, "score": m.score, "kind": m.kind.as_str(), "aligned": m.components.aligned, "text": text }));
+                    full_others.push(serde_json::json!({ "book": m.target.book_id, "page": m.target.page_id, "t_start": m.t_start, "score": m.score, "kind": m.kind.as_str(), "aligned": m.components.aligned, "text": text }));
                 }
             }
         }

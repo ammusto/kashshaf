@@ -385,6 +385,25 @@ pub struct Params {
     /// the page is already a five-token exact run; the corpus-mode floor of
     /// six, set for windows, would reach it and not show it.
     pub selection_min_aligned: usize,
+    /// Candidate volume. A page reached by a single lookup phrase whose
+    /// document frequency is above this is not aligned, on the premise that
+    /// it can only yield a match the length of that phrase. Corpus modes
+    /// count phrases and anchors, on corpus df; the in-memory index counts
+    /// n-grams, on the posting length in pages (`single_gram_pages_max`).
+    ///
+    /// Measured on pair 1 and left off (0): the premise holds where it is
+    /// not needed and fails where it would help. In text-to-text the cap of
+    /// a hundred candidates per window is filled by pages sharing two or
+    /// more n-grams anyway, so the rule removes 7 of 12,824 alignments and
+    /// no time. In the corpus modes the one reaching phrase is a sample of
+    /// the overlap, not its extent: on `جزني يا مؤمن` it halves the time
+    /// (8.0 s to 3.1 s) and drops one row at 0.72, five tokens inflected;
+    /// on the pair-1 window run it drops three rows above 0.70 of 119. A
+    /// passage with no match at all (`مقامات أهل النظر`, 500 candidates,
+    /// 10.5 s) it takes to 35 candidates and 2.5 s. Set it to 100 to buy
+    /// that at that price.
+    pub single_phrase_df_max: usize,
+    pub single_gram_pages_max: usize,
     pub target_neighbours: usize,
 }
 
@@ -442,6 +461,8 @@ impl Default for Params {
             phrase_max_queries: 150,
             phrase_descent: false,
             selection_min_aligned: 5,
+            single_phrase_df_max: 0,
+            single_gram_pages_max: 0,
             target_books: Vec::new(),
             retrieval: RetrievalMode::Corpus,
             exhaustive_max_books: 50,
@@ -844,6 +865,7 @@ pub mod prof {
     /// Progress events to the webview, in the app.
     pub static EMIT_NS: AtomicU64 = AtomicU64::new(0);
     pub static CANDIDATES: AtomicU64 = AtomicU64::new(0);
+    pub static SINGLE_DROPPED: AtomicU64 = AtomicU64::new(0);
     pub static PAGES: AtomicU64 = AtomicU64::new(0);
     pub static ALIGNMENTS: AtomicU64 = AtomicU64::new(0);
 
@@ -860,7 +882,7 @@ pub mod prof {
         c.fetch_add(n, Ordering::Relaxed);
     }
     pub fn reset() {
-        for c in [&RETRIEVAL_NS, &NEIGHBOURS_NS, &LOAD_NS, &SEQ_NS, &ALIGN_NS, &SCORE_NS, &STORE_NS, &EMIT_NS, &CANDIDATES, &PAGES, &ALIGNMENTS] {
+        for c in [&RETRIEVAL_NS, &NEIGHBOURS_NS, &LOAD_NS, &SEQ_NS, &ALIGN_NS, &SCORE_NS, &STORE_NS, &EMIT_NS, &CANDIDATES, &SINGLE_DROPPED, &PAGES, &ALIGNMENTS] {
             c.store(0, Ordering::Relaxed);
         }
         kashshaf_engine::cache::prof::reset();
@@ -886,8 +908,8 @@ pub mod prof {
         }
         let (hits, misses, ids, decode, open, defs, build) = kashshaf_engine::cache::prof::snapshot();
         out.push_str(&format!(
-            "  candidates {}, pages loaded {}, alignments {}; token cache: {} hits, {} misses; per miss: ids+decode {:.2} ms (decode {:.2}), open conn {:.2}, definitions query {:.2}, build tokens {:.2}\n",
-            CANDIDATES.load(Ordering::Relaxed), pages, ALIGNMENTS.load(Ordering::Relaxed), hits, misses,
+            "  candidates {} (single-common dropped {}), pages loaded {}, alignments {}; token cache: {} hits, {} misses; per miss: ids+decode {:.2} ms (decode {:.2}), open conn {:.2}, definitions query {:.2}, build tokens {:.2}\n",
+            CANDIDATES.load(Ordering::Relaxed), SINGLE_DROPPED.load(Ordering::Relaxed), pages, ALIGNMENTS.load(Ordering::Relaxed), hits, misses,
             ids / misses.max(1) as f64, decode / misses.max(1) as f64, open / misses.max(1) as f64, defs / misses.max(1) as f64, build / misses.max(1) as f64
         ));
         out
@@ -1141,7 +1163,7 @@ impl BookIndex {
         let norm: Vec<String> = if self.three_layer { tokens.iter().map(|t| normalize_arabic(&t.surface)).collect() } else { Vec::new() };
         let surface: Vec<&str> = norm.iter().map(|s| s.as_str()).collect();
         let roots: Vec<&str> = if self.three_layer { tokens.iter().map(|t| t.root.as_deref().unwrap_or("")).collect() } else { Vec::new() };
-        let mut hits: HashMap<u32, usize> = HashMap::new();
+        let mut hits: HashMap<u32, (usize, usize)> = HashMap::new();
         for &n in &self.lengths {
             if n == 0 || lemmas.len() < n {
                 continue;
@@ -1168,7 +1190,9 @@ impl BookIndex {
                             continue;
                         }
                         for p in ps {
-                            *hits.entry(*p).or_insert(0) += 1;
+                            let e = hits.entry(*p).or_insert((0, usize::MAX));
+                            e.0 += 1;
+                            e.1 = e.1.min(ps.len());
                         }
                         if self.three_layer {
                             here.extend_from_slice(ps);
@@ -1184,7 +1208,9 @@ impl BookIndex {
                             for p in ps {
                                 if !here.contains(p) {
                                     here.push(*p);
-                                    *hits.entry(*p).or_insert(0) += 1;
+                                    let e = hits.entry(*p).or_insert((0, usize::MAX));
+                                    e.0 += 1;
+                                    e.1 = e.1.min(ps.len());
                                 }
                             }
                         }
@@ -1194,9 +1220,10 @@ impl BookIndex {
         }
         let mut out: Vec<Candidate> = hits
             .into_iter()
-            .map(|(pi, n)| Candidate { page: self.pages[pi as usize], hits: n })
+            .map(|(pi, (n, df))| Candidate { page: self.pages[pi as usize], hits: n, min_df: df })
             .filter(|c| !own.contains(&c.page))
             .collect();
+        drop_single_common(&mut out, params.single_gram_pages_max);
         out.sort_by(|a, b| {
             b.hits.cmp(&a.hits).then_with(|| (a.page.book_id, a.page.part_index, a.page.page_id).cmp(&(b.page.book_id, b.page.part_index, b.page.page_id)))
         });
@@ -1210,7 +1237,29 @@ impl BookIndex {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Candidate {
     pub page: PageRef,
+    /// Distinct lookup phrases (or n-grams, or anchors) that reached it.
     pub hits: usize,
+    /// The smallest document frequency among them.
+    #[serde(default = "df_unknown")]
+    pub min_df: usize,
+}
+
+fn df_unknown() -> usize {
+    usize::MAX
+}
+
+/// The candidate-volume rule (`Params::single_phrase_df_max`): drop the
+/// pages reached by one phrase only when that phrase is common. Returns
+/// how many went.
+pub fn drop_single_common(cands: &mut Vec<Candidate>, max_df: usize) -> usize {
+    if max_df == 0 {
+        return 0;
+    }
+    let before = cands.len();
+    cands.retain(|c| !(c.hits == 1 && c.min_df > max_df));
+    let n = before - cands.len();
+    prof::count(&prof::SINGLE_DROPPED, n as u64);
+    n
 }
 
 /// Run every anchor as a lemma phrase query and keep the pages that hit
@@ -1225,7 +1274,7 @@ pub fn candidates(
     non_banal: usize,
     params: &Params,
 ) -> Result<Vec<Candidate>> {
-    let mut hits: HashMap<(u64, u32, u64), usize> = HashMap::new();
+    let mut hits: HashMap<(u64, u32, u64), (usize, usize)> = HashMap::new();
     let mut rare: std::collections::HashSet<(u64, u32, u64)> = std::collections::HashSet::new();
     for a in anchors {
         let q = CandidateQuery { layer: crate::source::Layer::Lemma, terms: a.terms.clone(), limit: params.max_candidates.max(1), slop: a.slop, book_ids: params.book_filter() };
@@ -1240,7 +1289,9 @@ pub fn candidates(
         };
         for p in found.pages {
             let key = (p.book_id, p.part_index, p.page_id);
-            *hits.entry(key).or_insert(0) += 1;
+            let e = hits.entry(key).or_insert((0, usize::MAX));
+            e.0 += 1;
+            e.1 = e.1.min(if a.df > 0 { a.df } else { found.total });
             if a.df > 0 && a.df <= params.rare_df {
                 rare.insert(key);
             }
@@ -1249,13 +1300,14 @@ pub fn candidates(
     let need = if non_banal < params.small_passage { 1 } else { params.anchor_hits.max(1) };
     let mut out: Vec<Candidate> = hits
         .into_iter()
-        .filter(|((b, p, g), n)| {
+        .filter(|((b, p, g), (n, _))| {
             (*n >= need || rare.contains(&(*b, *p, *g)))
                 && !own.iter().any(|o| o.book_id == *b && o.part_index == *p && o.page_id == *g)
                 && exclude_book.map(|x| x != *b).unwrap_or(true)
         })
-        .map(|((book_id, part_index, page_id), hits)| Candidate { page: PageRef { book_id, part_index, page_id }, hits })
+        .map(|((book_id, part_index, page_id), (hits, min_df))| Candidate { page: PageRef { book_id, part_index, page_id }, hits, min_df })
         .collect();
+    drop_single_common(&mut out, params.single_phrase_df_max);
     out.sort_by(|a, b| {
         b.hits.cmp(&a.hits).then_with(|| (a.page.book_id, a.page.part_index, a.page.page_id).cmp(&(b.page.book_id, b.page.part_index, b.page.page_id)))
     });
@@ -1809,7 +1861,7 @@ fn fallback_candidates(source: &dyn BookSource, tokens: &[Token], own: &[PageRef
                 Err(_) if slop > 0 => continue,
                 Err(e) => return Err(e),
             };
-            let pages: Vec<Candidate> = hits.pages.into_iter().filter(keep).map(|page| Candidate { page, hits: 1 }).collect();
+            let pages: Vec<Candidate> = hits.pages.into_iter().filter(keep).map(|page| Candidate { page, hits: 1, min_df: usize::MAX }).collect();
             if !pages.is_empty() {
                 return Ok((pages, Some(label)));
             }
@@ -1821,7 +1873,7 @@ fn fallback_candidates(source: &dyn BookSource, tokens: &[Token], own: &[PageRef
     let surfaces: Vec<String> = tokens.iter().map(|t| normalize_arabic(&t.surface)).filter(|s| !s.is_empty()).collect();
     if surfaces.len() >= 2 {
         let q = CandidateQuery { layer: crate::source::Layer::Surface, terms: surfaces, limit: params.max_candidates.max(1), slop: 0, book_ids: params.book_filter() };
-        let pages: Vec<Candidate> = source.find_pages(&q)?.pages.into_iter().filter(keep).map(|page| Candidate { page, hits: 1 }).collect();
+        let pages: Vec<Candidate> = source.find_pages(&q)?.pages.into_iter().filter(keep).map(|page| Candidate { page, hits: 1, min_df: usize::MAX }).collect();
         if !pages.is_empty() {
             return Ok((pages, Some("surface")));
         }
@@ -1860,7 +1912,7 @@ pub fn phrase_candidates(source: &dyn BookSource, tokens: &[Token], zones: &[Opt
     if n < 2 {
         return Ok((Vec::new(), rep));
     }
-    let mut hits: HashMap<(u64, u32, u64), (PageRef, usize)> = HashMap::new();
+    let mut hits: HashMap<(u64, u32, u64), (PageRef, usize, usize)> = HashMap::new();
     let lengths: Vec<usize> = if params.phrase_descent {
         (min..=n).rev().collect()
     } else if n > min {
@@ -1895,7 +1947,9 @@ pub fn phrase_candidates(source: &dyn BookSource, tokens: &[Token], zones: &[Opt
                 continue;
             }
             for p in found.pages.into_iter().filter(keep) {
-                hits.entry((p.book_id, p.part_index, p.page_id)).or_insert((p, 0)).1 += 1;
+                let e = hits.entry((p.book_id, p.part_index, p.page_id)).or_insert((p, 0, usize::MAX));
+                e.1 += 1;
+                e.2 = e.2.min(found.total);
             }
         }
         if !hits.is_empty() {
@@ -1906,7 +1960,7 @@ pub fn phrase_candidates(source: &dyn BookSource, tokens: &[Token], zones: &[Opt
         }
     }
     rep.hits = hits.len();
-    let mut out: Vec<Candidate> = hits.into_values().map(|(page, hits)| Candidate { page, hits }).collect();
+    let mut out: Vec<Candidate> = hits.into_values().map(|(page, hits, min_df)| Candidate { page, hits, min_df }).collect();
     out.sort_by(|a, b| b.hits.cmp(&a.hits).then_with(|| (a.page.book_id, a.page.part_index, a.page.page_id).cmp(&(b.page.book_id, b.page.part_index, b.page.page_id))));
     out.truncate(params.max_candidates.max(1));
     Ok((out, rep))
@@ -1976,11 +2030,19 @@ pub fn passage(
             if !anchors.is_empty() {
                 rep.anchors_too = true;
                 for a in candidates(source, &anchors, &own, exclude_book, non_banal, params)? {
-                    if !c.iter().any(|x| x.page == a.page) {
-                        c.push(a);
+                    match c.iter_mut().find(|x| x.page == a.page) {
+                        Some(x) => {
+                            x.hits += a.hits;
+                            x.min_df = x.min_df.min(a.min_df);
+                        }
+                        None => c.push(a),
                     }
                 }
             }
+            // The rule, on the union: a page one phrase and one anchor reach
+            // is reached twice.
+            drop_single_common(&mut c, params.single_phrase_df_max);
+            c.sort_by(|a, b| b.hits.cmp(&a.hits));
             phrase = Some(rep);
             c
         }
