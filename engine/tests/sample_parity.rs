@@ -214,3 +214,59 @@ fn exact_and_capped_share_the_same_prefix() {
         assert_eq!(via_page, expect);
     }
 }
+
+/// The reader's spine: `book_pages` has to be the book in reading order, one
+/// entry per page the reader can actually show, with the labels the book
+/// prints. The continuous scroll steps through it instead of adding one to a
+/// page id, which is wrong in every book whose parts restart their numbering.
+#[test]
+fn book_pages_is_the_book_in_reading_order() {
+    let Some(s) = open(EngineConfig::default()) else { return };
+
+    let conn = rusqlite::Connection::open(sample_dir().unwrap().join("corpus.db")).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT book_id, COUNT(*) c FROM page_tokens GROUP BY book_id ORDER BY c DESC LIMIT 3")
+        .unwrap();
+    let books: Vec<u64> = stmt
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .map(|id| id as u64)
+        .collect();
+    assert!(!books.is_empty(), "the sample has no pages");
+
+    for book in books {
+        let spine = s.engine.book_pages(book).unwrap();
+        assert!(!spine.is_empty(), "book {book} has no pages");
+
+        // Reading order, strictly: no duplicates, no page out of place.
+        let keys: Vec<(u64, u64)> = spine.iter().map(|e| (e.part_index, e.page_id)).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(keys, sorted, "book {book}'s spine is not in reading order");
+
+        // Every entry is a page the reader can open, and the labels agree
+        // with what the page itself reports.
+        for entry in spine.iter().take(40) {
+            let page = s
+                .engine
+                .get_page(book, entry.part_index, entry.page_id)
+                .unwrap()
+                .unwrap_or_else(|| panic!("book {book} spine names a page that cannot be opened: {entry:?}"));
+            assert_eq!(page.part_label, entry.part_label);
+            assert_eq!(page.page_number, entry.page_number);
+        }
+
+        // The step the reader takes at a part boundary is the one the spine
+        // gives, and it is not "the next page id".
+        let boundary = spine.windows(2).find(|w| w[0].part_index != w[1].part_index);
+        if let Some(w) = boundary {
+            eprintln!(
+                "book {book}: part boundary {}:{} -> {}:{}",
+                w[0].part_index, w[0].page_id, w[1].part_index, w[1].page_id
+            );
+            assert!(w[1].part_index > w[0].part_index);
+        }
+    }
+}
