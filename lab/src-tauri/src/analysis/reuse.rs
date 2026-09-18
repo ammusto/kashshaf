@@ -405,10 +405,22 @@ pub struct Params {
     /// that at that price.
     pub single_phrase_df_max: usize,
     pub single_gram_pages_max: usize,
-    /// Tokens either side of the retrieval hit within which the page before
-    /// or after is read as well (40). A hit further from an edge than this
-    /// aligns against its own page, and the neighbour is read only if the
-    /// alignment then reaches that edge. 0 reads both neighbours always.
+    /// Selection mode only: tokens either side of the retrieval hit within
+    /// which the page before or after is read as well (40). A hit further
+    /// from an edge aligns against its own page, and the neighbour is read
+    /// only if the alignment then comes within the margin of that edge. 0
+    /// reads both neighbours always.
+    ///
+    /// Measured on pair 1 and kept off for windows: the query is masked
+    /// once per span, so with three pages in one span a copy on a
+    /// neighbour page shadows the candidate page's own, and reading the
+    /// candidate alone changes which copy is reported -- in text-to-text
+    /// 39 rows gone and 22 new of 518 for 3.5 s of 18, in the window run 1
+    /// of 119. Both modes are span-for-span identical with it off. In
+    /// selection mode it is what takes `جزني يا مؤمن` from 4.1 s to 2.0
+    /// and the twenty labelled selections from 77 s to 45, at 4 rows gone
+    /// and 40 new over the twenty, every one a candidate page's own copy
+    /// that its neighbour's had shadowed or the reverse.
     pub hit_margin: usize,
     pub target_neighbours: usize,
 }
@@ -2159,7 +2171,7 @@ pub fn passage(
         let Some(centre) = load_here(&c.page)? else { continue };
         drop(t_l);
         let (mut need_before, mut need_after) = (true, true);
-        if params.target_neighbours > 0 && params.hit_margin > 0 {
+        if params.target_neighbours > 0 && params.hit_margin > 0 && params.phrase_retrieval {
             let lemmas: Vec<&str> = centre.tokens.iter().map(|t| t.lemma.as_str()).collect();
             let (mut lo, mut hi) = (usize::MAX, 0usize);
             for n in [2usize, 3] {
@@ -2198,10 +2210,11 @@ pub fn passage(
         let t_a = prof::timer(&prof::ALIGN_NS);
         let mut als = align_all_upto(&q, &t, params, MAX_ALIGNMENTS_PER_PAGE * span.pages.len());
         drop(t_a);
-        // An alignment that reaches the edge of a trimmed span may go on
-        // into the page not read: read it and align again.
+        // An alignment that comes within the margin of a trimmed span's edge
+        // may go on into the page not read -- a quotation's last matching
+        // token is not its last token: read it and align again.
         if !(need_before && need_after) && params.target_neighbours > 0 {
-            let edge = 2usize;
+            let edge = params.hit_margin.max(2);
             let n_t = span.tokens.len();
             let touches_start = !need_before && als.iter().any(|a| a.pairs.iter().map(|p| p.1).min().unwrap_or(n_t) < edge);
             let touches_end = !need_after && als.iter().any(|a| a.pairs.iter().map(|p| p.1).max().unwrap_or(0) + 1 + edge > n_t);
