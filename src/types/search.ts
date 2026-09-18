@@ -1,4 +1,4 @@
-import type { SearchResults, Token } from './index';
+import type { SearchResults } from './index';
 
 // Search context stored per tab for load-more and export
 export interface SearchContext {
@@ -10,12 +10,16 @@ export interface SearchContext {
   wildcardQuery?: string;
 }
 
-// Current page data for reader panel
+/**
+ * Where the reader is in this tab: the page in view, as the header and the
+ * citation describe it. The page's text and tokens are not here — the reader
+ * holds a window of pages of its own (`usePageStack`), and a tab that keeps
+ * bodies would hold a copy of every page its user ever scrolled past.
+ */
 export interface PageData {
   bookId: number;
+  /** `part_label:page_number` of the page in view. */
   meta: string;
-  body: string;
-  loadTimeMs?: number;
 }
 
 // Complete state for a single search tab
@@ -33,7 +37,8 @@ export interface SearchTab {
 
   // Reader state
   currentPage: PageData | null;
-  pageTokens: Token[];
+  /** Highlights for the page a result was clicked on; the reader looks the
+   *  rest up per page as they scroll into view. */
   matchedTokenIndices: number[];
   currentBookId: number | null;
   currentPartIndex: number;

@@ -59,7 +59,6 @@ export function useSearchTabs(): UseSearchTabsResult {
       loadingMore: false,
       errorMessage: '',
       currentPage: null,
-      pageTokens: [],
       matchedTokenIndices: [],
       currentBookId: null,
       currentPartIndex: 0,

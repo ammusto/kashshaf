@@ -9,6 +9,7 @@ export interface UseReaderNavigationOptions {
 }
 
 export interface UseReaderNavigationReturn {
+  /** Fallback stepping for a corpus with no page list; otherwise the reader steps itself. */
   handleNavigatePage: (direction: number) => Promise<void>;
   /** Jump to a specific part_label/page_number. Returns false if no such page exists. */
   handleNavigateToLabel: (partLabel: string, pageNumber: string) => Promise<boolean>;
@@ -18,7 +19,7 @@ export interface UseReaderNavigationReturn {
 /**
  * Extract search terms from a search context for fetching match positions
  */
-function getSearchTermsFromContext(context: SearchContext): SearchTerm[] | null {
+export function getSearchTermsFromContext(context: SearchContext): SearchTerm[] | null {
   if (context.type === 'combined' && context.combinedQuery) {
     const terms: SearchTerm[] = [];
     for (const inp of context.combinedQuery.andInputs) {
@@ -49,173 +50,97 @@ function getSearchTermsFromContext(context: SearchContext): SearchTerm[] | null 
   return null;
 }
 
+/**
+ * Moving the reader from outside it: clicking a result, jumping to a printed
+ * page number, stepping when the corpus has no page list.
+ *
+ * All three do the same small thing — set the tab's anchor, `(currentBookId,
+ * currentPartIndex, currentPageId)`. The reader watches that and fetches the
+ * pages around it itself, so nothing here loads a body or a token list.
+ */
 export function useReaderNavigation(options: UseReaderNavigationOptions): UseReaderNavigationReturn {
   const { api } = options;
   const { tabs, activeTab, updateTab } = useSearchTabsContext();
 
-  // Load a result into a specific tab (used for auto-loading first result and clicking results)
+  // Point a tab's reader at a result.
   const loadResultIntoTab = useCallback(async (tabId: string, result: SearchResult) => {
-    updateTab(tabId, { errorMessage: '' });
-
     updateTab(tabId, {
-      currentPage: null, // Clear page until tokens are loaded to avoid mismatched render
-      pageTokens: [],
-      matchedTokenIndices: [],
+      errorMessage: '',
       currentBookId: result.id,
       currentPartIndex: result.part_index,
       currentPageId: result.page_id,
+      matchedTokenIndices: result.matched_token_indices ?? [],
+      currentPage: {
+        bookId: result.id,
+        meta: `${result.part_label}:${result.page_number}`,
+      },
     });
 
+    // A result from a walk carries its own highlights; one from a path that
+    // does not (name search, some wildcard windows) needs them looked up, so
+    // the page the user asked for is marked the moment it renders rather
+    // than after the reader's own per-page lookup catches up.
+    if ((result.matched_token_indices?.length ?? 0) > 0) return;
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab?.searchContext) return;
     try {
-      const startTime = performance.now();
-
-      // Fetch tokens
-      console.log('[TokenDebug] Fetching tokens for:', { bookId: result.id, partIndex: result.part_index, pageId: result.page_id });
-      const tokens = await api.getPageTokens(result.id, result.part_index, result.page_id);
-      console.log('[TokenDebug] Fetched tokens:', { count: tokens.length, firstFew: tokens.slice(0, 5), lastFew: tokens.slice(-3) });
-
-      // Use matched_token_indices from result if available
-      let matchedIndices = result.matched_token_indices || [];
-
-      // If no match indices were returned, try to fetch them using the search context
-      if (matchedIndices.length === 0) {
-        const tab = tabs.find(t => t.id === tabId);
-        if (tab?.searchContext) {
-          try {
-            // Handle name search separately (uses patterns)
-            if (tab.searchContext.type === 'name' && tab.searchContext.namePatterns) {
-              const allPatterns = tab.searchContext.namePatterns.flat();
-              matchedIndices = await api.getNameMatchPositions(
-                result.id,
-                result.part_index,
-                result.page_id,
-                allPatterns
-              );
-            } else {
-              // Extract search terms from context
-              const searchTerms = getSearchTermsFromContext(tab.searchContext);
-              if (searchTerms && searchTerms.length > 0) {
-                matchedIndices = await api.getMatchPositionsCombined(
-                  result.id,
-                  result.part_index,
-                  result.page_id,
-                  searchTerms
-                );
-              }
-            }
-          } catch (matchErr) {
-            console.warn('Failed to fetch match positions:', matchErr);
-            // Continue without highlighting
-          }
+      let matched: number[] = [];
+      if (tab.searchContext.type === 'name' && tab.searchContext.namePatterns) {
+        matched = await api.getNameMatchPositions(
+          result.id,
+          result.part_index,
+          result.page_id,
+          tab.searchContext.namePatterns.flat()
+        );
+      } else {
+        const terms = getSearchTermsFromContext(tab.searchContext);
+        if (terms && terms.length > 0) {
+          matched = await api.getMatchPositionsCombined(result.id, result.part_index, result.page_id, terms);
         }
       }
-
-      const loadTimeMs = Math.round(performance.now() - startTime);
-
-      updateTab(tabId, {
-        pageTokens: tokens,
-        matchedTokenIndices: matchedIndices,
-        currentPage: {
-          bookId: result.id,
-          meta: `${result.part_label}:${result.page_number}`,
-          body: result.body ?? '',
-          loadTimeMs,
-        },
-      });
+      if (matched.length > 0) updateTab(tabId, { matchedTokenIndices: matched });
     } catch (err) {
-      updateTab(tabId, { errorMessage: `Failed to load page: ${err}` });
-      console.error('Failed to load page:', err);
+      console.warn('Failed to fetch match positions:', err);
     }
   }, [updateTab, api, tabs]);
 
-  // Page navigation handler - navigate to previous/next page
+  // Stepping without a page list: the next page id in the same part, which is
+  // all an older corpus can offer. With a list the reader steps itself, in
+  // reading order and across part boundaries.
   const handleNavigatePage = useCallback(async (direction: number) => {
     if (!activeTab || activeTab.currentBookId === null) return;
-
     const newPageId = activeTab.currentPageId + direction;
     if (newPageId < 1) return;
-
-    updateTab(activeTab.id, { errorMessage: '' });
-
-    try {
-      const startTime = performance.now();
-      console.log('[NavDebug] Navigating to page:', {
-        bookId: activeTab.currentBookId,
-        partIndex: activeTab.currentPartIndex,
-        currentPageId: activeTab.currentPageId,
-        newPageId,
-        direction
-      });
-
-      // Fetch page and tokens separately to identify which call fails
-      let page = null;
-      let tokens: any[] = [];
-
-      try {
-        console.log('[NavDebug] Calling api.getPage...');
-        page = await api.getPage(activeTab.currentBookId, activeTab.currentPartIndex, newPageId);
-        console.log('[NavDebug] api.getPage returned:', page ? { id: page.id, part_label: page.part_label, page_number: page.page_number } : null);
-      } catch (pageErr) {
-        console.error('[NavDebug] api.getPage FAILED:', pageErr);
-        throw pageErr;
-      }
-
-      try {
-        console.log('[NavDebug] Calling api.getPageTokens...');
-        tokens = await api.getPageTokens(activeTab.currentBookId, activeTab.currentPartIndex, newPageId);
-        console.log('[NavDebug] api.getPageTokens returned:', { count: tokens.length });
-      } catch (tokenErr) {
-        console.error('[NavDebug] api.getPageTokens FAILED:', tokenErr);
-        throw tokenErr;
-      }
-
-      const loadTimeMs = Math.round(performance.now() - startTime);
-
-      if (page) {
-        updateTab(activeTab.id, {
-          currentPage: {
-            bookId: page.id,
-            meta: `${page.part_label}:${page.page_number}`,
-            body: page.body ?? '',
-            loadTimeMs,
-          },
-          pageTokens: tokens,
-          currentPageId: newPageId,
-          matchedTokenIndices: [],
-        });
-      }
-    } catch (err) {
-      updateTab(activeTab.id, { errorMessage: `Failed to load page: ${err}` });
-      console.error('Failed to load page:', err);
-    }
+    const page = await api.getPage(activeTab.currentBookId, activeTab.currentPartIndex, newPageId);
+    if (!page) return;
+    updateTab(activeTab.id, {
+      errorMessage: '',
+      currentPageId: newPageId,
+      matchedTokenIndices: [],
+      currentPage: {
+        bookId: page.id,
+        meta: `${page.part_label}:${page.page_number}`,
+      },
+    });
   }, [activeTab, updateTab, api]);
 
-  // Jump directly to a part_label/page_number (for the "Go to vol:page" input).
-  // Returns false when the lookup fails (caller shows a toast).
+  // Jump to a printed page number. The reader resolves this against the page
+  // list when it has one; this is the fallback, and the path a jump into a
+  // book the reader has not opened yet still takes.
   const handleNavigateToLabel = useCallback(async (partLabel: string, pageNumber: string): Promise<boolean> => {
     if (!activeTab || activeTab.currentBookId === null) return false;
-
-    updateTab(activeTab.id, { errorMessage: '' });
-
     try {
-      const startTime = performance.now();
       const page = await api.getPageByLabel(activeTab.currentBookId, partLabel, pageNumber);
       if (!page) return false;
-
-      const tokens = await api.getPageTokens(page.id, page.part_index, page.page_id);
-      const loadTimeMs = Math.round(performance.now() - startTime);
-
       updateTab(activeTab.id, {
-        currentPage: {
-          bookId: page.id,
-          meta: `${page.part_label}:${page.page_number}`,
-          body: page.body ?? '',
-          loadTimeMs,
-        },
-        pageTokens: tokens,
+        errorMessage: '',
         currentPartIndex: page.part_index,
         currentPageId: page.page_id,
         matchedTokenIndices: [],
+        currentPage: {
+          bookId: page.id,
+          meta: `${page.part_label}:${page.page_number}`,
+        },
       });
       return true;
     } catch (err) {

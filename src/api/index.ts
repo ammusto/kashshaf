@@ -13,7 +13,8 @@ import type {
   SearchResult,
   Token,
   EngineCapabilities,
-  WalkStatus,
+  WalkStatus,
+  PageEntry,
 } from '../types';
 import type { NameSearchForm } from './tauri';
 
@@ -127,6 +128,14 @@ export interface SearchAPI {
     partLabel: string,
     pageNumber: string
   ): Promise<SearchResult | null>;
+
+  /**
+   * Every page of one book in reading order, with its printed labels: the
+   * spine the reader scrolls through. One call per book, not per page —
+   * `page_id + 1` is not the next page in the 45 books whose page ids
+   * restart per part.
+   */
+  listBookPages(id: number): Promise<PageEntry[]>;
 
   getPageTokens(
     id: number,

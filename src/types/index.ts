@@ -136,6 +136,18 @@ export interface AppUpdateStatus {
   download_url?: string;
 }
 
+/**
+ * One page of a book's spine, in reading order, with the labels the book
+ * prints on it. `list_book_pages` returns the whole spine for a book; the
+ * reader pages through it.
+ */
+export interface PageEntry {
+  part_index: number;
+  page_id: number;
+  part_label: string;
+  page_number: string;
+}
+
 /** Where the corpus lives: `get_data_directory_info` (Tauri). */
 export interface DataDirInfo {
   path: string;

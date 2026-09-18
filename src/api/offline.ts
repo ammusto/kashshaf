@@ -13,7 +13,8 @@ import type {
   SearchResult,
   Token,
   EngineCapabilities,
-  WalkStatus,
+  WalkStatus,
+  PageEntry,
 } from '../types';
 import * as tauri from './tauri';
 
@@ -107,6 +108,10 @@ export class OfflineAPI implements SearchAPI {
   ): Promise<SearchResult | null> {
     const result = await tauri.getPage(id, partIndex, pageId);
     return result;
+  }
+
+  async listBookPages(id: number): Promise<PageEntry[]> {
+    return tauri.listBookPages(id);
   }
 
   async getPageByLabel(

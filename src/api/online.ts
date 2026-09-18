@@ -15,7 +15,8 @@ import type {
   Token,
   EngineCapabilities,
   WildcardGrammar,
-  WalkStatus,
+  WalkStatus,
+  PageEntry,
 } from '../types';
 import { stripPunctuation } from '@kashshaf/shared';
 
@@ -268,6 +269,10 @@ export class OnlineAPI implements SearchAPI {
     } catch {
       return null;
     }
+  }
+
+  async listBookPages(id: number): Promise<PageEntry[]> {
+    return fetchAPI<PageEntry[]>(`/book/${id}/pages`);
   }
 
   async getPageByLabel(

@@ -191,6 +191,24 @@ pub fn get_page(
         .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
 }
 
+/// Every page of one book in reading order, with the labels it prints.
+///
+/// The reader's continuous scroll pages through this: it gives adjacency
+/// across part boundaries (which `page_id + 1` does not, because 45 books
+/// restart their page ids per part), the part boundaries themselves, and
+/// jump-to-page, from one call per book.
+#[tauri::command]
+pub fn list_book_pages(
+    state: State<'_, ManagedAppState>,
+    id: u64,
+) -> Result<Vec<kashshaf_engine::PageEntry>, KashshafError> {
+    let app_state = require_state(&state)?;
+    app_state
+        .search_engine
+        .book_pages(id)
+        .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
+}
+
 #[tauri::command]
 pub fn get_page_by_label(
     state: State<'_, ManagedAppState>,

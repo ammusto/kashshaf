@@ -45,6 +45,7 @@ fn main() {
             commands::name_search,
             commands::get_page,
             commands::get_page_by_label,
+            commands::list_book_pages,
             commands::get_all_books,
             commands::list_books,
             commands::list_books_filtered,

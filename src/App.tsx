@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
-import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement } from './types';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement, PageEntry } from './types';
 import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from './types/search';
 import type { Collection } from './types/collections';
 import { MAX_RESULTS } from './constants/search';
@@ -61,7 +61,13 @@ function App() {
     activeTab,
     setActiveTabId,
     closeTab,
+    updateTab,
   } = useSearchTabsContext();
+
+  // The reader tells us where it has scrolled to; reading it from a ref keeps
+  // that callback stable, so the reader is not re-wired on every tab update.
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
 
   // App-level search mode (terms, names)
   const [appSearchMode, setAppSearchMode] = useState<AppSearchMode>('terms');
@@ -93,6 +99,32 @@ function App() {
 
   // Reader navigation hook
   const { handleNavigatePage, handleNavigateToLabel, loadResultIntoTab } = useReaderNavigation({ api });
+
+  // Where the reader should be. Only the coordinates: the reader loads the
+  // pages around them itself.
+  const readerAnchor = useMemo(
+    () =>
+      activeTab?.currentBookId != null
+        ? { part_index: activeTab.currentPartIndex, page_id: activeTab.currentPageId }
+        : null,
+    [activeTab?.currentBookId, activeTab?.currentPartIndex, activeTab?.currentPageId]
+  );
+
+  // The reader scrolled onto another page: remember it, so the tab comes back
+  // where it was left and the citation follows the page in view.
+  const handleActivePage = useCallback(
+    (entry: PageEntry) => {
+      const tab = activeTabRef.current;
+      if (!tab || tab.currentBookId === null) return;
+      if (tab.currentPartIndex === entry.part_index && tab.currentPageId === entry.page_id) return;
+      updateTab(tab.id, {
+        currentPartIndex: entry.part_index,
+        currentPageId: entry.page_id,
+        currentPage: { bookId: tab.currentBookId, meta: `${entry.part_label}:${entry.page_number}` },
+      });
+    },
+    [updateTab]
+  );
 
   // Use search hook with selected book IDs and loadResultIntoTab
   const {
@@ -597,11 +629,13 @@ function App() {
 
               <div style={{ flex: splitterRatio }} className="overflow-hidden shadow-app-md bg-white mb-3 rounded-b-xl">
                 <ReaderPanel
-                  currentPage={activeTab?.currentPage ?? null}
-                  tokens={activeTab?.pageTokens ?? []}
+                  api={api}
+                  bookId={activeTab?.currentBookId ?? null}
+                  anchor={readerAnchor}
+                  anchorMatches={activeTab?.matchedTokenIndices ?? []}
+                  onActivePage={handleActivePage}
                   onNavigate={handleNavigatePage}
                   onNavigateToLabel={handleNavigateToLabel}
-                  matchedTokenIndices={activeTab?.matchedTokenIndices ?? []}
                 />
               </div>
 

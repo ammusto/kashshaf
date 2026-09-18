@@ -213,6 +213,18 @@ pub struct SearchResult {
     pub matched_token_indices: Vec<u32>,
 }
 
+/// One page of a book's spine: where it sits in reading order and what the
+/// book prints on it. The reader loads this once per book and uses it for
+/// ordering, adjacency across part boundaries, jump-to-page and labels,
+/// without a round trip per page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageEntry {
+    pub part_index: u64,
+    pub page_id: u64,
+    pub part_label: String,
+    pub page_number: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResults {
     pub query: String,
@@ -1388,6 +1400,23 @@ impl SearchEngine {
         }
         out.sort_by_key(|(part, page, _, _)| (*part, *page));
         Ok(out)
+    }
+
+    /// The book's spine: [`book_page_labels`] as named entries, which is what
+    /// the reader's continuous scroll pages through.
+    ///
+    /// [`book_page_labels`]: Self::book_page_labels
+    pub fn book_pages(&self, id: u64) -> Result<Vec<PageEntry>> {
+        Ok(self
+            .book_page_labels(id)?
+            .into_iter()
+            .map(|(part_index, page_id, part_label, page_number)| PageEntry {
+                part_index,
+                page_id,
+                part_label,
+                page_number,
+            })
+            .collect())
     }
 
     pub fn get_page_by_label(&self, id: u64, part_label: &str, page_number: &str) -> Result<Option<SearchResult>> {

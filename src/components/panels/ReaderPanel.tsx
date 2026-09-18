@@ -1,270 +1,165 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
-import type { Token } from '../../types';
-import { stripHtml, buildCharToTokenMap, getHighlightRanges, TokenPopup } from '@kashshaf/shared';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PageEntry, Token } from '../../types';
+import type { SearchAPI } from '../../api';
+import { TokenPopup } from '@kashshaf/shared';
 import { Toast } from '../ui';
 import { useBooks } from '../../contexts/BooksContext';
 import { CitationBlock } from '../shared/CitationBlock';
 import { BookDetailView } from '../modals/MetadataBrowser';
+import { usePageStack, type PageAnchor } from '../../hooks/usePageStack';
+import { ContinuousReader, pageLabel, type ContinuousReaderHandle } from '../reader/ContinuousReader';
 
 interface ReaderPanelProps {
-  currentPage: {
-    bookId: number;
-    meta: string;
-    body: string;
-    loadTimeMs?: number;
-  } | null;
-  tokens: Token[];
-  onNavigate: (direction: number) => void;
-  /** Jump to a specific part_label/page_number. Returns false if no such page exists. */
+  api: SearchAPI;
+  /** The book open in this tab. */
+  bookId: number | null;
+  /** Where the reader should be: a clicked result, or a jump. */
+  anchor: PageAnchor | null;
+  /** Highlights for the page the reader opened on, from the clicked result. */
+  anchorMatches?: readonly number[];
+  /** Highlights for any page of the book, for the search that is running. */
+  matchesFor?: (entry: PageEntry) => readonly number[] | undefined;
+  /** Told which pages are mounted, so their highlights can be fetched. */
+  onMountedPages?: (entries: PageEntry[]) => void;
+  /** Told where the reader is, so the tab remembers it. */
+  onActivePage?: (entry: PageEntry) => void;
+  /** Stepping when the book has no spine (an older server). */
+  onNavigate?: (direction: number) => void;
+  /** Jumping when the book has no spine. Returns false if there is no such page. */
   onNavigateToLabel?: (partLabel: string, pageNumber: string) => Promise<boolean>;
-  /** Token indices that matched from Tantivy search */
-  matchedTokenIndices?: number[];
 }
 
 /**
- * Renders the body text with highlighting and clickable tokens.
- * Uses the body (with tashkil) for display, maps to token indices for interaction.
+ * The reader: one book as a single scrolling column.
+ *
+ * The book's spine (`list_book_pages`) is loaded once and the pages near the
+ * one in view are mounted around it, so reading on past the foot of a page
+ * needs no click and crossing into the next part needs no special case. The
+ * page in view drives the header's label and the citation.
  */
-function BodyRenderer({
-  body,
-  tokens,
-  matchedIndicesSet,
-  onWordClick,
-  firstHighlightRef,
-}: {
-  body: string;
-  tokens: Token[];
-  matchedIndicesSet: Set<number>;
-  onWordClick: (e: React.MouseEvent, token: Token) => void;
-  firstHighlightRef: React.RefObject<HTMLSpanElement>;
-}) {
-  const content = useMemo(() => {
-    const plainText = stripHtml(body);
-    if (plainText.length === 0) return null;
-
-    const charToToken = buildCharToTokenMap(plainText);
-    const highlightRanges = getHighlightRanges(charToToken, matchedIndicesSet);
-
-    // Build a map from token index to token for O(1) lookup
-    const tokenByIdx = new Map<number, Token>();
-    for (const token of tokens) {
-      tokenByIdx.set(token.idx, token);
-    }
-
-    // Debug: Log token mapping info
-    const maxCharTokenIdx = Math.max(...charToToken.filter((x): x is number => x !== null));
-    const tokenIdxRange = tokens.length > 0 ? { min: Math.min(...tokens.map(t => t.idx)), max: Math.max(...tokens.map(t => t.idx)) } : null;
-    console.log('[TokenDebug] BodyRenderer mapping:', {
-      plainTextLength: plainText.length,
-      tokensCount: tokens.length,
-      tokenByIdxSize: tokenByIdx.size,
-      maxCharTokenIdx,
-      tokenIdxRange,
-      sampleTokens: tokens.slice(0, 3).map(t => ({ idx: t.idx, surface: t.surface })),
-    });
-
-    // Build a set of highlighted character positions for quick lookup
-    const highlightedChars = new Set<number>();
-    for (const range of highlightRanges) {
-      for (let i = range.start; i < range.end; i++) {
-        highlightedChars.add(i);
-      }
-    }
-
-    // Build spans: group consecutive characters by their highlight state and token index
-    const elements: React.ReactNode[] = [];
-    let i = 0;
-    let isFirstHighlight = true;
-
-    while (i < plainText.length) {
-      const tokenIdx = charToToken[i];
-      const isHighlighted = highlightedChars.has(i);
-
-      // Find the end of this token (consecutive chars with same token index)
-      let end = i + 1;
-      if (tokenIdx !== null) {
-        while (end < plainText.length && charToToken[end] === tokenIdx) {
-          end++;
-        }
-      } else {
-        // Non-token character (whitespace, etc.) - just take one char
-        end = i + 1;
-      }
-
-      const text = plainText.slice(i, end);
-
-      if (tokenIdx !== null) {
-        // This is part of a token - make it clickable (O(1) lookup via Map)
-        const token = tokenByIdx.get(tokenIdx);
-        if (!token && tokenIdx <= maxCharTokenIdx) {
-          // Only log once per missing token (at the start of that token's chars)
-          if (i === 0 || charToToken[i - 1] !== tokenIdx) {
-            console.warn('[TokenDebug] Missing token for idx:', tokenIdx, 'text:', text, 'availableIdxs:', [...tokenByIdx.keys()].slice(0, 20));
-          }
-        }
-        const shouldAttachRef = isHighlighted && isFirstHighlight;
-        if (shouldAttachRef) {
-          isFirstHighlight = false;
-        }
-        elements.push(
-          <span
-            key={i}
-            ref={shouldAttachRef ? firstHighlightRef : undefined}
-            onClick={token ? (e) => onWordClick(e, token) : undefined}
-            className={`cursor-pointer rounded px-0.5 transition-colors duration-100
-              ${isHighlighted
-                ? 'bg-red-100 text-red-700 font-semibold border-b-2 border-red-400'
-                : 'hover:bg-app-accent-light'
-              }`}
-          >
-            {text}
-          </span>
-        );
-      } else {
-        // Non-token character (whitespace, newline, etc.)
-        if (text === '\n') {
-          elements.push(<br key={i} />);
-        } else {
-          elements.push(text);
-        }
-      }
-
-      i = end;
-    }
-
-    return elements;
-  }, [body, tokens, matchedIndicesSet, onWordClick, firstHighlightRef]);
-
-  return (
-    <div
-      dir="rtl"
-      className="text-xl leading-loose font-arabic text-app-text-primary select-text"
-    >
-      {content}
-    </div>
-  );
-}
-
-export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel, matchedTokenIndices = [] }: ReaderPanelProps) {
+export function ReaderPanel({
+  api,
+  bookId,
+  anchor,
+  anchorMatches,
+  matchesFor,
+  onMountedPages,
+  onActivePage,
+  onNavigate,
+  onNavigateToLabel,
+}: ReaderPanelProps) {
   const { booksMap, authorsMap, genresMap } = useBooks();
   const [selectedToken, setSelectedToken] = useState<Token | null>(null);
   const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
-  const firstHighlightRef = useRef<HTMLSpanElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const readerRef = useRef<ContinuousReaderHandle>(null);
 
-  // Editable vol:page inputs — kept in local state so the user can type freely
-  // without triggering re-renders from the parent. Synced from currentPage.meta
-  // whenever the loaded page changes.
   const [partLabelInput, setPartLabelInput] = useState('');
   const [pageNumberInput, setPageNumberInput] = useState('');
   const [navigating, setNavigating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showCite, setShowCite] = useState(false);
   const [showBookDetail, setShowBookDetail] = useState(false);
+  /** The page in view: what the header and the citation describe. */
+  const [active, setActive] = useState<PageEntry | null>(null);
 
-  useEffect(() => {
-    if (!currentPage?.meta) {
-      setPartLabelInput('');
-      setPageNumberInput('');
-      return;
-    }
-    const sep = currentPage.meta.indexOf(':');
-    if (sep === -1) {
-      setPartLabelInput(currentPage.meta);
-      setPageNumberInput('');
-    } else {
-      setPartLabelInput(currentPage.meta.slice(0, sep));
-      setPageNumberInput(currentPage.meta.slice(sep + 1));
-    }
-  }, [currentPage?.meta]);
+  const stack = usePageStack({ api, bookId, anchor });
 
-  // Look up book metadata from booksMap
-  const book = currentPage ? booksMap.get(currentPage.bookId) : null;
-  const title = book?.title ?? `Book ${currentPage?.bookId}`;
+  const book = bookId !== null ? booksMap.get(bookId) : null;
+  const title = book?.title ?? (bookId !== null ? `Book ${bookId}` : '');
   const author = book?.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
-  // Hide the volume input when the book is single-part. Treat unknown/legacy
-  // (parts undefined or 0) as multi-part so we don't break older metadata.
-  const isMultiPart = book?.parts == null || book.parts > 1;
+  // Prefer the spine, which knows how many parts the book really has; fall
+  // back to the metadata before it arrives. Unknown/legacy counts as
+  // multi-part so older metadata is not misread as single-part.
+  const multiPart = useMemo(() => {
+    if (stack.spine.length > 0) return new Set(stack.spine.map((e) => e.part_index)).size > 1;
+    return book?.parts == null || book.parts > 1;
+  }, [stack.spine, book?.parts]);
+
+  // Keep the vol:page boxes on the page in view, unless the user is typing.
+  useEffect(() => {
+    if (!active || navigating) return;
+    setPartLabelInput(active.part_label ?? '');
+    setPageNumberInput(active.page_number ?? '');
+  }, [active, navigating]);
+
+  const handleActivePage = useCallback(
+    (entry: PageEntry) => {
+      setActive(entry);
+      onActivePage?.(entry);
+    },
+    [onActivePage]
+  );
+
+  const matchesForIndex = useCallback(
+    (index: number): readonly number[] => {
+      const entry = stack.spine[index];
+      if (!entry) return [];
+      const fromSearch = matchesFor?.(entry);
+      if (fromSearch) return fromSearch;
+      // The page the reader opened on carries the clicked result's own
+      // highlights until the per-page lookup answers for it.
+      if (anchor && entry.part_index === anchor.part_index && entry.page_id === anchor.page_id) {
+        return anchorMatches ?? [];
+      }
+      return [];
+    },
+    [stack.spine, matchesFor, anchor, anchorMatches]
+  );
 
   const handleGoClick = async () => {
-    if (!onNavigateToLabel || navigating) return;
     const partLabel = partLabelInput.trim();
     const pageNumber = pageNumberInput.trim();
-    if (!pageNumber || (isMultiPart && !partLabel)) {
-      setToastMessage(isMultiPart ? 'Enter both volume and page number' : 'Enter a page number');
+    if (!pageNumber || (multiPart && !partLabel)) {
+      setToastMessage(multiPart ? 'Enter both volume and page number' : 'Enter a page number');
       return;
     }
+    // With a spine the page is already known: no round trip, and it works
+    // the same offline and online.
+    const index = stack.spine.findIndex(
+      (e) => e.page_number === pageNumber && (!multiPart || e.part_label === partLabel)
+    );
+    if (index >= 0) {
+      readerRef.current?.jumpTo(index);
+      return;
+    }
+    if (stack.spine.length > 0) {
+      setToastMessage(`Page ${multiPart ? `${partLabel}:${pageNumber}` : pageNumber} not found in this text`);
+      return;
+    }
+    if (!onNavigateToLabel) return;
     setNavigating(true);
     try {
       const ok = await onNavigateToLabel(partLabel, pageNumber);
       if (!ok) {
-        const label = isMultiPart ? `${partLabel}:${pageNumber}` : pageNumber;
-        setToastMessage(`Page ${label} not found in this text`);
+        setToastMessage(`Page ${multiPart ? `${partLabel}:${pageNumber}` : pageNumber} not found in this text`);
       }
     } finally {
       setNavigating(false);
     }
   };
 
-  const handleWordClick = (e: React.MouseEvent, token: Token) => {
-    e.stopPropagation();
-    console.log('[TokenDebug] Token clicked:', {
-      idx: token.idx,
-      surface: token.surface,
-      lemma: token.lemma,
-      root: token.root,
-      pos: token.pos,
-    });
-    setSelectedToken(token);
-    setPopupPosition({
-      x: e.clientX,
-      y: e.clientY,
-    });
-  };
-
-  const handleClosePopup = () => {
-    setSelectedToken(null);
-  };
-
-  // Create a Set for O(1) lookup of matched token indices
-  const matchedIndicesSet = useMemo(() => {
-    return new Set(matchedTokenIndices);
-  }, [matchedTokenIndices]);
-
-  // Scroll to first highlighted match when matches change
-  useEffect(() => {
-    if (matchedTokenIndices.length > 0 && firstHighlightRef.current && scrollContainerRef.current) {
-      // Small delay to ensure DOM is updated
-      requestAnimationFrame(() => {
-        if (firstHighlightRef.current && scrollContainerRef.current) {
-          const container = scrollContainerRef.current;
-          const element = firstHighlightRef.current;
-          const elementRect = element.getBoundingClientRect();
-          const containerRect = container.getBoundingClientRect();
-
-          // Calculate scroll position to center the element
-          const scrollTop = container.scrollTop + (elementRect.top - containerRect.top) - (containerRect.height / 3);
-          container.scrollTo({ top: Math.max(0, scrollTop), behavior: 'smooth' });
-        }
-      });
+  const handleStep = (direction: number) => {
+    if (stack.spine.length > 0) {
+      readerRef.current?.step(direction);
+      return;
     }
-  }, [matchedTokenIndices, currentPage?.body]);
+    onNavigate?.(direction);
+  };
 
-  // If no text is loaded, render nothing
-  if (!currentPage?.body) {
+  const handleWordClick = useCallback((e: React.MouseEvent, token: Token) => {
+    e.stopPropagation();
+    setSelectedToken(token);
+    setPopupPosition({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  const handleClosePopup = useCallback(() => setSelectedToken(null), []);
+
+  if (bookId === null) {
     return <div className="h-full bg-white" />;
   }
 
-  // Derive vol/page from the loaded meta string for citation purposes.
-  // We use the parsed meta (not the editable inputs) so the citation always
-  // reflects the page actually displayed, not whatever the user has typed.
-  const [citeVolume, citePageNumber] = (() => {
-    const meta = currentPage?.meta ?? '';
-    if (!meta) return ['', ''];
-    const sep = meta.indexOf(':');
-    if (sep === -1) return ['', meta];
-    return [meta.slice(0, sep), meta.slice(sep + 1)];
-  })();
+  const citeVolume = active?.part_label ?? '';
+  const citePageNumber = active?.page_number ?? '';
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -292,67 +187,65 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
         >
           {title}{author ? ` - ${author}` : ''}
         </button>
-        {currentPage.loadTimeMs !== undefined && (
-          <span className="text-xs text-app-text-tertiary flex-shrink-0">
-            {currentPage.loadTimeMs}ms
+        {stack.spine.length > 0 && active && (
+          <span className="text-xs text-app-text-tertiary flex-shrink-0 tabular-nums">
+            {pageLabel(active, multiPart)} of {stack.spine.length.toLocaleString()}
           </span>
         )}
-        {currentPage.meta && (
-          <div className="flex items-center gap-1 flex-shrink-0 bg-app-accent-light rounded px-2 py-1">
-            {isMultiPart && (
-              <>
-                <input
-                  type="text"
-                  value={partLabelInput}
-                  onChange={(e) => setPartLabelInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleGoClick();
-                    }
-                  }}
-                  disabled={!onNavigateToLabel || navigating}
-                  aria-label="Volume"
-                  className="w-12 text-sm text-app-accent font-medium bg-transparent text-center
-                             border-b border-transparent focus:border-app-accent focus:outline-none
-                             disabled:cursor-not-allowed"
-                />
-                <span className="text-sm text-app-accent font-medium">:</span>
-              </>
-            )}
-            <input
-              type="text"
-              value={pageNumberInput}
-              onChange={(e) => setPageNumberInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleGoClick();
-                }
-              }}
-              disabled={!onNavigateToLabel || navigating}
-              aria-label="Page number"
-              className="w-14 text-sm text-app-accent font-medium bg-transparent text-center
-                         border-b border-transparent focus:border-app-accent focus:outline-none
-                         disabled:cursor-not-allowed"
-            />
-            <button
-              onClick={handleGoClick}
-              disabled={!onNavigateToLabel || navigating}
-              className="ml-1 px-2 py-0.5 text-xs font-medium text-app-accent
-                         border border-app-accent rounded hover:bg-app-accent hover:text-white
-                         transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Go
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-1 flex-shrink-0 bg-app-accent-light rounded px-2 py-1">
+          {multiPart && (
+            <>
+              <input
+                type="text"
+                value={partLabelInput}
+                onChange={(e) => setPartLabelInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleGoClick();
+                  }
+                }}
+                disabled={navigating}
+                aria-label="Volume"
+                className="w-12 text-sm text-app-accent font-medium bg-transparent text-center
+                           border-b border-transparent focus:border-app-accent focus:outline-none
+                           disabled:cursor-not-allowed"
+              />
+              <span className="text-sm text-app-accent font-medium">:</span>
+            </>
+          )}
+          <input
+            type="text"
+            value={pageNumberInput}
+            onChange={(e) => setPageNumberInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                void handleGoClick();
+              }
+            }}
+            disabled={navigating}
+            aria-label="Page number"
+            className="w-14 text-sm text-app-accent font-medium bg-transparent text-center
+                       border-b border-transparent focus:border-app-accent focus:outline-none
+                       disabled:cursor-not-allowed"
+          />
+          <button
+            onClick={() => void handleGoClick()}
+            disabled={navigating}
+            className="ml-1 px-2 py-0.5 text-xs font-medium text-app-accent
+                       border border-app-accent rounded hover:bg-app-accent hover:text-white
+                       transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Go
+          </button>
+        </div>
         {/* The text is RTL, so the next page lies to the left and the
             previous to the right. The arrows point the way the reader
             moves, not the way a Latin page turns. */}
         <div className="flex gap-2 flex-shrink-0">
           <button
-            onClick={() => onNavigate(1)}
+            onClick={() => handleStep(1)}
             className="px-2 py-2 bg-app-surface-variant rounded-md text-xs font-medium
                      hover:bg-app-accent-light hover:text-app-accent transition-colors
                      border border-app-border-light"
@@ -360,7 +253,7 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
             ← Next
           </button>
           <button
-            onClick={() => onNavigate(-1)}
+            onClick={() => handleStep(-1)}
             className="px-2 py-2 bg-app-surface-variant rounded-md text-xs font-medium
                      hover:bg-app-accent-light hover:text-app-accent transition-colors
                      border border-app-border-light"
@@ -370,32 +263,27 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
         </div>
       </div>
 
-      {/* Text Content */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto bg-white" onClick={handleClosePopup}>
-        <div className="max-w-4xl mx-auto px-16 py-12">
-          <BodyRenderer
-            body={currentPage.body}
-            tokens={tokens}
-            matchedIndicesSet={matchedIndicesSet}
-            onWordClick={handleWordClick}
-            firstHighlightRef={firstHighlightRef}
-          />
+      {stack.spineError && (
+        <div className="px-8 py-2 text-xs text-app-text-tertiary bg-app-surface-variant border-b border-app-border-light">
+          This corpus does not serve a page list, so the reader shows one page at a time.
         </div>
-      </div>
-
-      {/* Token Popup */}
-      {selectedToken && (
-        <TokenPopup
-          token={selectedToken}
-          position={popupPosition}
-          onClose={handleClosePopup}
-        />
       )}
 
-      {/* Citation modal */}
-      {/* Book detail overlay — clicking the title in the header opens this.
-          We pass only onBack (with a custom label) so the header shows a single
-          "Back to Search Results" button on the left and no close X. */}
+      <ContinuousReader
+        ref={readerRef}
+        stack={stack}
+        matchesFor={matchesForIndex}
+        onWordClick={handleWordClick}
+        onActivePage={handleActivePage}
+        onMountedPages={onMountedPages}
+        multiPart={multiPart}
+        onBackgroundClick={handleClosePopup}
+      />
+
+      {selectedToken && (
+        <TokenPopup token={selectedToken} position={popupPosition} onClose={handleClosePopup} />
+      )}
+
       {showBookDetail && book && (
         <BookDetailView
           book={book}
@@ -428,24 +316,17 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
               </button>
             </div>
             <div className="px-6 py-5">
-              <CitationBlock
-                book={book}
-                volume={citeVolume}
-                page={citePageNumber}
-                withPageRef={true}
-              />
+              {/* The citation follows the page in view, not the page that was
+                  clicked: scrolling on and citing gives the page you are
+                  reading. */}
+              <CitationBlock book={book} volume={citeVolume} page={citePageNumber} withPageRef={true} />
             </div>
           </div>
         </div>
       )}
 
-      {/* Toast for navigation errors (matches sidebar's wildcard error style) */}
       {toastMessage && (
-        <Toast
-          message={toastMessage}
-          type="error"
-          onClose={() => setToastMessage(null)}
-        />
+        <Toast message={toastMessage} type="error" onClose={() => setToastMessage(null)} />
       )}
     </div>
   );

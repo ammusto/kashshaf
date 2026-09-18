@@ -15,7 +15,8 @@ import type {
   CorpusStatus,
   EngineCapabilities,
   WalkStatus,
-  DataDirInfo,
+  DataDirInfo,
+  PageEntry,
 } from '../types';
 import { stripPunctuation } from '@kashshaf/shared';
 
@@ -45,6 +46,11 @@ export async function getPage(
   pageId: number
 ): Promise<SearchResult | null> {
   return invoke('get_page', { id, partIndex, pageId });
+}
+
+/** The book's page spine in reading order (`list_book_pages`). */
+export async function listBookPages(id: number): Promise<PageEntry[]> {
+  return invoke('list_book_pages', { id });
 }
 
 export async function getPageByLabel(

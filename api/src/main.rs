@@ -471,6 +471,17 @@ async fn get_name_match_positions(
         .map_err(internal)
 }
 
+/// `GET /book/{id}/pages` - the book's spine in reading order: one entry per
+/// page with its coordinates and printed labels. The reader's continuous
+/// scroll pages through it, so it is fetched once per book rather than a
+/// neighbour lookup per page. A few thousand small entries at most.
+async fn get_book_pages(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<u64>,
+) -> Result<Json<Vec<kashshaf_engine::PageEntry>>, ApiError> {
+    state.search_engine.book_pages(id).map(Json).map_err(internal)
+}
+
 /// `GET /book/{id}/toc` - the book's table of contents as a tree (Lab spec
 /// 1.5 B2). Tiny JSON: a few hundred entries at most, so it is neither
 /// compressed nor rate-limited beyond the per-request layer.
@@ -665,6 +676,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/page/with-matches", get(get_page_with_matches))
         .route("/page/matches/combined", post(get_match_positions_combined))
         .route("/page/matches/name", post(get_name_match_positions))
+        .route("/book/:id/pages", get(get_book_pages))
         .route("/books", get(get_all_books))
         .route("/authors", get(get_all_authors))
         .route("/genres", get(get_all_genres));
