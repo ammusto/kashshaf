@@ -108,48 +108,52 @@ export function PageView({
   let firstHighlightSeen = false;
 
   return (
-    <div ref={ref} data-page-index={index} data-page-label={label}>
+    // The gap below the card is inside the measured element, so the spacer
+    // that replaces this page later is exactly as tall as the space it took.
+    <div ref={ref} data-page-index={index} data-page-label={label} className="pb-6">
       {startsPart && (
-        <div className="flex items-center gap-3 px-16 pt-8 pb-2 select-none" dir="rtl">
-          <span className="h-px flex-1 bg-app-border-medium" />
-          <span className="text-xs font-medium text-app-text-tertiary uppercase tracking-wide">
+        <div className="flex items-center gap-3 pb-6 select-none" dir="rtl">
+          <span className="h-0.5 flex-1 bg-app-border-medium rounded-full" />
+          <span className="text-xs font-semibold text-app-text-secondary uppercase tracking-wide">
             {partLabel}
           </span>
-          <span className="h-px flex-1 bg-app-border-medium" />
+          <span className="h-0.5 flex-1 bg-app-border-medium rounded-full" />
         </div>
       )}
-      <div className="flex items-center gap-3 px-16 pt-6 pb-1 select-none" dir="rtl">
-        <span className="text-xs text-app-text-tertiary tabular-nums">{label}</span>
-        <span className="h-px flex-1 bg-app-border-light" />
-      </div>
-      <div className="px-16 pb-10">
-        <div dir="rtl" className="text-xl leading-loose font-arabic text-app-text-primary select-text">
-          {runs.map((run, i) => {
-            if (run.token === null) {
-              return run.text === '\n' ? <br key={i} /> : <span key={i}>{run.text}</span>;
-            }
-            const token = tokenByIdx.get(run.token);
-            const isFirst = run.highlighted && !firstHighlightSeen;
-            if (isFirst) firstHighlightSeen = true;
-            return (
-              <span
-                key={i}
-                data-token={run.token}
-                data-highlight={run.highlighted ? 'true' : undefined}
-                data-highlight-first={isFirst ? 'true' : undefined}
-                onClick={token ? (e) => onWordClick(e, token) : undefined}
-                className={`cursor-pointer rounded px-0.5 transition-colors duration-100
-                  ${run.highlighted
-                    ? 'bg-red-100 text-red-700 font-semibold border-b-2 border-red-400'
-                    : 'hover:bg-app-accent-light'
-                  }`}
-              >
-                {run.text}
-              </span>
-            );
-          })}
+      <article className="bg-app-surface border border-app-border-light rounded-lg shadow-app-sm overflow-hidden">
+        {/* The printed page number, in the top-right corner of its own page. */}
+        <header className="flex items-center justify-end px-10 py-2 border-b border-app-border-light bg-app-surface-variant select-none">
+          <span className="text-xs text-app-text-tertiary tabular-nums">{label}</span>
+        </header>
+        <div className="px-10 py-8">
+          <div dir="rtl" className="text-xl leading-loose font-arabic text-app-text-primary select-text">
+            {runs.map((run, i) => {
+              if (run.token === null) {
+                return run.text === '\n' ? <br key={i} /> : <span key={i}>{run.text}</span>;
+              }
+              const token = tokenByIdx.get(run.token);
+              const isFirst = run.highlighted && !firstHighlightSeen;
+              if (isFirst) firstHighlightSeen = true;
+              return (
+                <span
+                  key={i}
+                  data-token={run.token}
+                  data-highlight={run.highlighted ? 'true' : undefined}
+                  data-highlight-first={isFirst ? 'true' : undefined}
+                  onClick={token ? (e) => onWordClick(e, token) : undefined}
+                  className={`cursor-pointer rounded px-0.5 transition-colors duration-100
+                    ${run.highlighted
+                      ? 'bg-red-100 text-red-700 font-semibold border-b-2 border-red-400'
+                      : 'hover:bg-app-accent-light'
+                    }`}
+                >
+                  {run.text}
+                </span>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      </article>
     </div>
   );
 }
