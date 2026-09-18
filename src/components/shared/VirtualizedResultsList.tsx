@@ -36,25 +36,31 @@ export function VirtualizedResultsList({
     overscan: 5,
   });
 
-  useEffect(() => {
-    const scrollElement = parentRef.current;
-    if (!scrollElement) return;
-
-    const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = scrollElement;
-      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-
-      if (distanceFromBottom < 200 && !loadingMore) {
-        const hasMore = !loadedAll && (results.length < totalHits || wasCapped) && results.length < maxResults;
-        if (hasMore) onLoadMore();
-      }
-    };
-
-    scrollElement.addEventListener('scroll', handleScroll);
-    return () => scrollElement.removeEventListener('scroll', handleScroll);
-  }, [results.length, totalHits, wasCapped, loadedAll, maxResults, loadingMore, onLoadMore]);
-
   const hasMore = !loadedAll && (results.length < totalHits || wasCapped) && results.length < maxResults;
+
+  // Reaching the foot of the list loads the next page. A sentinel rather than
+  // a scroll threshold: it fires when the foot comes into view however it got
+  // there, including when the results are shorter than the panel and no
+  // scroll event is ever sent. Pages after the first come from the walk's
+  // prefix cache, so this is usually instant.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef(onLoadMore);
+  loadMoreRef.current = onLoadMore;
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = parentRef.current;
+    if (!sentinel || !root || !hasMore || loadingMore) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMoreRef.current();
+      },
+      { root, rootMargin: '200px 0px' }
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasMore, loadingMore, results.length]);
 
   return (
     <div ref={parentRef} className="flex-1 overflow-auto">
@@ -100,10 +106,29 @@ export function VirtualizedResultsList({
         })}
       </div>
 
+      {/* The foot of the list. Crossing it loads the next page; the button is
+          there for when that does not happen — a trackpad fling that never
+          settles, a browser without IntersectionObserver, a load that failed
+          and left the list where it was. */}
+      <div ref={sentinelRef} aria-hidden />
+
       {loadingMore && (
         <div className="h-12 flex items-center justify-center">
           <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-app-accent"></div>
           <span className="ml-2 text-xs text-app-text-tertiary">Loading more...</span>
+        </div>
+      )}
+
+      {!loadingMore && hasMore && (
+        <div className="h-12 flex items-center justify-center">
+          <button
+            onClick={onLoadMore}
+            className="px-3 py-1 text-xs font-medium rounded border border-app-border-medium
+                       text-app-text-secondary hover:text-app-accent hover:border-app-accent
+                       transition-colors"
+          >
+            Load more
+          </button>
         </div>
       )}
 
