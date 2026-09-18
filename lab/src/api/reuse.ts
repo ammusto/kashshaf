@@ -241,10 +241,22 @@ export interface PassageArgs {
   exclude_same_book?: boolean;
 }
 
+export interface PhraseReport {
+  length: number;
+  queries: number;
+  skipped: number;
+  hits: number;
+  reaching: number;
+  exhausted: boolean;
+  anchors_too: boolean;
+}
+
 export interface PassageResult {
   run_id: number;
   params: ReuseParams;
   anchors: Anchor[];
+  /** Distinctive-phrase retrieval, in selection mode. */
+  phrase?: PhraseReport | null;
   candidates: number;
   tokens: number;
   non_banal: number;

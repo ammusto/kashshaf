@@ -1933,6 +1933,9 @@ pub struct PhraseReport {
     pub skipped: usize,
     /// Pages reached at that length.
     pub hits: usize,
+    /// Lookup phrases that reached at least one page: the distinctive
+    /// phrases of the selection, in the reader's terms.
+    pub reaching: usize,
     /// The descent stopped on the query budget before reaching a page.
     pub exhausted: bool,
     /// The anchors ran as well (always, in selection mode).
@@ -1988,10 +1991,15 @@ pub fn phrase_candidates(source: &dyn BookSource, tokens: &[Token], zones: &[Opt
                 rep.skipped += 1;
                 continue;
             }
+            let mut reached = false;
             for p in found.pages.into_iter().filter(keep) {
                 let e = hits.entry((p.book_id, p.part_index, p.page_id)).or_insert((p, 0, usize::MAX));
                 e.1 += 1;
                 e.2 = e.2.min(found.total);
+                reached = true;
+            }
+            if reached {
+                rep.reaching += 1;
             }
         }
         if !hits.is_empty() {

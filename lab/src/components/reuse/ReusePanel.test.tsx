@@ -257,6 +257,24 @@ describe('ReusePanel', () => {
     expect(screen.getByTestId('show-low')).toHaveTextContent('Hide 1 lower-confidence match');
   });
 
+  it('names the texts a famous passage appears in, and sorts them by the authors\' deaths', async () => {
+    // Thirty-one texts, deaths in reverse order of score: the header says
+    // how many, the sort puts the earliest author first.
+    const many = Array.from({ length: 31 }, (_, i) => ({
+      ...match(i + 1, 0.95 - i * 0.01, 'verbatim'),
+      target: { book_id: 100 + i, part_index: 0, page_id: 1 },
+      target_title: `كتاب ${i}`,
+      target_death_ah: 900 - i,
+    }));
+    api.reuse.passage.mockResolvedValue(passageResult(many));
+    render(<ReusePanel book={book} local />);
+    await findReuseOver(0, 8);
+    await waitFor(() => expect(screen.getByTestId('many-texts')).toHaveTextContent('This passage appears in 31 texts'));
+    expect(screen.getAllByTestId('reuse-row')[0]).toHaveTextContent('كتاب 0');
+    fireEvent.change(screen.getByLabelText('Sort matches'), { target: { value: 'death' } });
+    await waitFor(() => expect(screen.getAllByTestId('reuse-row')[0]).toHaveTextContent('كتاب 30'));
+  });
+
   it('reads a target span that runs over a page break as one passage', async () => {
     // A quotation split by the printer is still one quotation. The match
     // names both pages, the words come from both, and the break is marked

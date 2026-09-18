@@ -432,6 +432,8 @@ pub struct PassageResult {
     pub cancelled: bool,
     /// `lemma-slop` / `surface` when the whole passage was the query.
     pub fallback: Option<&'static str>,
+    /// What phrase retrieval did, in selection mode.
+    pub phrase: Option<reuse::PhraseReport>,
 }
 
 /// §4.3 single-passage mode on `[tok_start, tok_end)` of one page. Works in
@@ -523,6 +525,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
             elapsed_ms: started.elapsed().as_millis() as u64,
             cancelled,
             fallback: run.fallback,
+            phrase: run.phrase,
         })
     })
     .await

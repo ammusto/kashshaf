@@ -81,6 +81,10 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
   // same mechanism as the formulaic type.
   const [showLow, setShowLow] = useState(false);
   const [showProbable, setShowProbable] = useState(false);
+  const [messageDetail, setMessageDetail] = useState<string | null>(null);
+  // A passage found in many texts reads as a transmission history when
+  // the list is in order of the authors' deaths.
+  const [sortBy, setSortBy] = useState<'score' | 'death'>('score');
   const [gear, setGear] = useState(false);
 
   const [section, setSection] = useState<TocRow | null>(null);
@@ -153,9 +157,11 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
         setBookRun(null);
         setShownRun(r.run_id);
         setMatches(r.matches);
-        setMessage(
-          `${r.matches.length} matches over ${r.candidates.toLocaleString()} candidate pages · ${r.non_banal}/${r.tokens} non-banal words · ${r.elapsed_ms} ms`
-        );
+        // The reader's terms: phrases that reached a page, and matches. The
+        // candidate count is implementation detail, kept in the tooltip.
+        const phrases = (r.phrase?.reaching ?? 0) + r.anchors.length;
+        setMessage(`${r.matches.length} matches · ${phrases} distinctive ${phrases === 1 ? 'phrase' : 'phrases'} · ${r.elapsed_ms} ms`);
+        setMessageDetail(`${r.candidates.toLocaleString()} candidate pages read · ${r.non_banal}/${r.tokens} non-banal words`);
         setRuns(await reuseApi.runs(bookId));
       } catch (e) {
         setError(String(e));
@@ -297,9 +303,14 @@ export function ReusePanel({ book, local, from, onChanged }: Props) {
     () =>
       matches
         .filter((m) => m.score >= threshold && typeFilter.has(m.kind))
-        .sort((a, b) => b.score - a.score || (a.target_title ?? '').localeCompare(b.target_title ?? '', 'ar') || typeRank(a.kind) - typeRank(b.kind)),
-    [matches, threshold, typeFilter]
+        .sort((a, b) =>
+          sortBy === 'death'
+            ? (a.target_death_ah ?? Number.MAX_SAFE_INTEGER) - (b.target_death_ah ?? Number.MAX_SAFE_INTEGER) || b.score - a.score
+            : b.score - a.score || (a.target_title ?? '').localeCompare(b.target_title ?? '', 'ar') || typeRank(a.kind) - typeRank(b.kind)
+        ),
+    [matches, threshold, typeFilter, sortBy]
   );
+  const textsMatched = useMemo(() => new Set(visible.map((m) => m.target.book_id)).size, [visible]);
   // The default view's cutoff, per mode, from the shown run's settings. A
   // threshold the reader has dragged under the run's own is an explicit
   // ask for more, and the line follows it.
@@ -522,7 +533,9 @@ async function loadSpan(bookId: number, from: { part_index: number; page_id: num
           onPause={pause}
           onCancel={cancel}
         />
-        <Notice error={error} message={message} />
+        <div title={messageDetail ?? undefined} data-testid="run-status">
+          <Notice error={error} message={message} />
+        </div>
 
         {open && targetBook ? (
           <>
@@ -550,6 +563,18 @@ async function loadSpan(bookId: number, from: { part_index: number; page_id: num
           </>
         ) : (
           <div className="flex-1 min-h-0 flex flex-col">
+            {!bookRun && textsMatched > 30 && (
+              <div className="flex items-center gap-3 px-2 py-1 text-sm border-b border-app-border-light" data-testid="many-texts">
+                <span>This passage appears in {textsMatched} texts</span>
+                <label className="text-xs text-app-text-secondary flex items-center gap-1">
+                  sort by
+                  <select value={sortBy} onChange={(e) => setSortBy(e.target.value as 'score' | 'death')} aria-label="Sort matches" className="border border-app-border-medium rounded px-1">
+                    <option value="score">score</option>
+                    <option value="death">author's death</option>
+                  </select>
+                </label>
+              </div>
+            )}
             {bookRun && aggregates.length > 0 && (
               <div className="border-b border-app-border-light">
                 <VirtualTable
