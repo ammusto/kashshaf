@@ -314,7 +314,7 @@ export function Reader({
           if (paneRef) paneRef.current = el;
         }}
         onScroll={onScroll ? (e) => onScroll((e.target as HTMLDivElement).scrollTop) : undefined}
-        className="flex-1 overflow-y-auto px-8 py-6"
+        className="flex-1 overflow-y-auto bg-app-bg px-8 py-6"
         data-testid="reader-pane"
         onClick={(e) => {
           if (e.target === e.currentTarget) clearAll();
@@ -322,8 +322,17 @@ export function Reader({
       >
         {loading && !page && <div className="text-sm text-app-text-secondary">Loading page…</div>}
         {page && (
+          /* The page is drawn as a page: a card on the app background, with
+             the printed number in its own header (spec 1.5 C1). */
+          <article className="max-w-3xl mx-auto bg-app-surface border border-app-border-light rounded-lg shadow-app-sm overflow-hidden">
+            <header className="flex items-center justify-end px-8 py-2 border-b border-app-border-light bg-app-surface-variant select-none">
+              <span className="text-xs text-app-text-secondary tabular-nums">
+                {(labels ?? Pages.empty()).label(page.part_index, page.page_id)}
+              </span>
+            </header>
+            <div className="px-8 py-6">
           <div
-            className="arabic page-body text-2xl select-text max-w-3xl mx-auto break-words"
+            className="arabic page-body text-2xl select-text break-words"
             dir="rtl"
             onMouseLeave={() => { anchor.current = null; }}
             data-testid="page-body"
@@ -375,6 +384,8 @@ export function Reader({
               )
             )}
           </div>
+            </div>
+          </article>
         )}
         {!page && !loading && !error && (
           <div className="text-sm text-app-text-secondary">Choose a book to read.</div>
