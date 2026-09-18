@@ -176,6 +176,7 @@ impl TokenCache {
 
     /// Decode a raw page blob with this database's codec.
     pub fn decode(&self, encoding: i64, blob: &[u8]) -> Result<Vec<u32>> {
+        let _t = prof::Timer(&prof::DECODE_NS, std::time::Instant::now());
         decode_blob(encoding, blob, self.codec.as_ref())
     }
 
@@ -394,10 +395,16 @@ impl TokenCache {
     /// Fully resolved tokens for a page (cached). Missing page -> empty.
     pub fn get(&self, key: &PageKey) -> Result<Arc<Vec<Token>>> {
         if let Some(tokens) = self.tokens.lock().unwrap().get(key) {
+            prof::HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(Arc::clone(tokens));
         }
+        prof::MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let t0 = std::time::Instant::now();
         let ids = self.get_ids(key)?;
+        prof::IDS_NS.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        let t1 = std::time::Instant::now();
         let tokens = Arc::new(self.resolve_tokens(&ids)?);
+        prof::RESOLVE_NS.fetch_add(t1.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         self.tokens.lock().unwrap().put(*key, Arc::clone(&tokens));
         Ok(tokens)
     }
@@ -409,9 +416,16 @@ impl TokenCache {
         if token_ids.is_empty() {
             return Ok(Vec::new());
         }
+        let t0 = std::time::Instant::now();
         let conn = self.open()?;
+        prof::OPEN_NS.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        let t1 = std::time::Instant::now();
         let defs = self.fetch_definitions(&conn, token_ids)?;
-        Ok(self.tokens_from_defs(token_ids, &defs))
+        prof::DEFS_NS.fetch_add(t1.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        let t2 = std::time::Instant::now();
+        let out = self.tokens_from_defs(token_ids, &defs);
+        prof::BUILD_NS.fetch_add(t2.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        Ok(out)
     }
 
     /// Build the `Token`s for one page from already-fetched definitions.
@@ -661,3 +675,43 @@ impl TokenCache {
         Ok(positions)
     }
 }
+
+/// Where a page fetch spends its time, as process-wide counters: cheap
+/// enough to leave on, read by `lab-cli --profile`.
+pub mod prof {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    pub static HITS: AtomicU64 = AtomicU64::new(0);
+    pub static MISSES: AtomicU64 = AtomicU64::new(0);
+    /// Raw page fetch from SQLite (inside `get_ids`, decode included).
+    pub static IDS_NS: AtomicU64 = AtomicU64::new(0);
+    /// The zstd/varint decode alone.
+    pub static DECODE_NS: AtomicU64 = AtomicU64::new(0);
+    /// Opening a connection for the definitions.
+    pub static OPEN_NS: AtomicU64 = AtomicU64::new(0);
+    /// The definitions query.
+    pub static DEFS_NS: AtomicU64 = AtomicU64::new(0);
+    /// Building `Token`s from them.
+    pub static BUILD_NS: AtomicU64 = AtomicU64::new(0);
+    /// `get_ids` and `resolve_tokens` together.
+    pub static RESOLVE_NS: AtomicU64 = AtomicU64::new(0);
+
+    pub struct Timer<'a>(pub &'a AtomicU64, pub std::time::Instant);
+    impl Drop for Timer<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(self.1.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+    }
+
+    pub fn reset() {
+        for c in [&HITS, &MISSES, &IDS_NS, &DECODE_NS, &OPEN_NS, &DEFS_NS, &BUILD_NS, &RESOLVE_NS] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// (hits, misses, ids ms, decode ms, open ms, defs ms, build ms).
+    pub fn snapshot() -> (u64, u64, f64, f64, f64, f64, f64) {
+        let ms = |c: &AtomicU64| c.load(Ordering::Relaxed) as f64 / 1e6;
+        (HITS.load(Ordering::Relaxed), MISSES.load(Ordering::Relaxed), ms(&IDS_NS), ms(&DECODE_NS), ms(&OPEN_NS), ms(&DEFS_NS), ms(&BUILD_NS))
+    }
+}
+

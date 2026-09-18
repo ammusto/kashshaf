@@ -19,6 +19,9 @@
 //! lab-cli reuse-trace [--corpus DIR] --book ID --spans FILE [--selection] [--phrase] [--full] [--rare-one-df N] [--jsonl FILE]
 //! lab-cli isnad-scan  [--corpus DIR] --book ID [--from PAGE] [--to PAGE] [--groups core,sama,…] [--show] [--jsonl FILE]
 //! lab-cli index-bench [--corpus DIR] --books N [--grams 2,3]
+//! lab-cli locate      [--corpus DIR] --phrase "words" [--limit N]
+//!
+//! `--profile` on reuse-find and reuse-trace prints where the time went.
 //! ```
 //!
 //! `--corpus` defaults to `KASHSHAF_SAMPLE_DIR`, then Kashshaf's data
@@ -512,6 +515,7 @@ fn reuse_find(args: &[String]) -> Result<()> {
     // dropped by the merged re-score (alignments, before the page merge).
     let mut tally = [0usize; 6];
     let (mut gate_dropped, mut validate_dropped) = (0usize, 0usize);
+    reuse::prof::reset();
 
     for w in &wins {
         let mut pages: Vec<Page> = Vec::new();
@@ -548,6 +552,9 @@ fn reuse_find(args: &[String]) -> Result<()> {
     }
     if jsonl.is_some() {
         println!("{} matches in {} ms", found, started.elapsed().as_millis());
+    }
+    if args.iter().any(|a| a == "--profile") {
+        println!("-- profile:\n{}", reuse::prof::report());
     }
     println!(
         "accounting: shown {} (by default {}, probable {} at {:.2}-{:.2}, lower-confidence {} under {:.2}) | hidden as formulaic {} | below threshold {} | over the page limit {} (merged rows); gate dropped {} | merged re-score dropped {} (alignments)",
@@ -598,6 +605,7 @@ fn emit_page(
         }
         kept += 1;
         tally[0] += 1;
+        let _t_st = reuse::prof::timer(&reuse::prof::STORE_NS);
         if m.score < p.view_probable() {
             tally[5] += 1;
         } else if m.score < p.view_cutoff() {
@@ -666,6 +674,8 @@ fn reuse_trace(args: &[String]) -> Result<()> {
     // `--full` also runs the whole passage mode on the query, timed, and
     // reports what else it found: the false positives a reader would see.
     let full = args.iter().any(|a| a == "--full");
+    let profile = args.iter().any(|a| a == "--profile");
+    reuse::prof::reset();
     let mut out = match arg(args, "--jsonl") {
         Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p)?)),
         None => None,
@@ -841,6 +851,10 @@ fn reuse_trace(args: &[String]) -> Result<()> {
             }
         }
 
+        if profile {
+            println!("-- profile, row {}:\n{}", row, reuse::prof::report());
+            reuse::prof::reset();
+        }
         let record = serde_json::json!({
             "row": row,
             "retrieval_ms": retrieval_ms,
@@ -1060,6 +1074,7 @@ fn main() -> Result<()> {
         Some("reuse-trace") => reuse_trace(&args[1..]),
         Some("isnad-scan") => isnad_scan(&args[1..]),
         Some("index-bench") => index_bench(&args[1..]),
+        Some("locate") => locate(&args[1..]),
         Some("quran-scan") => quran_scan(&args[1..]),
         _ => {
             eprintln!("usage: lab-cli reuse-eval|reuse-find|quran-scan [options]  (see the module doc)");
@@ -1067,3 +1082,26 @@ fn main() -> Result<()> {
         }
     }
 }
+
+/// Where a phrase is in the corpus: the pages, and the token offset of its
+/// first word on each, as a spans line `reuse-trace` reads.
+fn locate(args: &[String]) -> Result<()> {
+    let ctx = Ctx::open(args)?;
+    let phrase = arg(args, "--phrase").ok_or_else(|| anyhow!("--phrase \"words\""))?;
+    let limit: usize = arg(args, "--limit").map(|s| s.parse()).transpose()?.unwrap_or(10);
+    let words: Vec<String> = phrase.split_whitespace().map(kashshaf_engine::normalize_arabic).collect();
+    let q = kashshaf_lab_lib::source::CandidateQuery { layer: kashshaf_lab_lib::source::Layer::Surface, terms: words.clone(), limit, slop: 0, book_ids: None };
+    let hits = ctx.source.find_pages(&q)?;
+    println!("{} pages hold the surface phrase; first {}:", hits.total, hits.pages.len());
+    for r in &hits.pages {
+        let Some(pg) = ctx.load(r)? else { continue };
+        let norm: Vec<String> = pg.tokens.iter().map(|t| kashshaf_engine::normalize_arabic(&t.surface)).collect();
+        let at = (0..norm.len().saturating_sub(words.len() - 1)).find(|&i| norm[i..i + words.len()] == words[..]);
+        match at {
+            Some(i) => println!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\tbook {} ({} tokens on the page)", r.part_index, r.page_id, i, i + words.len(), 0, 0, 0, 0, r.book_id, pg.tokens.len()),
+            None => println!("book {} {}:{}: phrase found by the index but not as consecutive surfaces", r.book_id, r.part_index, r.page_id),
+        }
+    }
+    Ok(())
+}
+

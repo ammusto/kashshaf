@@ -828,6 +828,72 @@ fn rank_value(rank: u32) -> u64 {
     if rank == u32::MAX { 10_000_000 } else { rank as u64 }
 }
 
+// ------------------------------------------------------------- profiling ---
+
+/// Where a run spends its time, as process-wide counters. Instrumentation
+/// only; `lab-cli --profile` prints them.
+pub mod prof {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    pub static RETRIEVAL_NS: AtomicU64 = AtomicU64::new(0);
+    pub static NEIGHBOURS_NS: AtomicU64 = AtomicU64::new(0);
+    pub static LOAD_NS: AtomicU64 = AtomicU64::new(0);
+    pub static SEQ_NS: AtomicU64 = AtomicU64::new(0);
+    pub static ALIGN_NS: AtomicU64 = AtomicU64::new(0);
+    pub static SCORE_NS: AtomicU64 = AtomicU64::new(0);
+    pub static STORE_NS: AtomicU64 = AtomicU64::new(0);
+    /// Progress events to the webview, in the app.
+    pub static EMIT_NS: AtomicU64 = AtomicU64::new(0);
+    pub static CANDIDATES: AtomicU64 = AtomicU64::new(0);
+    pub static PAGES: AtomicU64 = AtomicU64::new(0);
+    pub static ALIGNMENTS: AtomicU64 = AtomicU64::new(0);
+
+    pub struct Timer<'a>(pub &'a AtomicU64, pub std::time::Instant);
+    impl Drop for Timer<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(self.1.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+    }
+    pub fn timer(c: &'static AtomicU64) -> Timer<'static> {
+        Timer(c, std::time::Instant::now())
+    }
+    pub fn count(c: &AtomicU64, n: u64) {
+        c.fetch_add(n, Ordering::Relaxed);
+    }
+    pub fn reset() {
+        for c in [&RETRIEVAL_NS, &NEIGHBOURS_NS, &LOAD_NS, &SEQ_NS, &ALIGN_NS, &SCORE_NS, &STORE_NS, &EMIT_NS, &CANDIDATES, &PAGES, &ALIGNMENTS] {
+            c.store(0, Ordering::Relaxed);
+        }
+        kashshaf_engine::cache::prof::reset();
+    }
+    /// A table of the counters, totals and per candidate page.
+    pub fn report() -> String {
+        let ms = |c: &AtomicU64| c.load(Ordering::Relaxed) as f64 / 1e6;
+        let cands = CANDIDATES.load(Ordering::Relaxed).max(1) as f64;
+        let pages = PAGES.load(Ordering::Relaxed);
+        let mut out = String::new();
+        out.push_str(&format!("  {:<28} {:>10} {:>12}\n", "stage", "total ms", "per cand ms"));
+        for (name, c) in [
+            ("retrieval (queries)", &RETRIEVAL_NS),
+            ("neighbours (page refs)", &NEIGHBOURS_NS),
+            ("page load (cache+sqlite)", &LOAD_NS),
+            ("target seq build", &SEQ_NS),
+            ("alignment", &ALIGN_NS),
+            ("scoring, typing, gate", &SCORE_NS),
+            ("storage", &STORE_NS),
+            ("progress events (app)", &EMIT_NS),
+        ] {
+            out.push_str(&format!("  {:<28} {:>10.1} {:>12.2}\n", name, ms(c), ms(c) / cands));
+        }
+        let (hits, misses, ids, decode, open, defs, build) = kashshaf_engine::cache::prof::snapshot();
+        out.push_str(&format!(
+            "  candidates {}, pages loaded {}, alignments {}; token cache: {} hits, {} misses; per miss: ids+decode {:.2} ms (decode {:.2}), open conn {:.2}, definitions query {:.2}, build tokens {:.2}\n",
+            CANDIDATES.load(Ordering::Relaxed), pages, ALIGNMENTS.load(Ordering::Relaxed), hits, misses,
+            ids / misses.max(1) as f64, decode / misses.max(1) as f64, open / misses.max(1) as f64, defs / misses.max(1) as f64, build / misses.max(1) as f64
+        ));
+        out
+    }
+}
+
 // ---------------------------------------------------------- the book index ---
 
 /// Every lemma n-gram of one book, and the pages holding it.
@@ -1900,6 +1966,7 @@ pub fn passage(
     // every n-gram of the window is looked up in the book held in memory.
     // Anchors are still computed, because the run report shows them and
     // because a passage with no usable anchor is worth seeing either way.
+    let t_ret = prof::timer(&prof::RETRIEVAL_NS);
     let anchors = anchors(&q, tokens, params, count)?;
     let mut phrase = None;
     let mut cands = match index.filter(|_| params.exhaustive()) {
@@ -1935,16 +2002,30 @@ pub fn passage(
             cands.truncate(params.max_candidates.max(1));
         }
     }
+    drop(t_ret);
+    prof::count(&prof::CANDIDATES, cands.len() as u64);
     let mut matches = Vec::new();
     let (mut discarded, mut validate_dropped) = (0usize, 0usize);
     for c in &cands {
         if cancel() {
             break;
         }
+        let t_n = prof::timer(&prof::NEIGHBOURS_NS);
         let refs = if params.target_neighbours > 0 { neighbours(&c.page, params.target_neighbours)? } else { vec![c.page] };
+        drop(t_n);
+        let t_l = prof::timer(&prof::LOAD_NS);
         let Some(span) = TargetSpan::load(&refs, &c.page, load)? else { continue };
+        drop(t_l);
+        prof::count(&prof::PAGES, span.pages.len() as u64);
+        let t_s = prof::timer(&prof::SEQ_NS);
         let t = Seq::build(&span.tokens, &mut intern, freq, params, banal_phrases, &[]);
-        for al in align_all_upto(&q, &t, params, MAX_ALIGNMENTS_PER_PAGE * span.pages.len()) {
+        drop(t_s);
+        let t_a = prof::timer(&prof::ALIGN_NS);
+        let als = align_all_upto(&q, &t, params, MAX_ALIGNMENTS_PER_PAGE * span.pages.len());
+        drop(t_a);
+        prof::count(&prof::ALIGNMENTS, als.len() as u64);
+        let _t_sc = prof::timer(&prof::SCORE_NS);
+        for al in als {
             // Each alignment is scored on itself, not on the window that
             // retrieved it. A window is a retrieval device: it decides which
             // pages are worth reading, and has no business in the score. Six

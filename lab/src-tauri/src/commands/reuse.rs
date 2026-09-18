@@ -458,6 +458,7 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
         }
         let zones = zones_for(&conn, &s, &page)?;
         h.cancel.store(false, Ordering::SeqCst);
+        reuse::prof::reset();
         let run_id = insert_run(&conn, h.source.corpus_version(), args.book_id, "passage", &s.params)?;
         let cache = PageCache::new(h.source.as_ref());
         let dfs = DfCache::new(h.source.as_ref());
@@ -465,7 +466,10 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
         let done = std::sync::atomic::AtomicU64::new(0);
         let load = |r: &PageRef| {
             let d = done.fetch_add(1, Ordering::Relaxed) + 1;
-            emit(&window, "align", d, 0, 0, started);
+            {
+                let _t = reuse::prof::timer(&reuse::prof::EMIT_NS);
+                emit(&window, "align", d, 0, 0, started);
+            }
             cache.get(r)
         };
         let around = |r: &PageRef, n: usize| cache.around(r, n);
@@ -489,13 +493,19 @@ pub async fn reuse_passage(window: Window, state: State<'_, ManagedLabState>, ar
         )
         .map_err(|e| LabError::Source(e.to_string()))?;
         let cancelled = cancel();
+        let t_store = reuse::prof::timer(&reuse::prof::STORE_NS);
         conn.execute_batch("BEGIN").map_err(dberr)?;
         let mut ids = Vec::with_capacity(run.matches.len());
         for m in &run.matches {
             ids.push(insert_match(&conn, run_id, h.source.corpus_version(), &page, m)?);
         }
         conn.execute_batch("COMMIT").map_err(dberr)?;
+        drop(t_store);
         finish_run(&conn, run_id, if cancelled { "cancelled" } else { "done" })?;
+        // Where the time went, appended to a log in the temp directory: the
+        // CLI's profile of the same passage does not reproduce the app's
+        // wall time, and this is how the difference is read.
+        profile_log("passage", started.elapsed().as_millis(), &reuse::prof::report());
         let mut matches = read_matches(&conn, &format!("SELECT {} FROM reuse_match WHERE run_id = ?1 ORDER BY score DESC, aligned DESC", MATCH_COLUMNS), &[&run_id])?;
         with_titles(h.source.as_ref(), &mut matches);
         Ok(PassageResult {
@@ -1014,3 +1024,15 @@ pub async fn reuse_export(state: State<'_, ManagedLabState>, run_id: i64, format
     })
     .await
 }
+
+/// Append a profile report to `kashshaf-lab-reuse-profile.log` in the temp
+/// directory. Best effort; never fails the run.
+fn profile_log(what: &str, wall_ms: u128, report: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("kashshaf-lab-reuse-profile.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "== {} at {:?}: wall {} ms
+{}", what, std::time::SystemTime::now(), wall_ms, report);
+    }
+}
+
