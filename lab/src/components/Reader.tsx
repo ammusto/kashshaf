@@ -263,20 +263,21 @@ export function Reader({
     <div className="flex flex-col h-full">
       {toolbar ?? (
       <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-app-border-light bg-app-surface">
+        {/* RTL: the next page is to the left, the previous to the right. */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => onNavigate(index - 1)}
-            disabled={!canPrev || loading}
-            className="px-2 py-1 text-sm border border-app-border-medium rounded disabled:opacity-40"
-          >
-            ‹ Prev
-          </button>
           <button
             onClick={() => onNavigate(index + 1)}
             disabled={!canNext || loading}
             className="px-2 py-1 text-sm border border-app-border-medium rounded disabled:opacity-40"
           >
-            Next ›
+            ‹ Next
+          </button>
+          <button
+            onClick={() => onNavigate(index - 1)}
+            disabled={!canPrev || loading}
+            className="px-2 py-1 text-sm border border-app-border-medium rounded disabled:opacity-40"
+          >
+            Prev ›
           </button>
         </div>
         <div className="text-xs text-app-text-secondary" data-testid="page-locator">

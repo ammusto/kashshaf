@@ -347,22 +347,25 @@ export function ReaderPanel({ currentPage, tokens, onNavigate, onNavigateToLabel
             </button>
           </div>
         )}
+        {/* The text is RTL, so the next page lies to the left and the
+            previous to the right. The arrows point the way the reader
+            moves, not the way a Latin page turns. */}
         <div className="flex gap-2 flex-shrink-0">
-          <button
-            onClick={() => onNavigate(-1)}
-            className="px-2 py-2 bg-app-surface-variant rounded-md text-xs font-medium
-                     hover:bg-app-accent-light hover:text-app-accent transition-colors
-                     border border-app-border-light"
-          >
-            ← Prev
-          </button>
           <button
             onClick={() => onNavigate(1)}
             className="px-2 py-2 bg-app-surface-variant rounded-md text-xs font-medium
                      hover:bg-app-accent-light hover:text-app-accent transition-colors
                      border border-app-border-light"
           >
-            Next →
+            ← Next
+          </button>
+          <button
+            onClick={() => onNavigate(-1)}
+            className="px-2 py-2 bg-app-surface-variant rounded-md text-xs font-medium
+                     hover:bg-app-accent-light hover:text-app-accent transition-colors
+                     border border-app-border-light"
+          >
+            Prev →
           </button>
         </div>
       </div>

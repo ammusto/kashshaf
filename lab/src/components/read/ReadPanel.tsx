@@ -499,12 +499,13 @@ export function ReadPanel({
 
   const toolbar = (
     <div className="flex items-center gap-3 px-3 py-1.5 border-b border-app-border-light bg-app-surface text-xs">
+      {/* RTL: the next page is to the left, the previous to the right. */}
       <button
-        onClick={() => void go(index - 1)}
-        disabled={index <= 0 || loading}
+        onClick={() => void go(index + 1)}
+        disabled={index >= pages.length - 1 || loading}
         className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
       >
-        ‹ Prev
+        ‹ Next
       </button>
       <form
         className="flex items-center gap-1"
@@ -536,11 +537,11 @@ export function ReadPanel({
         </button>
       </form>
       <button
-        onClick={() => void go(index + 1)}
-        disabled={index >= pages.length - 1 || loading}
+        onClick={() => void go(index - 1)}
+        disabled={index <= 0 || loading}
         className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
       >
-        Next ›
+        Prev ›
       </button>
 
       {currentEntry?.title ? (
