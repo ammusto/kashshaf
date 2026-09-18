@@ -45,6 +45,7 @@ use kashshaf_engine::normalize_arabic;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// How candidate pages are found.
 ///
@@ -404,6 +405,11 @@ pub struct Params {
     /// that at that price.
     pub single_phrase_df_max: usize,
     pub single_gram_pages_max: usize,
+    /// Tokens either side of the retrieval hit within which the page before
+    /// or after is read as well (40). A hit further from an edge than this
+    /// aligns against its own page, and the neighbour is read only if the
+    /// alignment then reaches that edge. 0 reads both neighbours always.
+    pub hit_margin: usize,
     pub target_neighbours: usize,
 }
 
@@ -463,6 +469,7 @@ impl Default for Params {
             selection_min_aligned: 5,
             single_phrase_df_max: 0,
             single_gram_pages_max: 0,
+            hit_margin: 40,
             target_books: Vec::new(),
             retrieval: RetrievalMode::Corpus,
             exhaustive_max_books: 50,
@@ -552,12 +559,22 @@ impl Zone {
 #[derive(Default)]
 pub struct Interner {
     map: HashMap<String, u32>,
+    /// A lemma's frequency rank, looked up once per run and kept by id.
+    ranks: HashMap<u32, u32>,
 }
 
 impl Interner {
     pub fn id(&mut self, s: &str) -> u32 {
         let n = self.map.len() as u32;
         *self.map.entry(s.to_string()).or_insert(n)
+    }
+
+    /// The id and rank of a lemma: the frequency table is asked once per
+    /// distinct lemma per run, not once per token per span.
+    pub fn id_rank(&mut self, s: &str, freq: &FreqTable) -> (u32, u32) {
+        let id = self.id(s);
+        let rank = *self.ranks.entry(id).or_insert_with(|| freq.get(s).rank.unwrap_or(u32::MAX));
+        (id, rank)
     }
 
     /// The id of a string already interned, if any.
@@ -608,10 +625,13 @@ impl Seq {
         };
         let norm: Vec<String> = tokens.iter().map(|t| normalize_arabic(&t.surface)).collect();
         for (i, t) in tokens.iter().enumerate() {
-            s.lemma.push(if t.lemma.is_empty() { None } else { Some(intern.id(&t.lemma)) });
+            let (lemma_id, rank) = if t.lemma.is_empty() { (None, u32::MAX) } else {
+                let (id, rank) = intern.id_rank(&t.lemma, freq);
+                (Some(id), rank)
+            };
+            s.lemma.push(lemma_id);
             s.root.push(t.root.as_deref().filter(|r| !r.is_empty()).map(|r| intern.id(r)));
             s.surface.push(intern.id(&norm[i]));
-            let rank = if t.lemma.is_empty() { u32::MAX } else { freq.get(&t.lemma).rank.unwrap_or(u32::MAX) };
             s.rank.push(rank);
             s.banal[i] = rank <= params.banality_rank;
         }
@@ -866,6 +886,8 @@ pub mod prof {
     pub static EMIT_NS: AtomicU64 = AtomicU64::new(0);
     pub static CANDIDATES: AtomicU64 = AtomicU64::new(0);
     pub static SINGLE_DROPPED: AtomicU64 = AtomicU64::new(0);
+    /// Candidates whose trimmed span had to be widened after alignment.
+    pub static EXTENDED: AtomicU64 = AtomicU64::new(0);
     pub static PAGES: AtomicU64 = AtomicU64::new(0);
     pub static ALIGNMENTS: AtomicU64 = AtomicU64::new(0);
 
@@ -882,7 +904,7 @@ pub mod prof {
         c.fetch_add(n, Ordering::Relaxed);
     }
     pub fn reset() {
-        for c in [&RETRIEVAL_NS, &NEIGHBOURS_NS, &LOAD_NS, &SEQ_NS, &ALIGN_NS, &SCORE_NS, &STORE_NS, &EMIT_NS, &CANDIDATES, &SINGLE_DROPPED, &PAGES, &ALIGNMENTS] {
+        for c in [&RETRIEVAL_NS, &NEIGHBOURS_NS, &LOAD_NS, &SEQ_NS, &ALIGN_NS, &SCORE_NS, &STORE_NS, &EMIT_NS, &CANDIDATES, &SINGLE_DROPPED, &EXTENDED, &PAGES, &ALIGNMENTS] {
             c.store(0, Ordering::Relaxed);
         }
         kashshaf_engine::cache::prof::reset();
@@ -908,8 +930,8 @@ pub mod prof {
         }
         let (hits, misses, ids, decode, open, defs, build) = kashshaf_engine::cache::prof::snapshot();
         out.push_str(&format!(
-            "  candidates {} (single-common dropped {}), pages loaded {}, alignments {}; token cache: {} hits, {} misses; per miss: ids+decode {:.2} ms (decode {:.2}), open conn {:.2}, definitions query {:.2}, build tokens {:.2}\n",
-            CANDIDATES.load(Ordering::Relaxed), SINGLE_DROPPED.load(Ordering::Relaxed), pages, ALIGNMENTS.load(Ordering::Relaxed), hits, misses,
+            "  candidates {} (single-common dropped {}, spans widened after alignment {}), pages in spans {}, alignments {}; token cache: {} hits, {} misses; per miss: ids+decode {:.2} ms (decode {:.2}), open conn {:.2}, definitions query {:.2}, build tokens {:.2}\n",
+            CANDIDATES.load(Ordering::Relaxed), SINGLE_DROPPED.load(Ordering::Relaxed), EXTENDED.load(Ordering::Relaxed), pages, ALIGNMENTS.load(Ordering::Relaxed), hits, misses,
             ids / misses.max(1) as f64, decode / misses.max(1) as f64, open / misses.max(1) as f64, defs / misses.max(1) as f64, build / misses.max(1) as f64
         ));
         out
@@ -939,6 +961,9 @@ pub struct BookIndex {
     root: HashMap<u64, Vec<u32>>,
     pub three_layer: bool,
     page_of: HashMap<(u64, u32, u64), u32>,
+    /// The pages themselves, when the run holds them: loaded once for the
+    /// index, served from here for alignment instead of fetched again.
+    held: HashMap<(u64, u32, u64), Arc<Page>>,
 }
 
 /// Which layers of the target page hold a span's n-grams: counts over the
@@ -1076,6 +1101,23 @@ impl BookIndex {
     /// Roughly what it occupies, for the run report.
     pub fn bytes(&self) -> usize {
         (self.grams.len() + self.surface.len() + self.root.len()) * (8 + 24) + self.postings * 4 + self.pages.len() * 16
+    }
+
+    /// Keep the pages for the run.
+    pub fn hold(&mut self, pages: Vec<Page>) {
+        for p in pages {
+            self.held.insert((p.book_id, p.part_index, p.page_id), Arc::new(p));
+        }
+    }
+
+    /// A held page, shared.
+    pub fn held_page(&self, r: &PageRef) -> Option<Arc<Page>> {
+        self.held.get(&(r.book_id, r.part_index, r.page_id)).cloned()
+    }
+
+    /// Tokens held, for the report.
+    pub fn held_tokens(&self) -> usize {
+        self.held.values().map(|p| p.tokens.len()).sum()
     }
 
     /// The index's own number for a page it holds.
@@ -1539,7 +1581,7 @@ impl TargetSpan {
     /// Load `refs` in order, keeping only the run that contains `center`: a
     /// page that will not load is a hole, and a stream with a hole in it
     /// would align across text that is not there.
-    pub fn load(refs: &[PageRef], center: &PageRef, load: &dyn Fn(&PageRef) -> Result<Option<Page>>) -> Result<Option<Self>> {
+    pub fn load(refs: &[PageRef], center: &PageRef, load: &dyn Fn(&PageRef) -> Result<Option<Arc<Page>>>) -> Result<Option<Self>> {
         let mut span = TargetSpan { pages: Vec::new(), starts: Vec::new(), tokens: Vec::new() };
         for r in refs {
             match load(r)? {
@@ -1993,7 +2035,7 @@ pub fn passage(
     zones: &[Option<Zone>],
     exclude_book: Option<u64>,
     count: &dyn Fn(&[String]) -> Result<usize>,
-    load: &dyn Fn(&PageRef) -> Result<Option<Page>>,
+    load: &dyn Fn(&PageRef) -> Result<Option<Arc<Page>>>,
     neighbours: &dyn Fn(&PageRef, usize) -> Result<Vec<PageRef>>,
     // The target book read into memory, when the run is exhaustive.
     index: Option<&BookIndex>,
@@ -2021,7 +2063,13 @@ pub fn passage(
     // Anchors are still computed, because the run report shows them and
     // because a passage with no usable anchor is worth seeing either way.
     let t_ret = prof::timer(&prof::RETRIEVAL_NS);
-    let anchors = anchors(&q, tokens, params, count)?;
+    // Exhaustive mode looks every n-gram up in the book held in memory and
+    // uses no anchor; computing them was 90% of its time.
+    let anchors = if params.exhaustive() { Vec::new() } else { anchors(&q, tokens, params, count)? };
+    // The banality exemption for a passage chosen whole, or one no anchor
+    // reaches -- the latter a corpus-mode fact, since exhaustive mode has
+    // no anchors to be short of.
+    let whole_passage = tokens.len() < params.fallback_max_tokens || (!params.exhaustive() && anchors.is_empty());
     let mut phrase = None;
     let mut cands = match index.filter(|_| params.exhaustive()) {
         Some(ix) => ix.candidates(tokens, &own, params, count)?,
@@ -2066,25 +2114,105 @@ pub fn passage(
     }
     drop(t_ret);
     prof::count(&prof::CANDIDATES, cands.len() as u64);
+    // A page the run holds is served from memory; anything else is fetched.
+    let load_here = |r: &PageRef| -> Result<Option<Arc<Page>>> {
+        if let Some(p) = index.and_then(|ix| ix.held_page(r)) {
+            return Ok(Some(p));
+        }
+        load(r)
+    };
+    // The query's lemma bigrams and trigrams, to find where on a candidate
+    // page the retrieval hit is.
+    let q_keys: std::collections::HashSet<u64> = {
+        let lemmas: Vec<&str> = tokens.iter().map(|t| t.lemma.as_str()).collect();
+        let mut keys = std::collections::HashSet::new();
+        for n in [2usize, 3] {
+            if lemmas.len() >= n {
+                for i in 0..=lemmas.len() - n {
+                    if !lemmas[i..i + n].iter().any(|l| l.is_empty()) {
+                        keys.insert(gram_key(&lemmas[i..i + n]));
+                    }
+                }
+            }
+        }
+        keys
+    };
     let mut matches = Vec::new();
     let (mut discarded, mut validate_dropped) = (0usize, 0usize);
     for c in &cands {
         if cancel() {
             break;
         }
-        let t_n = prof::timer(&prof::NEIGHBOURS_NS);
-        let refs = if params.target_neighbours > 0 { neighbours(&c.page, params.target_neighbours)? } else { vec![c.page] };
-        drop(t_n);
+        // The hit's neighbourhood: where the query's n-grams sit on the
+        // candidate page decides whether the page before or after is
+        // needed. A page whose hits are not found (a root- or surface-layer
+        // hit, or an anchor with slop) is read with both, as before.
         let t_l = prof::timer(&prof::LOAD_NS);
-        let Some(span) = TargetSpan::load(&refs, &c.page, load)? else { continue };
+        let Some(centre) = load_here(&c.page)? else { continue };
         drop(t_l);
-        prof::count(&prof::PAGES, span.pages.len() as u64);
+        let (mut need_before, mut need_after) = (true, true);
+        if params.target_neighbours > 0 && params.hit_margin > 0 {
+            let lemmas: Vec<&str> = centre.tokens.iter().map(|t| t.lemma.as_str()).collect();
+            let (mut lo, mut hi) = (usize::MAX, 0usize);
+            for n in [2usize, 3] {
+                if lemmas.len() >= n {
+                    for i in 0..=lemmas.len() - n {
+                        if q_keys.contains(&gram_key(&lemmas[i..i + n])) {
+                            lo = lo.min(i);
+                            hi = hi.max(i + n);
+                        }
+                    }
+                }
+            }
+            if lo != usize::MAX {
+                need_before = lo < params.hit_margin;
+                need_after = hi + params.hit_margin > lemmas.len();
+            }
+        }
+        let mut refs_for = |before: bool, after: bool| -> Result<Vec<PageRef>> {
+            if params.target_neighbours == 0 || !(before || after) {
+                return Ok(vec![c.page]);
+            }
+            let _t_n = prof::timer(&prof::NEIGHBOURS_NS);
+            let all = neighbours(&c.page, params.target_neighbours)?;
+            let at = all.iter().position(|r| *r == c.page).unwrap_or(0);
+            let from = if before { 0 } else { at };
+            let to = if after { all.len() } else { at + 1 };
+            Ok(all[from..to].to_vec())
+        };
+        let mut refs = refs_for(need_before, need_after)?;
+        let t_l = prof::timer(&prof::LOAD_NS);
+        let Some(mut span) = TargetSpan::load(&refs, &c.page, &load_here)? else { continue };
+        drop(t_l);
         let t_s = prof::timer(&prof::SEQ_NS);
-        let t = Seq::build(&span.tokens, &mut intern, freq, params, banal_phrases, &[]);
+        let mut t = Seq::build(&span.tokens, &mut intern, freq, params, banal_phrases, &[]);
         drop(t_s);
         let t_a = prof::timer(&prof::ALIGN_NS);
-        let als = align_all_upto(&q, &t, params, MAX_ALIGNMENTS_PER_PAGE * span.pages.len());
+        let mut als = align_all_upto(&q, &t, params, MAX_ALIGNMENTS_PER_PAGE * span.pages.len());
         drop(t_a);
+        // An alignment that reaches the edge of a trimmed span may go on
+        // into the page not read: read it and align again.
+        if !(need_before && need_after) && params.target_neighbours > 0 {
+            let edge = 2usize;
+            let n_t = span.tokens.len();
+            let touches_start = !need_before && als.iter().any(|a| a.pairs.iter().map(|p| p.1).min().unwrap_or(n_t) < edge);
+            let touches_end = !need_after && als.iter().any(|a| a.pairs.iter().map(|p| p.1).max().unwrap_or(0) + 1 + edge > n_t);
+            if touches_start || touches_end {
+                prof::count(&prof::EXTENDED, 1);
+                refs = refs_for(need_before || touches_start, need_after || touches_end)?;
+                let t_l = prof::timer(&prof::LOAD_NS);
+                let Some(s2) = TargetSpan::load(&refs, &c.page, &load_here)? else { continue };
+                drop(t_l);
+                span = s2;
+                let t_s = prof::timer(&prof::SEQ_NS);
+                t = Seq::build(&span.tokens, &mut intern, freq, params, banal_phrases, &[]);
+                drop(t_s);
+                let t_a = prof::timer(&prof::ALIGN_NS);
+                als = align_all_upto(&q, &t, params, MAX_ALIGNMENTS_PER_PAGE * span.pages.len());
+                drop(t_a);
+            }
+        }
+        prof::count(&prof::PAGES, span.pages.len() as u64);
         prof::count(&prof::ALIGNMENTS, als.len() as u64);
         let _t_sc = prof::timer(&prof::SCORE_NS);
         for al in als {
@@ -2115,7 +2243,7 @@ pub fn passage(
             let q_hi = al.pairs.iter().map(|p| p.0).max().unwrap() + 1;
             let non_banal_span = q.banal[q_lo..q_hi].iter().filter(|b| !**b).count().max(1);
             let mut comp = components(&q, &t, &al.pairs, non_banal_span, params);
-            if tokens.len() < params.fallback_max_tokens || anchors.is_empty() {
+            if whole_passage {
                 // The user chose this short passage whole: the banality
                 // penalty, meant for chance overlaps of common words in a
                 // long window, would hide exactly what was asked for
@@ -2464,7 +2592,7 @@ mod tests {
         let twin = page(2, 0, 9, "", &format!("كتاب|كتاب {} كتاب|كتاب", words));
         let other = page(3, 0, 1, "", "من|من كتاب|كتاب اين|أين كتاب|كتاب");
         let fake = Fake { pages: vec![query.clone(), twin, other], calls: Mutex::new(vec![]) };
-        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id).map(|o| o.map(Arc::new));
         let count = |t: &[String]| phrase_df(&fake, t);
         let mut it = Interner::default();
         let s = Seq::build(&query.tokens[3..10], &mut it, &f, &p, &[], &[]);
@@ -2795,7 +2923,7 @@ mod tests {
         let tail = page(1, 0, 2, "", "به الابل و هو موضع سوق ثم رجع");
         let target = page(2, 0, 5, "", "قال ابو عبيد المربد كل شيء حبست به الابل و هو موضع سوق الابل");
         let fake = Fake { pages: vec![head.clone(), tail.clone(), target, page(2, 0, 4, "", "لا شيء هنا")], calls: Mutex::new(vec![]) };
-        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id).map(|o| o.map(Arc::new));
         let count = |t: &[String]| phrase_df(&fake, t);
         let pages = vec![head.clone(), tail];
         let lens: Vec<usize> = pages.iter().map(|x| x.tokens.len()).collect();
@@ -2838,7 +2966,7 @@ mod tests {
         let elsewhere = page(2, 0, 9, "", "لا شيء هنا");
         let head_len = head.tokens.len();
         let fake = Fake { pages: vec![query.clone(), elsewhere, head, tail], calls: Mutex::new(vec![]) };
-        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id).map(|o| o.map(Arc::new));
         let count = |t: &[String]| phrase_df(&fake, t);
         let refs: Vec<PageRef> = (9..=11).map(|g| PageRef { book_id: 2, part_index: 0, page_id: g }).collect();
         let around = |r: &PageRef, n: usize| Ok(span_around(&refs, r, n));
@@ -2871,7 +2999,7 @@ mod tests {
         let target = page(2, 0, 5, "", &format!("باب ما جاء في {} و هو موضع سوق", quote));
         let noise = page(2, 0, 6, "", "لا شيء هنا يذكر");
         let fake = Fake { pages: vec![query.clone(), target.clone(), noise.clone()], calls: Mutex::new(vec![]) };
-        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id).map(|o| o.map(Arc::new));
         let count = |t: &[String]| phrase_df(&fake, t);
 
         let ix = BookIndex::build(&[target.clone(), noise], &[2, 3]);
@@ -2949,7 +3077,7 @@ mod tests {
         let reuse = page(2, 0, 7, "", "قال و في مدينة الحكمة كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا ثم قال");
         let partial = page(3, 0, 2, "", "كتب الشيخ رسالة طويلة عن الزهد و الورع في الدنيا");
         let fake = Fake { pages: vec![query.clone(), reuse, partial], calls: Mutex::new(vec![]) };
-        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id).map(|o| o.map(Arc::new));
         let count = |t: &[String]| phrase_df(&fake, t);
         let base = Params { banality_rank: 2, anchors: 6, min_anchors: 3, banality_baseline: Some(0.3), ..Default::default() };
         let p = Params { target_books: vec![3], ..base.clone() };
@@ -3061,7 +3189,7 @@ mod tests {
         let noise = page(4, 0, 3, "", "لا شيء هنا يذكر عن مدينة");
         // Six trigram anchors and four bigram ones: the shipped default.
         let fake = Fake { pages: vec![query.clone(), reuse, partial, noise], calls: Mutex::new(vec![]) };
-        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id);
+        let load = |r: &PageRef| fake.page(r.book_id, r.part_index, r.page_id).map(|o| o.map(Arc::new));
         let count = |t: &[String]| phrase_df(&fake, t);
         let run = passage(&fake, &f, &p, &[], std::slice::from_ref(&query), 0..query.tokens.len(), &[], None, &count, &load, &alone, None, &|| false).unwrap();
         assert_eq!(run.anchors.len(), 10, "{:?}", run.anchors);

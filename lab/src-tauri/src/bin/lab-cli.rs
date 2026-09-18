@@ -103,7 +103,7 @@ struct Ctx {
     dfs: std::cell::RefCell<HashMap<Vec<String>, usize>>,
     /// Candidate pages and book page lists, so spanning does not re-read a
     /// neighbour once per candidate.
-    pages: std::cell::RefCell<HashMap<(u64, u32, u64), Option<Page>>>,
+    pages: std::cell::RefCell<HashMap<(u64, u32, u64), Option<std::sync::Arc<Page>>>>,
     refs: std::cell::RefCell<HashMap<u64, Vec<PageRef>>>,
     freq: std::sync::Arc<kashshaf_lab_lib::source::FreqTable>,
     params: Params,
@@ -199,6 +199,9 @@ impl Ctx {
         if let Some(r) = arg(args, "--phrase-df-cap") {
             params.phrase_df_cap = r.parse().context("--phrase-df-cap")?;
         }
+        if let Some(r) = arg(args, "--hit-margin") {
+            params.hit_margin = r.parse().context("--hit-margin")?;
+        }
         if let Some(r) = arg(args, "--single-df") {
             params.single_phrase_df_max = r.parse().context("--single-df")?;
         }
@@ -284,10 +287,11 @@ impl Ctx {
                 return Err(anyhow!("those texts hold {} tokens; the in-memory index is capped at {}", tokens, params.exhaustive_max_tokens));
             }
             let t0 = std::time::Instant::now();
-            let ix = reuse::BookIndex::build_layers(&pages, &params.exhaustive_grams, params.exhaustive_three_layer);
+            let mut ix = reuse::BookIndex::build_layers(&pages, &params.exhaustive_grams, params.exhaustive_three_layer);
+            ix.hold(pages);
             eprintln!(
-                "[exhaustive] {} pages, {} n-gram keys, {} postings, ~{:.1} MB, built in {} ms",
-                ix.pages(), ix.keys(), ix.postings, ix.bytes() as f64 / 1e6, t0.elapsed().as_millis()
+                "[exhaustive] {} pages, {} n-gram keys, {} postings, ~{:.1} MB, built in {} ms; {} tokens held for the run",
+                ix.pages(), ix.keys(), ix.postings, ix.bytes() as f64 / 1e6, t0.elapsed().as_millis(), ix.held_tokens()
             );
             Some(ix)
         } else {
@@ -333,11 +337,16 @@ impl Ctx {
     }
 
     fn load(&self, r: &PageRef) -> Result<Option<Page>> {
+        Ok(self.load_shared(r)?.map(|p| (*p).clone()))
+    }
+
+    /// The same page, shared rather than cloned out of the cache.
+    fn load_shared(&self, r: &PageRef) -> Result<Option<std::sync::Arc<Page>>> {
         let key = (r.book_id, r.part_index, r.page_id);
         if let Some(p) = self.pages.borrow().get(&key) {
             return Ok(p.clone());
         }
-        let p = self.source.page(r.book_id, r.part_index, r.page_id)?;
+        let p = self.source.page(r.book_id, r.part_index, r.page_id)?.map(std::sync::Arc::new);
         let mut c = self.pages.borrow_mut();
         if c.len() > 5000 {
             c.clear();
@@ -362,7 +371,7 @@ impl Ctx {
     /// The same over a run of pages in reading order, which is what a window
     /// cut against the book's token stream needs.
     fn passage_over(&self, pages: &[Page], range: std::ops::Range<usize>, zones: &[Option<Zone>], exclude_book: Option<u64>) -> Result<reuse::PassageRun> {
-        let load = |r: &PageRef| self.load(r);
+        let load = |r: &PageRef| self.load_shared(r);
         let around = |r: &PageRef, n: usize| self.around(r, n);
         let count = |t: &[String]| self.df(t);
         reuse::passage(&self.source, &self.freq, &self.params, &[], pages, range, zones, exclude_book, &count, &load, &around, self.index.as_ref(), &|| false)
@@ -809,7 +818,7 @@ fn reuse_trace(args: &[String]) -> Result<()> {
         if let Some(c) = hit {
             let Some(tp) = ctx.source.page(c.page.book_id, c.page.part_index, c.page.page_id)? else { continue };
             let refs = if p.target_neighbours > 0 { ctx.around(&c.page, p.target_neighbours)? } else { vec![c.page] };
-            let load = |r: &kashshaf_lab_lib::source::PageRef| ctx.load(r);
+            let load = |r: &kashshaf_lab_lib::source::PageRef| ctx.load_shared(r);
             let Some(span) = reuse::TargetSpan::load(&refs, &c.page, &load)? else { continue };
             let _ = tp;
             let t = reuse::Seq::build(&span.tokens, &mut intern, &ctx.freq, p, &[], &[]);

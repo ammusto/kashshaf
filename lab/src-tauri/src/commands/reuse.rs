@@ -179,10 +179,10 @@ impl<'a> PageCache<'a> {
         Ok(reuse::span_around(&list, r, radius))
     }
 
-    fn get(&self, r: &PageRef) -> anyhow::Result<Option<Page>> {
+    fn get(&self, r: &PageRef) -> anyhow::Result<Option<Arc<Page>>> {
         let key = (r.book_id, r.part_index, r.page_id);
         if let Some(p) = self.pages.lock().unwrap().get(&key) {
-            return Ok(p.as_ref().map(|p| (**p).clone()));
+            return Ok(p.clone());
         }
         let p = self.source.page(r.book_id, r.part_index, r.page_id)?.map(Arc::new);
         let mut cache = self.pages.lock().unwrap();
@@ -190,7 +190,7 @@ impl<'a> PageCache<'a> {
             cache.clear();
         }
         cache.insert(key, p.clone());
-        Ok(p.map(|p| (*p).clone()))
+        Ok(p)
     }
 }
 
@@ -225,7 +225,10 @@ fn build_index(h: &Handles, params: &Params) -> Result<Option<reuse::BookIndex>,
             tokens, params.exhaustive_max_tokens
         )));
     }
-    Ok(Some(reuse::BookIndex::build_layers(&pages, &params.exhaustive_grams, params.exhaustive_three_layer)))
+    let mut ix = reuse::BookIndex::build_layers(&pages, &params.exhaustive_grams, params.exhaustive_three_layer);
+    // The pages are read once, for the index; alignment reads them from here.
+    ix.hold(pages);
+    Ok(Some(ix))
 }
 
 fn insert_match(conn: &Connection, run_id: i64, corpus_version: &str, page: &Page, m: &Match) -> Result<i64, LabError> {
