@@ -9,14 +9,25 @@ import type { PageStack } from '../../hooks/usePageStack';
  *
  * Only the pages near the one in view are mounted; everything above and below
  * is a spacer as tall as those pages were measured to be, so the scrollbar
- * stands for the whole book and the position never jumps when the window
- * moves on.
+ * stands for the whole book.
  *
- * Which page the reader is on is decided by an IntersectionObserver over a
- * band across the middle of the viewport: the page crossing that band is the
- * one whose label, citation and highlights are current. A dragged scrollbar
- * can land where nothing is mounted and no observer would fire, so the scroll
- * handler re-anchors from the offsets as well.
+ * Three rules keep that from oscillating, which it did when the window
+ * followed an intersection ratio:
+ *
+ *  1. **The page in view is the page under the viewport's midpoint**, by the
+ *     elements' own geometry. A ratio picks the page that fills the observed
+ *     band best, so a page taller than the viewport — which can never fill
+ *     it — loses to a short neighbour, the window shifts, and the shift
+ *     brings the tall page back: a loop with nothing to settle it.
+ *  2. **The visible content is pinned across every re-render.** Before the
+ *     browser paints, the page that was under the midpoint is put back where
+ *     it was, whatever mounting, unmounting or measuring did to the spacers
+ *     above it. Measured spacers alone are not enough: a page's height is
+ *     only known after its first render.
+ *  3. **Scrolls the reader makes itself are not read back.** A programmatic
+ *     scroll raises a flag for as long as it takes to land, and scroll events
+ *     are ignored while it is up, so a jump cannot be mistaken for the user
+ *     scrolling somewhere and re-anchored out from under itself.
  */
 
 interface ContinuousReaderProps {
@@ -53,72 +64,136 @@ export interface ContinuousReaderHandle {
   jumpTo: (index: number) => void;
 }
 
-export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousReaderProps>(function ContinuousReader({
-  stack,
-  matchesFor,
-  onWordClick,
-  onActivePage,
-  onMountedPages,
-  multiPart,
-  onBackgroundClick,
-}: ContinuousReaderProps, ref) {
+/**
+ * How long a *smooth* scroll the reader makes itself is given to land. An
+ * instant one is over within the frame, and suppressing longer than that
+ * would swallow the user's own next scroll.
+ */
+const SETTLE_SMOOTH_MS = 700;
+
+export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousReaderProps>(function ContinuousReader(
+  {
+    stack,
+    matchesFor,
+    onWordClick,
+    onActivePage,
+    onMountedPages,
+    multiPart,
+    onBackgroundClick,
+  }: ContinuousReaderProps,
+  ref
+) {
   const { spine, mounted, pages, offsets, measure, setAnchorIndex, anchorIndex, scrollRequest } = stack;
   const containerRef = useRef<HTMLDivElement>(null);
   const elements = useRef<Map<number, HTMLElement>>(new Map());
-  const observer = useRef<IntersectionObserver | null>(null);
   const [pending, setPending] = useState<ScrollTarget | null>(null);
   const rafPending = useRef(false);
+  /** Until when scrolls are the reader's own doing and must not be read back. */
+  const settleUntil = useRef(0);
+  /** The page under the midpoint and where it sat, so it can be put back. */
+  const pinned = useRef<{ index: number; top: number } | null>(null);
 
-  // --- the page crossing the middle band is the page the reader is on
-  useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined') return;
-    const root = containerRef.current;
-    if (!root) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        // A scroll in progress is authoritative about where it is going;
-        // let it finish before following the pages it passes.
-        let best: { index: number; ratio: number } | null = null;
-        for (const e of entries) {
-          if (!e.isIntersecting) continue;
-          const index = Number((e.target as HTMLElement).dataset.pageIndex);
-          if (!Number.isFinite(index)) continue;
-          if (!best || e.intersectionRatio > best.ratio) best = { index, ratio: e.intersectionRatio };
-        }
-        if (best) setAnchorIndex(best.index);
-      },
-      { root, rootMargin: '-45% 0px -45% 0px', threshold: 0 }
-    );
-    observer.current = io;
-    for (const el of elements.current.values()) io.observe(el);
-    return () => {
-      io.disconnect();
-      observer.current = null;
-    };
-  }, [setAnchorIndex]);
+  /** Where the reader last put the scroll itself, while that is still true. */
+  const selfTop = useRef<number | null>(null);
 
-  const registerPage = useCallback((index: number, el: HTMLElement | null) => {
-    const known = elements.current.get(index);
-    if (known && observer.current) observer.current.unobserve(known);
-    if (el) {
-      elements.current.set(index, el);
-      observer.current?.observe(el);
-    } else {
-      elements.current.delete(index);
-    }
+  const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  /**
+   * Is this scroll event the reader's own?
+   *
+   * An instant scroll is recognised by where it landed, not by when: a user
+   * scroll in the same frame lands somewhere else, and ignoring it would
+   * lose it — there is no second event to catch up on. A glide is
+   * recognised by time, because every position it passes through is its own.
+   */
+  const isSelfScroll = (top: number) =>
+    (selfTop.current !== null && Math.abs(top - selfTop.current) <= 2) || now() < settleUntil.current;
+  /** An instant scroll is over at once: only the event it caused is ignored. */
+  const holdFrame = useCallback((expected: number) => {
+    selfTop.current = expected;
+    requestAnimationFrame(() => {
+      selfTop.current = null;
+    });
+  }, []);
+  /** A glide takes time, and every position it passes would re-anchor. */
+  const holdStill = useCallback((ms: number) => {
+    settleUntil.current = Math.max(settleUntil.current, now() + ms);
   }, []);
 
-  // --- a fling can outrun the mounted window; the offsets always know where we are
+  /**
+   * The mounted page under the viewport's midpoint, from the elements' own
+   * boxes. `null` when the midpoint is over a spacer, which a fling can do.
+   */
+  const pageAtMidpoint = useCallback((): number | null => {
+    const c = containerRef.current;
+    if (!c) return null;
+    const box = c.getBoundingClientRect();
+    const mid = box.top + box.height / 2;
+    let best: { index: number; distance: number } | null = null;
+    for (const [index, el] of elements.current) {
+      const r = el.getBoundingClientRect();
+      if (r.height === 0) continue;
+      if (mid >= r.top && mid < r.bottom) return index;
+      // Nothing is under the midpoint (a gap between cards): take the nearest.
+      const distance = mid < r.top ? r.top - mid : mid - r.bottom;
+      if (!best || distance < best.distance) best = { index, distance };
+    }
+    return best && best.distance < 64 ? best.index : null;
+  }, []);
+
+  /** Remember where the page in view sits, so a re-render can put it back. */
+  const pin = useCallback(
+    (index: number | null) => {
+      const c = containerRef.current;
+      if (!c || index === null) return;
+      const el = elements.current.get(index);
+      if (!el) return;
+      pinned.current = { index, top: el.getBoundingClientRect().top - c.getBoundingClientRect().top };
+    },
+    []
+  );
+
+  const registerPage = useCallback((index: number, el: HTMLElement | null) => {
+    if (el) elements.current.set(index, el);
+    else elements.current.delete(index);
+  }, []);
+
+  // --- following the reader
   const handleScroll = useCallback(() => {
     if (rafPending.current) return;
     rafPending.current = true;
     requestAnimationFrame(() => {
       rafPending.current = false;
-      const el = containerRef.current;
-      if (!el || spine.length === 0) return;
-      setAnchorIndex(indexAtOffset(offsets, el.scrollTop + el.clientHeight / 2));
+      const c = containerRef.current;
+      if (!c || spine.length === 0) return;
+      if (isSelfScroll(c.scrollTop)) return;
+      // Geometry first; the estimated offsets only answer for a fling that
+      // has outrun the mounted window, where there is nothing to measure.
+      const index = pageAtMidpoint() ?? indexAtOffset(offsets, c.scrollTop + c.clientHeight / 2);
+      setAnchorIndex(index);
+      pin(index);
     });
-  }, [offsets, setAnchorIndex, spine.length]);
+    // `isSelfScroll` and `now` are stable closures over refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offsets, setAnchorIndex, spine.length, pageAtMidpoint, pin]);
+
+  // --- hold the visible content still across every re-render
+  //
+  // Runs after the DOM is updated and before the browser paints. If the page
+  // that was under the midpoint has moved — a page above it mounted, was
+  // unmounted, or was measured for the first time — the scroll position is
+  // corrected by exactly that much, so nothing on screen appears to move.
+  useLayoutEffect(() => {
+    const c = containerRef.current;
+    const keep = pinned.current;
+    if (!c || !keep) return;
+    const el = elements.current.get(keep.index);
+    if (!el) return;
+    const top = el.getBoundingClientRect().top - c.getBoundingClientRect().top;
+    const delta = top - keep.top;
+    if (Math.abs(delta) < 0.5) return;
+    holdFrame(c.scrollTop + delta);
+    c.scrollTop += delta;
+  });
 
   // --- something outside the reader moved the anchor: scroll there
   useEffect(() => {
@@ -154,27 +229,38 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   //     estimated offset, and measuring it moves everything below.
   useLayoutEffect(() => {
     if (!pending) return;
-    const el = containerRef.current;
-    if (!el) return;
+    const c = containerRef.current;
+    if (!c) return;
     // The reader has scrolled somewhere else since, or the page never
     // loaded: stop chasing it.
     if (pending.index < mounted.start || pending.index >= mounted.end) {
       setPending(null);
       return;
     }
+    // A scroll the reader is making itself: do not read it back as the user
+    // moving, and do not let the pin drag it back to where it started.
+    pinned.current = null;
     const target = elements.current.get(pending.index);
     if (target) {
+      const box = c.getBoundingClientRect();
       const first = target.querySelector<HTMLElement>('[data-highlight-first="true"]');
-      const top = first
-        ? first.offsetTop - el.clientHeight / 3
-        : target.offsetTop;
-      el.scrollTo({ top: Math.max(0, top), behavior: pending.smooth ? 'smooth' : 'auto' });
-      // Only a loaded page settles the scroll; an empty placeholder will move.
-      if (pages.has(pending.index)) setPending(null);
+      const anchorEl = first ?? target;
+      const within = anchorEl.getBoundingClientRect().top - box.top;
+      const top = Math.max(0, c.scrollTop + within - (first ? c.clientHeight / 3 : 0));
+      if (pending.smooth) holdStill(SETTLE_SMOOTH_MS);
+      else holdFrame(top);
+      c.scrollTo({ top, behavior: pending.smooth ? 'smooth' : 'auto' });
+      // Only a loaded page settles the scroll; a placeholder will still grow.
+      if (pages.has(pending.index)) {
+        setPending(null);
+        pin(pending.index);
+      }
     } else {
-      el.scrollTo({ top: offsets[pending.index] ?? 0, behavior: 'auto' });
+      const top = offsets[pending.index] ?? 0;
+      holdFrame(top);
+      c.scrollTo({ top, behavior: 'auto' });
     }
-  }, [pending, pages, offsets, mounted]);
+  }, [pending, pages, offsets, mounted, holdStill, holdFrame, pin]);
 
   // --- tell the rest of the app where the reader is
   const activeEntry = spine[anchorIndex];
@@ -205,14 +291,14 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     const startsPart = i > 0 && spine[i - 1].part_index !== entry.part_index;
     if (!loaded) {
       items.push(
-        <div
-          key={`${entry.part_index}:${entry.page_id}`}
-          data-page-index={i}
-          ref={(el) => registerPage(i, el)}
-          className="px-16 py-12 text-sm text-app-text-tertiary"
-          style={{ minHeight: 200 }}
-        >
-          Loading {pageLabel(entry, multiPart)}…
+        <div key={`${entry.part_index}:${entry.page_id}`} data-page-index={i} ref={(el) => registerPage(i, el)} className="pb-6">
+          <div
+            className="bg-app-surface border border-app-border-light rounded-lg shadow-app-sm
+                       px-10 py-12 text-sm text-app-text-tertiary"
+            style={{ minHeight: 200 }}
+          >
+            Loading {pageLabel(entry, multiPart)}…
+          </div>
         </div>
       );
       continue;
@@ -239,13 +325,15 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       ref={containerRef}
       onScroll={handleScroll}
       onClick={onBackgroundClick}
-      className="flex-1 overflow-y-auto bg-white"
+      className="flex-1 overflow-y-auto bg-app-bg"
       data-testid="reader-scroll"
     >
-      <div className="max-w-4xl mx-auto">
-        <div style={{ height: before }} aria-hidden />
+      {/* Each card carries its own gap below it (PageView's `pb-6`), so a
+          spacer is exactly as tall as the pages it stands in for. */}
+      <div className="max-w-4xl mx-auto px-6 pt-6">
+        <div style={{ height: before }} aria-hidden data-testid="spacer-before" />
         {items}
-        <div style={{ height: after }} aria-hidden />
+        <div style={{ height: after }} aria-hidden data-testid="spacer-after" />
       </div>
     </div>
   );

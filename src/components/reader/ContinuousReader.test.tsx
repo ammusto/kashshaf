@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { PageEntry, SearchResult, Token } from '../../types';
 import type { SearchAPI } from '../../api';
 import { ReaderPanel } from '../panels/ReaderPanel';
 import { BooksProvider } from '../../contexts/BooksContext';
+import { installLayout, installResizeObserver, type FakeLayout } from './testLayout';
 
 /**
  * The reader as the user meets it: a book that scrolls, with only a few of
@@ -19,47 +20,13 @@ import { BooksProvider } from '../../contexts/BooksContext';
 
 // ---------------------------------------------------------------- doubles
 
-/** An IntersectionObserver the test drives: "page N is now in the band". */
-class MockIntersectionObserver {
-  static instances: MockIntersectionObserver[] = [];
-  elements = new Set<Element>();
-  constructor(public cb: IntersectionObserverCallback) {
-    MockIntersectionObserver.instances.push(this);
-  }
-  observe(el: Element) {
-    this.elements.add(el);
-  }
-  unobserve(el: Element) {
-    this.elements.delete(el);
-  }
-  disconnect() {
-    this.elements.clear();
-  }
-  takeRecords() {
-    return [];
-  }
-  static current() {
-    return MockIntersectionObserver.instances[MockIntersectionObserver.instances.length - 1];
-  }
-  /** Report that the page at `index` is crossing the middle band. */
-  static scrollTo(index: number) {
-    const io = MockIntersectionObserver.current();
-    const el = [...io.elements].find((e) => (e as HTMLElement).dataset.pageIndex === String(index));
-    if (!el) throw new Error(`page ${index} is not mounted, so it cannot come into view`);
-    act(() => {
-      io.cb(
-        [{ target: el, isIntersecting: true, intersectionRatio: 1 } as unknown as IntersectionObserverEntry],
-        io as unknown as IntersectionObserver
-      );
-    });
-  }
-}
-
-class MockResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
+/**
+ * The reader decides which page is in view from the elements' own boxes, so
+ * the tests scroll a simulated container (testLayout.ts) rather than pretend
+ * an observer fired.
+ */
+const PAGE_HEIGHT = 900;
+let layout: FakeLayout;
 
 /** A 200-page book in two parts, the second starting at page 101. */
 function spineOf(pages = 200): PageEntry[] {
@@ -128,17 +95,24 @@ function mountedIndices(): number[] {
 }
 
 beforeEach(() => {
-  MockIntersectionObserver.instances = [];
-  vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
-  vi.stubGlobal('ResizeObserver', MockResizeObserver);
-  // jsdom implements neither, and the reader scrolls itself.
-  Element.prototype.scrollTo = vi.fn() as unknown as Element['scrollTo'];
+  installResizeObserver(() => PAGE_HEIGHT);
+  layout = installLayout({ viewportHeight: 600, pageHeight: () => PAGE_HEIGHT });
+  vi.stubGlobal('IntersectionObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords() {
+      return [];
+    }
+  });
 });
 
 afterEach(() => {
+  layout?.restore();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
+
 
 // ---------------------------------------------------------------- tests
 
@@ -160,45 +134,42 @@ describe('the reader as a scrolling book', () => {
   it('follows the page that comes into view and keeps at most 7 pages mounted', async () => {
     const { api } = makeApi(spineOf());
     renderReader(api);
+    await layout.settle();
     await waitFor(() => expect(mountedIndices()).toEqual([0, 1, 2, 3]));
 
-    MockIntersectionObserver.scrollTo(3);
+    await layout.scrollToPage(3);
     await waitFor(() => expect(mountedIndices()).toEqual([0, 1, 2, 3, 4, 5, 6]));
 
-    MockIntersectionObserver.scrollTo(6);
+    await layout.scrollToPage(6);
     await waitFor(() => expect(mountedIndices()).toEqual([3, 4, 5, 6, 7, 8, 9]));
     // The pages left behind are gone from the DOM.
     expect(mountedIndices()).not.toContain(0);
   });
 
-  it('scrolling 200 pages leaves the mounted set and the fetches per page flat', async () => {
-    const spine = spineOf(200);
-    const { api } = makeApi(spine);
+  it('scrolling the length of the book leaves the mounted set and the fetches per page flat', async () => {
+    const { api } = makeApi(spineOf(200));
     renderReader(api);
+    await layout.settle();
     await waitFor(() => expect(mountedIndices()).toEqual([0, 1, 2, 3]));
 
     let widest = 0;
-    for (let i = 0; i < 200; i++) {
-      const mounted = mountedIndices();
-      widest = Math.max(widest, mounted.length);
-      const next = mounted.includes(i) ? i : mounted[mounted.length - 1];
-      MockIntersectionObserver.scrollTo(next);
-      // eslint-disable-next-line no-await-in-loop
-      await waitFor(() => expect(mountedIndices().length).toBeGreaterThan(0));
+    // Ten pages at a time, the length of a 200-page book.
+    for (let i = 0; i < 200; i += 10) {
+      await layout.scrollToPage(i);
+      widest = Math.max(widest, mountedIndices().length);
     }
 
     expect(widest).toBeLessThanOrEqual(7);
     expect(mountedIndices().length).toBeLessThanOrEqual(7);
-    // Every page fetched at most twice over the whole book: once on the way
-    // through, and at most once more if it was evicted and scrolled back to.
+    // No page is fetched twice on one pass through the book.
     const perPage = new Map<string, number>();
     for (const call of (api.getPage as ReturnType<typeof vi.fn>).mock.calls) {
       const key = `${call[1]}:${call[2]}`;
       perPage.set(key, (perPage.get(key) ?? 0) + 1);
     }
-    expect(Math.max(...perPage.values())).toBeLessThanOrEqual(2);
+    expect(Math.max(...perPage.values())).toBe(1);
     expect(api.listBookPages).toHaveBeenCalledTimes(1);
-  });
+  }, 30000);
 
   it('draws a divider where a new part begins', async () => {
     const { api } = makeApi(spineOf());
@@ -217,7 +188,7 @@ describe('the reader as a scrolling book', () => {
     renderReader(api);
     await waitFor(() => expect(screen.getByText('1:1 of 200')).toBeInTheDocument());
 
-    MockIntersectionObserver.scrollTo(2);
+    await layout.scrollToPage(2);
     await waitFor(() => expect(screen.getByText('1:3 of 200')).toBeInTheDocument());
   });
 
@@ -262,7 +233,7 @@ describe('the reader as a scrolling book', () => {
     await waitFor(() => expect(onActivePage).toHaveBeenCalled());
     expect(onActivePage.mock.calls[0][0]).toMatchObject({ part_index: 0, page_id: 1 });
 
-    MockIntersectionObserver.scrollTo(2);
+    await layout.scrollToPage(2);
     await waitFor(() =>
       expect(onActivePage).toHaveBeenCalledWith(expect.objectContaining({ part_index: 0, page_id: 3 }))
     );

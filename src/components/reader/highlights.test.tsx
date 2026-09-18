@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import type { PageEntry, SearchResult, Token } from '../../types';
 import type { SearchContext } from '../../types/search';
 import type { SearchAPI } from '../../api';
 import { ReaderPanel } from '../panels/ReaderPanel';
 import { BooksProvider } from '../../contexts/BooksContext';
 import { usePageHighlights, HIGHLIGHT_DEBOUNCE_MS } from '../../hooks/usePageHighlights';
+import { installLayout, installResizeObserver, type FakeLayout } from './testLayout';
 
 /**
  * Highlights follow the query, not the click.
@@ -16,42 +17,13 @@ import { usePageHighlights, HIGHLIGHT_DEBOUNCE_MS } from '../../hooks/usePageHig
  * results the reader was opened from.
  */
 
-class MockIntersectionObserver {
-  static instances: MockIntersectionObserver[] = [];
-  elements = new Set<Element>();
-  constructor(public cb: IntersectionObserverCallback) {
-    MockIntersectionObserver.instances.push(this);
-  }
-  observe(el: Element) {
-    this.elements.add(el);
-  }
-  unobserve(el: Element) {
-    this.elements.delete(el);
-  }
-  disconnect() {
-    this.elements.clear();
-  }
-  takeRecords() {
-    return [];
-  }
-  static scrollTo(index: number) {
-    const io = MockIntersectionObserver.instances[MockIntersectionObserver.instances.length - 1];
-    const el = [...io.elements].find((e) => (e as HTMLElement).dataset.pageIndex === String(index));
-    if (!el) throw new Error(`page ${index} is not mounted`);
-    act(() => {
-      io.cb(
-        [{ target: el, isIntersecting: true, intersectionRatio: 1 } as unknown as IntersectionObserverEntry],
-        io as unknown as IntersectionObserver
-      );
-    });
-  }
-}
-
-class MockResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
+/**
+ * The reader decides which page is in view from the elements' own boxes, so
+ * the tests scroll a simulated container (testLayout.ts) rather than pretend
+ * an observer fired.
+ */
+const PAGE_HEIGHT = 900;
+let layout: FakeLayout;
 
 /** Two parts of six pages each; معرفة الله falls on pages 1, 3 and 8. */
 const HITS = new Set([1, 3, 8]);
@@ -142,16 +114,24 @@ function highlightedWords(index: number): string[] {
 }
 
 beforeEach(() => {
-  MockIntersectionObserver.instances = [];
-  vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
-  vi.stubGlobal('ResizeObserver', MockResizeObserver);
-  Element.prototype.scrollTo = vi.fn() as unknown as Element['scrollTo'];
+  installResizeObserver(() => PAGE_HEIGHT);
+  layout = installLayout({ viewportHeight: 600, pageHeight: () => PAGE_HEIGHT });
+  vi.stubGlobal('IntersectionObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords() {
+      return [];
+    }
+  });
 });
 
 afterEach(() => {
+  layout?.restore();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
+
 
 describe('highlights follow the query', () => {
   it('marks page 3 after scrolling there from page 1, though only page 1 was clicked', async () => {
@@ -166,7 +146,7 @@ describe('highlights follow the query', () => {
     expect(highlightedWords(1)).toEqual([]);
 
     // Scroll to page 3: still marked, and it was never clicked.
-    MockIntersectionObserver.scrollTo(2);
+    await layout.scrollToPage(2);
     await waitFor(() => expect(screen.getByText('1:3 of 12')).toBeInTheDocument());
     expect(highlightedWords(2)).toEqual(['معرفة', 'الله']);
     expect(api.getMatchPositionsCombined).toHaveBeenCalledWith(7, 0, 3, [
@@ -180,7 +160,7 @@ describe('highlights follow the query', () => {
     renderReader(api, { part_index: 0, page_id: 5 });
     await waitFor(() => expect(document.querySelector('[data-page-index="4"]')).toBeTruthy());
 
-    MockIntersectionObserver.scrollTo(7); // spine index 7 = page 8
+    await layout.scrollToPage(7); // spine index 7 = page 8
     await waitFor(() => expect(highlightedWords(7)).toEqual(['معرفة', 'الله']), { timeout: 2000 });
     // The page before the boundary has no hit and is plain.
     expect(highlightedWords(5)).toEqual([]);
@@ -214,7 +194,7 @@ describe('highlights follow the query', () => {
       const mounted = [...document.querySelectorAll('[data-page-index]')].map((el) =>
         Number((el as HTMLElement).dataset.pageIndex)
       );
-      MockIntersectionObserver.scrollTo(mounted.includes(i) ? i : Math.max(...mounted));
+      await layout.scrollToPage(mounted.includes(i) ? i : Math.max(...mounted));
     }
     await new Promise((r) => setTimeout(r, HIGHLIGHT_DEBOUNCE_MS * 4));
 
@@ -230,9 +210,9 @@ describe('highlights follow the query', () => {
     renderReader(api);
     await waitFor(() => expect(highlightedWords(2)).toEqual(['معرفة', 'الله']), { timeout: 2000 });
 
-    MockIntersectionObserver.scrollTo(3);
+    await layout.scrollToPage(3);
     await new Promise((r) => setTimeout(r, HIGHLIGHT_DEBOUNCE_MS * 3));
-    MockIntersectionObserver.scrollTo(1);
+    await layout.scrollToPage(1);
     await new Promise((r) => setTimeout(r, HIGHLIGHT_DEBOUNCE_MS * 3));
 
     const perPage = new Map<number, number>();
