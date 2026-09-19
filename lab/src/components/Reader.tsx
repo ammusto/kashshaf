@@ -324,13 +324,14 @@ export function Reader({
         {page && (
           /* The page is drawn as a page: a card on the app background, with
              the printed number in its own header (spec 1.5 C1). */
-          <article className="max-w-3xl mx-auto bg-app-surface border border-app-border-light rounded-lg shadow-app-sm overflow-hidden">
-            <header className="flex items-center justify-end px-8 py-2 border-b border-app-border-light bg-app-surface-variant select-none">
-              <span className="text-xs text-app-text-secondary tabular-nums">
+          <article className="max-w-3xl mx-auto bg-app-surface border border-app-border-light rounded shadow-app-sm overflow-hidden">
+            {/* A folio number: top-right corner, no band, no rule, muted. */}
+            <div className="flex justify-end px-8 pt-5 select-none">
+              <span className="text-xs font-medium text-app-text-tertiary tabular-nums">
                 {(labels ?? Pages.empty()).label(page.part_index, page.page_id)}
               </span>
-            </header>
-            <div className="px-8 py-6">
+            </div>
+            <div className="px-8 pt-3 pb-6">
           <div
             className="arabic page-body text-2xl select-text break-words"
             dir="rtl"

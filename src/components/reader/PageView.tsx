@@ -120,12 +120,13 @@ export function PageView({
           <span className="h-0.5 flex-1 bg-app-border-medium rounded-full" />
         </div>
       )}
-      <article className="bg-app-surface border border-app-border-light rounded-lg shadow-app-sm overflow-hidden">
-        {/* The printed page number, in the top-right corner of its own page. */}
-        <header className="flex items-center justify-end px-10 py-2 border-b border-app-border-light bg-app-surface-variant select-none">
-          <span className="text-xs text-app-text-tertiary tabular-nums">{label}</span>
-        </header>
-        <div className="px-10 py-8">
+      <article className="bg-app-surface border border-app-border-light rounded shadow-app-sm overflow-hidden">
+        {/* The printed page number as a folio number: top-right corner, no
+            band, no rule, muted. */}
+        <div className="flex justify-end px-10 pt-5 select-none">
+          <span className="text-xs font-medium text-app-text-tertiary tabular-nums">{label}</span>
+        </div>
+        <div className="px-10 pt-3 pb-8">
           <div dir="rtl" className="text-xl leading-loose font-arabic text-app-text-primary select-text">
             {runs.map((run, i) => {
               if (run.token === null) {
