@@ -187,6 +187,8 @@ describe('the reader as a scrolling book', () => {
     const { api } = makeApi(spineOf());
     renderReader(api);
     await waitFor(() => expect(screen.getByText('1:1 of 200')).toBeInTheDocument());
+    // Nothing is followed until the opening placement has landed.
+    await layout.settle();
 
     await layout.scrollToPage(2);
     await waitFor(() => expect(screen.getByText('1:3 of 200')).toBeInTheDocument());

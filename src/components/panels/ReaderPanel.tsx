@@ -123,7 +123,7 @@ export function ReaderPanel({
       (e) => e.page_number === pageNumber && (!multiPart || e.part_label === partLabel)
     );
     if (index >= 0) {
-      readerRef.current?.jumpTo(index);
+      readerRef.current?.goTo(index);
       return;
     }
     if (stack.spine.length > 0) {

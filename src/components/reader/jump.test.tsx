@@ -6,6 +6,7 @@ import type { SearchAPI } from '../../api';
 import { ReaderPanel } from '../panels/ReaderPanel';
 import { BooksProvider } from '../../contexts/BooksContext';
 import { installLayout, installResizeObserver, type FakeLayout } from './testLayout';
+import { CARD_GAP } from './ContinuousReader';
 
 /**
  * A jump is a placement, not a scroll.
@@ -148,11 +149,11 @@ describe('opening the reader at a page', () => {
     expect(onActivePage.mock.calls.every((c) => c[0].part_index === 1 && c[0].page_id === 251)).toBe(true);
   });
 
-  it('the page asked for sits at the top of the viewport, by its own measure', async () => {
+  it('the page asked for sits at the top of the pane with the gap above it showing', async () => {
     await openAt(35);
     const el = document.querySelector('[data-page-index="35"]')!;
     const c = layout.container()!;
-    expect(el.getBoundingClientRect().top - c.getBoundingClientRect().top).toBeCloseTo(0, 0);
+    expect(el.getBoundingClientRect().top - c.getBoundingClientRect().top).toBeCloseTo(CARD_GAP, 0);
   });
 });
 

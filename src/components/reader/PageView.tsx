@@ -142,9 +142,12 @@ export function PageView({
                   data-highlight={run.highlighted ? 'true' : undefined}
                   data-highlight-first={isFirst ? 'true' : undefined}
                   onClick={token ? (e) => onWordClick(e, token) : undefined}
+                  // A highlight changes colour only. A weight or a border
+                  // would reflow the line and change the page's height after
+                  // it was measured, which moves everything below it.
                   className={`cursor-pointer rounded px-0.5 transition-colors duration-100
                     ${run.highlighted
-                      ? 'bg-red-100 text-red-700 font-semibold border-b-2 border-red-400'
+                      ? 'bg-red-100 text-red-700'
                       : 'hover:bg-app-accent-light'
                     }`}
                 >

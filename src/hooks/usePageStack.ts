@@ -46,11 +46,12 @@ export interface PageStack {
   /** Follow the reader: called as pages scroll past. Does not scroll anything. */
   setAnchorIndex: (index: number) => void;
   /**
-   * Bumped whenever something outside the reader moved the anchor (a clicked
-   * result, a jump, Prev/Next), which is when the stack must scroll rather
-   * than follow.
+   * The latest request from outside the reader — opening at a page, a
+   * clicked result, a contents entry — resolved to a spine index. The reader
+   * answers it with `goTo`; the stack does not move the anchor itself, since
+   * whether that means a glide or a placement is the reader's decision.
    */
-  scrollRequest: number;
+  request: { index: number; seq: number } | null;
   /** Set when the book's spine could not be fetched; the reader falls back to one page. */
   spineError: string | null;
   /** The spine is still being fetched. */
@@ -83,7 +84,7 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
   const [loadingSpine, setLoadingSpine] = useState(false);
   const [pages, setPages] = useState<Map<number, LoadedPage>>(new Map());
   const [anchorIndex, setAnchorIndexState] = useState(0);
-  const [scrollRequest, setScrollRequest] = useState(0);
+  const [request, setRequest] = useState<{ index: number; seq: number } | null>(null);
   const [heights, setHeights] = useState<Map<number, number>>(new Map());
 
   // Which book/anchor the state belongs to, so a slow response for a book the
@@ -123,8 +124,10 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
         const at = indexOfAnchor(entries, requestedAnchor.current);
         resolvedAgainst.current = entries;
         setSpine(entries);
+        // The window mounts around the requested page in this same render,
+        // so no other page is ever mounted or reported on the way there.
         setAnchorIndexState(at);
-        setScrollRequest((n) => n + 1);
+        setRequest((r) => ({ index: at, seq: (r?.seq ?? 0) + 1 }));
       })
       .catch((err) => {
         if (cancelled || gen !== generation.current) return;
@@ -148,9 +151,9 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
     if (sameAnchor(requestedAnchor.current, anchor) && resolvedAgainst.current === spine) return;
     requestedAnchor.current = anchor;
     resolvedAgainst.current = spine;
-    const at = spine.length > 0 ? indexOfAnchor(spine, anchor) : 0;
-    setAnchorIndexState(at);
-    setScrollRequest((n) => n + 1);
+    if (spine.length === 0) return; // resolved when the spine lands
+    const at = indexOfAnchor(spine, anchor);
+    setRequest((r) => ({ index: at, seq: (r?.seq ?? 0) + 1 }));
   }, [anchor, spine]);
 
   const mounted = useMemo(() => windowFor(anchorIndex, spine.length), [anchorIndex, spine.length]);
@@ -237,7 +240,7 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
     heights,
     measure,
     setAnchorIndex,
-    scrollRequest,
+    request,
     spineError,
     loadingSpine,
   };

@@ -11,31 +11,35 @@ import type { PageStack } from '../../hooks/usePageStack';
  * is a spacer as tall as those pages were measured to be, so the scrollbar
  * stands for the whole book.
  *
- * Three rules keep that from oscillating, which it did when the window
- * followed an intersection ratio:
+ * There is one way the view moves: `goTo(index)`. Opening at a page, Go, a
+ * clicked result, a contents entry, Prev and Next all call it and nothing
+ * else, so there is one rule to get right:
  *
- *  1. **The page in view is the page under the viewport's midpoint**, by the
- *     elements' own geometry. A ratio picks the page that fills the observed
- *     band best, so a page taller than the viewport — which can never fill
- *     it — loses to a short neighbour, the window shifts, and the shift
- *     brings the tall page back: a loop with nothing to settle it.
- *  2. **The visible content is pinned across every re-render.** Before the
- *     browser paints, the page that was under the midpoint is put back where
- *     it was, whatever mounting, unmounting or measuring did to the spacers
- *     above it. Measured spacers alone are not enough: a page's height is
- *     only known after its first render.
- *  3. **Scrolls the reader makes itself are not read back.** A glide (Prev,
- *     Next) raises a flag until it has landed, and scroll events are ignored
- *     while it is up; landing is watched frame by frame, and the page in
- *     view is then read from the geometry, never assumed.
- *  4. **A jump is a placement, not a scroll.** Opening at a page, Go, a
- *     clicked result: the window is mounted centred on that page, the spacer
- *     above it is sized by estimate, and the page is pinned at the top of the
- *     viewport before the first paint. Nothing is followed until that page
- *     has loaded and been measured, so the estimate being wrong moves the
- *     spacer, not the reader. Opening at page 36 used to start at page 1 and
- *     scroll to a guess, then re-anchor as pages measured — and the frame at
- *     page 1 was reported upward and came back as a jump to page 1.
+ *  - **target mounted and measured**: one smooth scroll that puts the page's
+ *    measured top at the top of the pane, with the gap above it showing.
+ *    Nothing else happens — the window does not move until the scroll has
+ *    landed, so the target cannot shift under it, and there is no pin
+ *    adjustment or correction afterwards.
+ *  - **target not mounted**: the window is mounted around it before the first
+ *    paint, the spacer above sized by estimate, the page put at the top of
+ *    the pane and pinned. No scroll. Nothing is followed until the page has
+ *    loaded and been measured.
+ *
+ * In both cases the page under the top edge of the pane is the target on the
+ * first settled frame. That is also how the page in view is *observed*: the
+ * page under a probe just below the top edge, from the elements' own boxes.
+ * Placement and observation use the same point, so they cannot disagree — a
+ * midpoint rule disagreed with a top placement on every page shorter than
+ * half the viewport, and the header and the view drifted apart.
+ *
+ * The visible content is pinned across every re-render: if the page in view
+ * has moved because something above it mounted, unmounted or was measured,
+ * the scroll position is corrected by exactly that much before paint. A
+ * page that changes height after mounting (a ResizeObserver report) is
+ * re-pinned synchronously, in the same frame, for the same reason.
+ *
+ * Scrolls the reader makes itself are not read back: an instant placement is
+ * recognised by where it landed, a glide is flagged until it has landed.
  */
 
 interface ContinuousReaderProps {
@@ -59,21 +63,28 @@ export function pageLabel(entry: PageEntry, multiPart: boolean): string {
   return `${part}:${entry.page_number || entry.page_id}`;
 }
 
-/** Where the reader has been told to be. */
-interface Jump {
-  index: number;
+/** What the header and the app drive. */
+export interface ContinuousReaderHandle {
+  /** The one way the view moves. */
+  goTo: (index: number) => void;
+  /** Prev/Next: one page from the page in view. */
+  step: (direction: number) => void;
 }
 
-/** What the header's Prev/Next and Go drive. */
-export interface ContinuousReaderHandle {
-  /** Move one page and glide there. */
-  step: (direction: number) => void;
-  /** Put this spine index at the top of the viewport. */
-  jumpTo: (index: number) => void;
-}
+/**
+ * The gap between cards, in px (`pb-6` on each page, `pt-6` on the column).
+ * A page is placed so that this much of the gap above it shows, and the
+ * observation probe sits just inside the page below it.
+ */
+export const CARD_GAP = 24;
 
 /** The longest a glide is given before the reader stops waiting for it. */
 const GLIDE_MAX_MS = 1200;
+
+/** A placement in progress: the target, until it has loaded and been measured. */
+interface Placement {
+  index: number;
+}
 
 export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousReaderProps>(function ContinuousReader(
   {
@@ -87,32 +98,22 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   }: ContinuousReaderProps,
   ref
 ) {
-  const { spine, mounted, pages, offsets, heights, measure, setAnchorIndex, anchorIndex, scrollRequest } = stack;
+  const { spine, mounted, pages, offsets, heights, measure, setAnchorIndex, anchorIndex, request } = stack;
   const containerRef = useRef<HTMLDivElement>(null);
   const elements = useRef<Map<number, HTMLElement>>(new Map());
-  const [jump, setJump] = useState<Jump | null>(null);
-  /** The jump in progress, readable from the scroll handler without a render. */
-  const jumping = useRef<Jump | null>(null);
-  jumping.current = jump;
-  /** A glide (Prev/Next) is in flight; its landing is being watched. */
+  const [placing, setPlacing] = useState<Placement | null>(null);
+  /** The placement in progress, readable from the scroll handler without a render. */
+  const placingRef = useRef<Placement | null>(null);
+  placingRef.current = placing;
+  /** A glide is in flight; its landing is being watched. */
   const gliding = useRef(false);
   const rafPending = useRef(false);
-  /** The page under the midpoint and where it sat, so it can be put back. */
+  /** The page in view and where its top sat, so a re-render can put it back. */
   const pinned = useRef<{ index: number; top: number } | null>(null);
-
   /** Where the reader last put the scroll itself, while that is still true. */
   const selfTop = useRef<number | null>(null);
 
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-  /**
-   * Is this scroll event the reader's own?
-   *
-   * An instant scroll is recognised by where it landed, not by when: a user
-   * scroll in the same frame lands somewhere else, and ignoring it would
-   * lose it — there is no second event to catch up on. A glide is every
-   * position between where it started and where it lands, and is flagged
-   * for exactly as long as it is in flight.
-   */
   const isSelfScroll = (top: number) =>
     (selfTop.current !== null && Math.abs(top - selfTop.current) <= 2) || gliding.current;
   /** An instant scroll is over at once: only the event it caused is ignored. */
@@ -123,45 +124,76 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     });
   }, []);
 
+  // ---------------------------------------------------------------- geometry
+
+  /** A page's top, in scroll-content coordinates, from its own box. */
+  const topOf = useCallback((el: HTMLElement): number => {
+    const c = containerRef.current!;
+    return c.scrollTop + el.getBoundingClientRect().top - c.getBoundingClientRect().top;
+  }, []);
+
   /**
-   * The mounted page under the viewport's midpoint, from the elements' own
-   * boxes. `null` when the midpoint is over a spacer, which a fling can do.
+   * The page in view: the mounted page under a probe just inside the top
+   * edge of the pane, past the gap. `null` when the probe is over a spacer,
+   * which a dragged scrollbar can do.
    */
-  const pageAtMidpoint = useCallback((): number | null => {
+  const pageAtTop = useCallback((): number | null => {
     const c = containerRef.current;
     if (!c) return null;
-    const box = c.getBoundingClientRect();
-    const mid = box.top + box.height / 2;
-    let best: { index: number; distance: number } | null = null;
+    const probe = c.getBoundingClientRect().top + CARD_GAP + 1;
+    let below: { index: number; top: number } | null = null;
     for (const [index, el] of elements.current) {
       const r = el.getBoundingClientRect();
       if (r.height === 0) continue;
-      if (mid >= r.top && mid < r.bottom) return index;
-      // Nothing is under the midpoint (a gap between cards): take the nearest.
-      const distance = mid < r.top ? r.top - mid : mid - r.bottom;
-      if (!best || distance < best.distance) best = { index, distance };
+      if (probe >= r.top && probe < r.bottom) return index;
+      // The probe is in the column's own top padding, above the first card.
+      if (r.top > probe && (!below || r.top < below.top)) below = { index, top: r.top };
     }
-    return best && best.distance < 64 ? best.index : null;
+    return below && below.top - probe <= CARD_GAP + 1 ? below.index : null;
   }, []);
 
   /** Remember where the page in view sits, so a re-render can put it back. */
-  const pin = useCallback(
-    (index: number | null) => {
-      const c = containerRef.current;
-      if (!c || index === null) return;
-      const el = elements.current.get(index);
-      if (!el) return;
-      pinned.current = { index, top: el.getBoundingClientRect().top - c.getBoundingClientRect().top };
-    },
-    []
-  );
+  const pin = useCallback((index: number) => {
+    const c = containerRef.current;
+    const el = elements.current.get(index);
+    if (!c || !el) return;
+    pinned.current = { index, top: el.getBoundingClientRect().top - c.getBoundingClientRect().top };
+  }, []);
+
+  /**
+   * Put the pinned page back where it was. Called before paint: from the
+   * layout effect after every render, and synchronously from a resize
+   * report, so a page that changed height after mounting moves nothing on
+   * screen.
+   */
+  const repin = useCallback(() => {
+    const c = containerRef.current;
+    const keep = pinned.current;
+    if (!c || !keep) return;
+    const el = elements.current.get(keep.index);
+    if (!el) return;
+    const delta = el.getBoundingClientRect().top - c.getBoundingClientRect().top - keep.top;
+    if (Math.abs(delta) < 0.5) return;
+    holdFrame(c.scrollTop + delta);
+    c.scrollTop += delta;
+  }, [holdFrame]);
 
   const registerPage = useCallback((index: number, el: HTMLElement | null) => {
     if (el) elements.current.set(index, el);
     else elements.current.delete(index);
   }, []);
 
-  // --- following the reader
+  /** A page reported its height: record it, and hold the view still. */
+  const onMeasure = useCallback(
+    (index: number, height: number) => {
+      measure(index, height);
+      repin();
+    },
+    [measure, repin]
+  );
+
+  // ---------------------------------------------------------------- following
+
   const handleScroll = useCallback(() => {
     if (rafPending.current) return;
     rafPending.current = true;
@@ -169,56 +201,29 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       rafPending.current = false;
       const c = containerRef.current;
       if (!c || spine.length === 0) return;
-      // Until a jump or a glide has landed nothing is followed: the only
-      // scrolls are the reader's own.
-      if (jumping.current || gliding.current) return;
+      // Until a placement or a glide has landed nothing is followed: the
+      // only scrolls are the reader's own.
+      if (placingRef.current || gliding.current) return;
       if (isSelfScroll(c.scrollTop)) return;
       // Geometry first; the estimated offsets only answer for a fling that
       // has outrun the mounted window, where there is nothing to measure.
-      const index = pageAtMidpoint() ?? indexAtOffset(offsets, c.scrollTop + c.clientHeight / 2);
+      const index = pageAtTop() ?? indexAtOffset(offsets, c.scrollTop + CARD_GAP + 1);
       setAnchorIndex(index);
       pin(index);
     });
-    // `isSelfScroll` and `now` are stable closures over refs.
+    // `isSelfScroll` closes over refs only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offsets, setAnchorIndex, spine.length, pageAtMidpoint, pin]);
+  }, [offsets, setAnchorIndex, spine.length, pageAtTop, pin]);
 
-  // --- something outside the reader moved the anchor: a jump, not a scroll
-  useEffect(() => {
-    if (scrollRequest === 0) return;
-    pinned.current = null;
-    gliding.current = false;
-    setJump({ index: anchorIndex });
-    // anchorIndex is read once, when the request is made; following it here
-    // would re-place on every page the reader passes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrollRequest]);
+  // ---------------------------------------------------------------- goTo
 
-  const jumpTo = useCallback(
-    (index: number) => {
-      pinned.current = null;
-      gliding.current = false;
-      setAnchorIndex(index);
-      setJump({ index });
-    },
-    [setAnchorIndex]
-  );
-
-  /**
-   * A glide to a mounted, measured page: a smooth scroll that puts its
-   * measured top at the top of the viewport. The window does not move while
-   * it is in flight (the anchor is only updated on landing), so the target
-   * cannot shift under it. Landing is watched frame by frame — at the
-   * target, or no longer moving after having moved, or out of time — and
-   * then the page in view is read from the geometry. If the glide did not
-   * land where it aimed, that is what the header will say.
-   */
+  /** A glide to a mounted, measured page: one smooth scroll, then nothing. */
   const glideTo = useCallback(
     (target: number): boolean => {
       const c = containerRef.current;
       const el = elements.current.get(target);
       if (!c || !el) return false;
-      const top = Math.max(0, c.scrollTop + el.getBoundingClientRect().top - c.getBoundingClientRect().top);
+      const top = Math.max(0, topOf(el) - CARD_GAP);
       pinned.current = null;
       gliding.current = true;
       const started = now();
@@ -227,6 +232,9 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       let moved = false;
       let still = 0;
       c.scrollTo({ top, behavior: 'smooth' });
+      // Landing is watched frame by frame: at the target, or no longer
+      // moving after having moved, or out of time. Only then is the anchor
+      // updated, so the window does not move under the glide.
       const tick = () => {
         const cur = containerRef.current;
         if (!cur || !gliding.current) {
@@ -243,100 +251,91 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
           return;
         }
         gliding.current = false;
-        const observed = pageAtMidpoint() ?? target;
+        const observed = pageAtTop() ?? target;
         setAnchorIndex(observed);
         pin(observed);
       };
       requestAnimationFrame(tick);
       return true;
     },
-    [pageAtMidpoint, setAnchorIndex, pin]
+    [topOf, pageAtTop, setAnchorIndex, pin]
   );
 
   /**
-   * Prev/Next: one page from the page in view — the one under the midpoint,
-   * read from the geometry, never a counter of presses. A mounted, measured
-   * target is glided to; anything else is a jump, which mounts the window
-   * around it and places it without a scroll.
+   * The one way the view moves. A mounted, measured target is glided to;
+   * anything else is placed: the window mounted around it before paint, the
+   * page at the top of the pane, pinned, no scroll.
    */
+  const goTo = useCallback(
+    (index: number) => {
+      if (spine.length === 0) return;
+      const target = Math.min(Math.max(index, 0), spine.length - 1);
+      const ready = pages.has(target) && heights.has(target) && elements.current.has(target);
+      if (ready && glideTo(target)) return;
+      pinned.current = null;
+      gliding.current = false;
+      setAnchorIndex(target);
+      setPlacing({ index: target });
+    },
+    [spine.length, pages, heights, glideTo, setAnchorIndex]
+  );
+
+  /** Prev/Next: one page from the page in view, read from the geometry. */
   const step = useCallback(
     (direction: number) => {
       if (spine.length === 0) return;
-      const from = pageAtMidpoint() ?? anchorIndex;
+      const from = pageAtTop() ?? anchorIndex;
       const target = Math.min(Math.max(from + direction, 0), spine.length - 1);
-      if (target === from) return;
-      const ready = pages.has(target) && heights.has(target) && elements.current.has(target);
-      if (ready && glideTo(target)) return;
-      jumpTo(target);
+      if (target !== from) goTo(target);
     },
-    [spine.length, pageAtMidpoint, anchorIndex, pages, heights, glideTo, jumpTo]
+    [spine.length, pageAtTop, anchorIndex, goTo]
   );
 
-  useImperativeHandle(ref, () => ({ step, jumpTo }), [step, jumpTo]);
+  useImperativeHandle(ref, () => ({ goTo, step }), [goTo, step]);
 
-  // --- a jump: place the page at the top of the viewport before paint, and
-  //     keep it there until it has loaded and been measured
-  //
-  // Runs on every render while a jump is open. The first render after the
-  // request has the window mounted around the target and the spacer above it
-  // sized by estimate; the page is put at the top and pinned, so from here on
-  // the pin effect below keeps it there while the pages around it mount and
-  // measure. Only a loaded, measured target settles the jump: until then the
-  // element is a placeholder that will change height.
+  // --- a request from outside (opening at a page, a clicked result, a
+  //     contents entry): goTo, like everything else
+  useEffect(() => {
+    if (!request) return;
+    goTo(request.index);
+    // The request's sequence number identifies a new one; goTo is read at
+    // that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.seq]);
+
+  // --- a placement: the page at the top of the pane before paint, kept
+  //     there until it has loaded and been measured
   useLayoutEffect(() => {
-    if (!jump) return;
+    if (!placing) return;
     const c = containerRef.current;
     if (!c) return;
-    // The window is not around the target yet (the stack has not caught up).
-    if (jump.index < mounted.start || jump.index >= mounted.end) return;
-    const target = elements.current.get(jump.index);
+    if (placing.index < mounted.start || placing.index >= mounted.end) return;
+    const target = elements.current.get(placing.index);
     if (!target) return;
-    const box = c.getBoundingClientRect();
-    const first = target.querySelector<HTMLElement>('[data-highlight-first="true"]');
-    const anchorEl = first ?? target;
-    const within = anchorEl.getBoundingClientRect().top - box.top;
-    const top = Math.max(0, c.scrollTop + within - (first ? c.clientHeight / 3 : 0));
+    const top = Math.max(0, topOf(target) - CARD_GAP);
     if (Math.abs(top - c.scrollTop) > 0.5) {
       holdFrame(top);
       c.scrollTop = top;
     }
-    pin(jump.index);
-    if (pages.has(jump.index) && heights.has(jump.index)) {
-      // Landed. The pin holds it from here; nothing else needs to move.
-      setJump(null);
-    }
-  }, [jump, pages, heights, mounted, holdFrame, pin]);
+    pin(placing.index);
+    if (pages.has(placing.index) && heights.has(placing.index)) setPlacing(null);
+  }, [placing, pages, heights, mounted, topOf, holdFrame, pin]);
 
   // --- hold the visible content still across every re-render
-  //
-  // Runs after the DOM is updated and before the browser paints. If the page
-  // that was under the midpoint has moved — a page above it mounted, was
-  // unmounted, or was measured for the first time — the scroll position is
-  // corrected by exactly that much, so nothing on screen appears to move.
   useLayoutEffect(() => {
-    const c = containerRef.current;
-    const keep = pinned.current;
-    if (!c || !keep) return;
-    const el = elements.current.get(keep.index);
-    if (!el) return;
-    const top = el.getBoundingClientRect().top - c.getBoundingClientRect().top;
-    const delta = top - keep.top;
-    if (Math.abs(delta) < 0.5) return;
-    holdFrame(c.scrollTop + delta);
-    c.scrollTop += delta;
+    repin();
   });
 
   // --- tell the rest of the app where the reader is
   //
-  // During a jump the reader is, by definition, on the page it was asked for;
-  // no frame in between is reported, so the tab cannot be told "page 1" on
-  // the way to page 36 and hand that back as a jump to page 1.
+  // During a placement the reader is, by definition, on the page it was asked
+  // for; no frame in between is reported.
   const activeEntry = spine[anchorIndex];
   useEffect(() => {
     if (!activeEntry) return;
-    if (jump && jump.index !== anchorIndex) return;
+    if (placing && placing.index !== anchorIndex) return;
     onActivePage(activeEntry, anchorIndex);
-  }, [activeEntry, anchorIndex, onActivePage, jump]);
+  }, [activeEntry, anchorIndex, onActivePage, placing]);
 
   const mountedEntries = useMemo(() => {
     const out: PageEntry[] = [];
@@ -384,7 +383,7 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
         startsPart={startsPart}
         partLabel={entry.part_label ? `Part ${entry.part_label}` : `Part ${entry.part_index + 1}`}
         onWordClick={onWordClick}
-        onMeasure={measure}
+        onMeasure={onMeasure}
         onMount={registerPage}
       />
     );
