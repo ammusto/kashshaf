@@ -11,6 +11,7 @@ export default defineConfig({
     alias: {
       '@kashshaf/shared': fileURLToPath(new URL('../packages/kashshaf-shared/src/index.ts', import.meta.url)),
     },
+    dedupe: ['@tanstack/react-virtual'],
   },
   test: {
     environment: 'jsdom',

@@ -44,7 +44,9 @@ Clicking a result from Stats, Search, Qurʾān, Poetry, the annotations list
 or the isnād list now scrolls to the highlighted words. They used to be
 marked somewhere below the fold.
 
-The contents are drawn as a tree, with lines showing what sits under what.
+The contents are drawn as a tree, each level stepped in from the last.
+Only the rows in view are drawn, so a book with ten thousand headings opens
+its contents as fast as one with ten.
 
 ### Annotations
 

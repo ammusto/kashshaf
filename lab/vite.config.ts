@@ -20,5 +20,9 @@ export default defineConfig({
       // no build artefact and nothing to publish between the two apps.
       '@kashshaf/shared': fileURLToPath(new URL('../packages/kashshaf-shared/src/index.ts', import.meta.url)),
     },
+    // The shared source sits outside lab/, so its bare imports would resolve
+    // from the repository root's node_modules. React is deduped by the plugin;
+    // the virtualiser the contents tree uses must be too, so one copy serves.
+    dedupe: ['@tanstack/react-virtual'],
   },
 })

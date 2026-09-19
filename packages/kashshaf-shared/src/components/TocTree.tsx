@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 /**
  * A book's table of contents as a tree, shared by Kashshaf's reader and
@@ -9,8 +10,15 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
  * Only the top level opens by default, because a long book's full tree is
  * thousands of entries and none of them are the one being looked for.
  *
+ * What is drawn is the list of rows that are open — the tree walked down to
+ * the closed entries — and of those only the ones in view, through a
+ * virtualiser. Tārīkh Dimashq has 10,000 headings, one chapter of it 2,400
+ * sections; opening that chapter mounts a few dozen rows, not 2,400, and a
+ * re-render of the pane costs the same whatever the book.
+ *
  * A row is two controls, not one. The triangle opens the subtree and the
- * title jumps to the page; neither does the other's job.
+ * title jumps to the page; neither does the other's job. Depth is shown by
+ * indentation alone.
  *
  * Pages are keyed by `(part_index, page_id)`, never by `page_id` alone: 45
  * books restart their page ids in every part.
@@ -63,6 +71,25 @@ export interface TocTreeProps<N extends TocEntry = TocEntry> {
   children?: ReactNode;
 }
 
+/** Every row is one line, truncated, so its height is known without measuring. */
+export const TOC_ROW_HEIGHT = 30;
+/** Rows drawn beyond the visible ones, above and below. */
+const OVERSCAN = 10;
+/**
+ * The pane's height before it has one: the first frame, and jsdom, where a
+ * rect is always empty. Drawing a screenful then is cheap and means the
+ * list is never blank for want of a measurement.
+ */
+const FALLBACK_HEIGHT = 800;
+
+/** A row of the list as drawn: an open entry, at its depth. */
+interface VisibleRow {
+  node: TocEntry;
+  depth: number;
+  hasChildren: boolean;
+  expanded: boolean;
+}
+
 export function TocTree<N extends TocEntry = TocEntry>({
   tree,
   label,
@@ -81,7 +108,7 @@ export function TocTree<N extends TocEntry = TocEntry>({
 }: TocTreeProps<N>) {
   const [filter, setFilter] = useState('');
   const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set<number>());
-  const currentRef = useRef<HTMLButtonElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const ancestors = useMemo(() => ancestorsOf(tree), [tree]);
 
@@ -99,14 +126,6 @@ export function TocTree<N extends TocEntry = TocEntry>({
     });
   }, [currentId, ancestors]);
 
-  // And bring it into view once it is on screen.
-  useEffect(() => {
-    const el = currentRef.current;
-    // jsdom has no scrollIntoView, and a pane that throws here would take the
-    // reader down with it.
-    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
-  }, [currentId, open]);
-
   const toggle = (id: number) =>
     setOpen((prev) => {
       const next = new Set(prev);
@@ -116,6 +135,37 @@ export function TocTree<N extends TocEntry = TocEntry>({
 
   const needle = filter.trim();
   const shown = useMemo(() => (needle ? prune(tree, needle) : tree), [tree, needle]);
+  // A filtered tree is already the answer; hiding half of it again would
+  // mean opening the entries that the filter just found.
+  const forceOpen = needle !== '';
+  const rows = useMemo(() => visibleRows(shown, open, forceOpen), [shown, open, forceOpen]);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => TOC_ROW_HEIGHT,
+    overscan: OVERSCAN,
+    observeElementRect: (instance, cb) => {
+      const el = instance.scrollElement;
+      if (!el) return;
+      const report = () => {
+        const r = el.getBoundingClientRect();
+        cb({ width: Math.round(r.width), height: r.height > 0 ? Math.round(r.height) : FALLBACK_HEIGHT });
+      };
+      report();
+      if (typeof ResizeObserver === 'undefined') return;
+      const ro = new ResizeObserver(report);
+      ro.observe(el);
+      return () => ro.disconnect();
+    },
+  });
+
+  // And bring the current entry into view once its path is open.
+  const currentIndex = currentId == null ? -1 : rows.findIndex((r) => r.node.id === currentId);
+  useEffect(() => {
+    if (currentIndex >= 0) virtualizer.scrollToIndex(currentIndex, { align: 'auto' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex]);
 
   return (
     <aside className={className} style={style} data-testid="toc-pane">
@@ -140,7 +190,7 @@ export function TocTree<N extends TocEntry = TocEntry>({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto py-1">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto py-1">
         {loading && <p className="px-3 py-2 text-xs text-app-text-secondary">Loading the contents…</p>}
         {error && (
           <p className="px-3 py-2 text-xs text-app-error" role="alert">
@@ -150,23 +200,22 @@ export function TocTree<N extends TocEntry = TocEntry>({
         {!loading && !error && tree.length === 0 && (
           empty ?? <p className="px-3 py-2 text-xs text-app-text-secondary">This text has no headings in the corpus.</p>
         )}
-        {shown.map((n, i) => (
-          <Entry
-            key={`${n.id}-${n.part_index}-${n.page_id}`}
-            node={n}
-            guides={[]}
-            last={i === shown.length - 1}
-            label={label}
-            currentId={currentId}
-            onJump={onJump as (n: TocEntry) => void}
-            currentRef={currentRef}
-            open={open}
-            toggle={toggle}
-            /* A filtered tree is already the answer; hiding half of it again
-               would mean opening the entries that the filter just found. */
-            forceOpen={needle !== ''}
-          />
-        ))}
+        <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+          {virtualizer.getVirtualItems().map((item) => {
+            const row = rows[item.index];
+            return (
+              <Row
+                key={`${row.node.id}-${row.node.part_index}-${row.node.page_id}`}
+                row={row}
+                top={item.start}
+                label={label}
+                isCurrent={row.node.id === currentId}
+                onJump={onJump as (n: TocEntry) => void}
+                toggle={toggle}
+              />
+            );
+          })}
+        </div>
       </div>
 
       {footer}
@@ -174,104 +223,91 @@ export function TocTree<N extends TocEntry = TocEntry>({
   );
 }
 
-function Entry({
-  node,
+function Row({
+  row,
+  top,
   label,
-  currentId,
+  isCurrent,
   onJump,
-  currentRef,
-  open,
   toggle,
-  forceOpen,
-  guides,
-  last,
 }: {
-  node: TocEntry;
+  row: VisibleRow;
+  top: number;
   label: (partIndex: number, pageId: number) => string;
-  currentId: number | null;
+  isCurrent: boolean;
   onJump: (n: TocEntry) => void;
-  currentRef: React.MutableRefObject<HTMLButtonElement | null>;
-  open: ReadonlySet<number>;
   toggle: (id: number) => void;
-  forceOpen: boolean;
-  /** For each ancestor, whether it still has a sibling below it. */
-  guides: boolean[];
-  /** Whether this entry is the last of its own siblings. */
-  last: boolean;
 }) {
-  const isCurrent = node.id === currentId;
-  const hasChildren = node.children.length > 0;
-  const expanded = forceOpen || open.has(node.id);
-
+  const { node, depth, hasChildren, expanded } = row;
   return (
-    <>
-      <div
-        dir="rtl"
-        className={`flex items-baseline hover:bg-app-surface-variant ${isCurrent ? 'bg-app-accent-light text-app-accent' : ''}`}
-        style={{ paddingRight: '0.75rem' }}
-      >
-        {/* The tree, drawn rather than implied by margin. The glyphs are the
-            mirror of the usual ones because the pane reads right to left:
-            the branch has to point at the title, which is to the left. */}
-        {node.depth > 0 && (
-          <span className="font-mono text-xs leading-6 whitespace-pre select-none text-app-text-secondary shrink-0" aria-hidden="true" data-testid={`guide-${node.id}`}>
-            {guides.map((more) => (more ? '│  ' : '   ')).join('')}
-            {last ? '┘──' : '┤──'}
-          </span>
-        )}
-        {hasChildren ? (
-          <button
-            onClick={() => toggle(node.id)}
-            aria-expanded={expanded}
-            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.title}`}
-            data-testid={`toc-toggle-${node.id}`}
-            className="w-5 shrink-0 py-1 text-[10px] leading-none text-app-text-secondary hover:text-app-text-primary"
-          >
-            <span className={`inline-block transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} aria-hidden="true">
-              ▸
-            </span>
-          </button>
-        ) : (
-          /* Leaves get no triangle, but they keep the column, so titles at one
-             depth line up whether or not they have children. */
-          <span className="w-5 shrink-0" aria-hidden="true" />
-        )}
-
+    <div
+      dir="rtl"
+      data-depth={depth}
+      className={`absolute left-0 right-0 flex items-center hover:bg-app-surface-variant ${isCurrent ? 'bg-app-accent-light text-app-accent' : ''}`}
+      /* Depth is indentation, nothing else: each level steps in by one em on
+         the reading side. */
+      style={{ top, height: TOC_ROW_HEIGHT, paddingRight: `${0.5 + depth}rem` }}
+    >
+      {hasChildren ? (
         <button
-          ref={(el) => {
-            if (isCurrent) currentRef.current = el;
-          }}
-          onClick={() => onJump(node)}
-          aria-current={isCurrent ? 'true' : undefined}
-          className="flex-1 min-w-0 flex items-baseline gap-2 py-1 pl-3 text-right"
+          onClick={() => toggle(node.id)}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.title}`}
+          data-testid={`toc-toggle-${node.id}`}
+          className="w-7 h-7 shrink-0 flex items-center justify-center rounded text-app-text-secondary hover:text-app-text-primary hover:bg-app-border-light"
         >
-          <span className="flex-1 min-w-0 font-arabic text-sm leading-snug truncate" title={node.title}>
-            {node.title}
-          </span>
-          <span dir="ltr" className="text-[11px] text-app-text-secondary tabular-nums shrink-0">
-            {label(node.part_index, node.page_id)}
-          </span>
+          {/* A triangle the size of a click target. It points left, into the
+              title, because the pane reads right to left; open, it points down. */}
+          <svg
+            viewBox="0 0 16 16"
+            width="14"
+            height="14"
+            aria-hidden="true"
+            className={`transition-transform duration-150 ${expanded ? '-rotate-90' : ''}`}
+          >
+            <path d="M11 2 L4 8 L11 14 Z" fill="currentColor" />
+          </svg>
         </button>
-      </div>
+      ) : (
+        /* Leaves get no triangle, but they keep the column, so titles at one
+           depth line up whether or not they have children. */
+        <span className="w-7 shrink-0" aria-hidden="true" />
+      )}
 
-      {expanded &&
-        node.children.map((c, i) => (
-          <Entry
-            key={`${c.id}-${c.part_index}-${c.page_id}`}
-            node={c}
-            guides={[...guides, !last]}
-            last={i === node.children.length - 1}
-            label={label}
-            currentId={currentId}
-            onJump={onJump}
-            currentRef={currentRef}
-            open={open}
-            toggle={toggle}
-            forceOpen={forceOpen}
-          />
-        ))}
-    </>
+      <button
+        onClick={() => onJump(node)}
+        aria-current={isCurrent ? 'true' : undefined}
+        className="flex-1 min-w-0 h-full flex items-center gap-2 pl-3 text-right"
+      >
+        <span className="flex-1 min-w-0 font-arabic text-sm leading-snug truncate" title={node.title}>
+          {node.title}
+        </span>
+        <span dir="ltr" className="text-[11px] text-app-text-secondary tabular-nums shrink-0">
+          {label(node.part_index, node.page_id)}
+        </span>
+      </button>
+    </div>
   );
+}
+
+/**
+ * The rows the list draws: every entry whose ancestors are all open, in tree
+ * order. One pass with an explicit stack, so a deep tree cannot overflow it.
+ */
+export function visibleRows(tree: TocEntry[], open: ReadonlySet<number>, forceOpen: boolean): VisibleRow[] {
+  const out: VisibleRow[] = [];
+  const stack: { node: TocEntry; depth: number }[] = [];
+  for (let i = tree.length - 1; i >= 0; i--) stack.push({ node: tree[i], depth: 0 });
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop()!;
+    const hasChildren = node.children.length > 0;
+    const expanded = hasChildren && (forceOpen || open.has(node.id));
+    out.push({ node, depth, hasChildren, expanded });
+    if (expanded) {
+      for (let i = node.children.length - 1; i >= 0; i--) stack.push({ node: node.children[i], depth: depth + 1 });
+    }
+  }
+  return out;
 }
 
 /** Every entry's line of ancestors, so the pane can open the path to one. */
@@ -280,7 +316,7 @@ export function ancestorsOf(tree: TocEntry[]): Map<number, number[]> {
   const walk = (nodes: TocEntry[], path: number[]) => {
     for (const n of nodes) {
       out.set(n.id, path);
-      walk(n.children, [...path, n.id]);
+      if (n.children.length > 0) walk(n.children, [...path, n.id]);
     }
   };
   walk(tree, []);
@@ -319,13 +355,17 @@ export function flattenToc<N extends TocEntry>(tree: N[]): N[] {
 
 /**
  * The entry a page sits under: the last one at or before it, by
- * `(part_index, page_id)`. `rows` must be in reading order.
+ * `(part_index, page_id)`. `rows` must be in reading order; the search is
+ * binary, because it runs on every page the reader passes.
  */
 export function entryForPage<R extends TocRowLike>(rows: R[], partIndex: number, pageId: number): R | null {
-  let best: R | null = null;
-  for (const r of rows) {
-    if (r.part_index < partIndex || (r.part_index === partIndex && r.page_id <= pageId)) best = r;
-    else break;
+  let lo = 0;
+  let hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const r = rows[mid];
+    if (r.part_index < partIndex || (r.part_index === partIndex && r.page_id <= pageId)) lo = mid + 1;
+    else hi = mid;
   }
-  return best;
+  return lo > 0 ? rows[lo - 1] : null;
 }

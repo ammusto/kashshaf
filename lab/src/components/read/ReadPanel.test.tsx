@@ -182,10 +182,9 @@ describe('ReadPanel', () => {
     const child = await within(toc).findByText('باب التواضع');
     expect(api.lab.getPage.mock.calls.length).toBe(pagesBefore);
     expect(triangle).toHaveAttribute('aria-expanded', 'true');
-    // 10 E: the child hangs off a tree, and it is the last of its section.
-    // The glyphs are mirrored because the pane reads right to left.
-    expect(within(toc).getByTestId('guide-2')).toHaveTextContent('┘');
-    expect(within(toc).queryByTestId('guide-1')).not.toBeInTheDocument();
+    // 10 E: the child sits one level in, by indentation alone.
+    expect(child.closest('[data-depth]')).toHaveAttribute('data-depth', '1');
+    expect(within(toc).getByText('كتاب الزهد').closest('[data-depth]')).toHaveAttribute('data-depth', '0');
 
     // A leaf gets no triangle, and the entry is labelled by §C1.
     expect(within(toc).queryByTestId('toc-toggle-2')).not.toBeInTheDocument();

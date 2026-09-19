@@ -126,6 +126,19 @@ export function ReaderPanel({
     [toc.rows, active]
   );
 
+  // Page labels by (part_index, page_id), built once per spine: the pane
+  // labels every row it draws, on every render, and a scan of a 33,000-page
+  // spine for each was most of what made a long book's contents slow.
+  const labelByPage = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of stack.spine) m.set(`${e.part_index}:${e.page_id}`, pageLabel(e, multiPart));
+    return m;
+  }, [stack.spine, multiPart]);
+  const tocLabel = useCallback(
+    (part: number, page: number) => labelByPage.get(`${part}:${page}`) ?? (multiPart ? `${part + 1}:${page}` : String(page)),
+    [labelByPage, multiPart]
+  );
+
   /** A contents entry was clicked: goTo, the one way the view moves. */
   const handleTocJump = useCallback(
     (node: TocNode) => {
@@ -317,10 +330,7 @@ export function ReaderPanel({
           <ReaderTocPane
             toc={toc}
             currentId={currentTocId}
-            label={(part, page) => {
-              const e = stack.spine.find((x) => x.part_index === part && x.page_id === page);
-              return e ? pageLabel(e, multiPart) : multiPart ? `${part + 1}:${page}` : String(page);
-            }}
+            label={tocLabel}
             onJump={handleTocJump}
             onClose={tocPane.close}
             width={tocPane.width}
