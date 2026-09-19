@@ -421,6 +421,32 @@ describe('ReadPanel', () => {
     await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:8'));
   });
 
+  it('folds the search rail when a search runs, and keeps it open once reopened by hand', async () => {
+    render(<ReadPanel book={book} />);
+    await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:7'));
+    expect(screen.getByTestId('search-rail')).toBeInTheDocument();
+
+    fireEvent.change(screen.getAllByLabelText('Term')[0], { target: { value: 'قال' } });
+    fireEvent.click(screen.getByTestId('run-search'));
+    await waitFor(() => expect(api.search).toHaveBeenCalled());
+    // The results and the text take the width.
+    expect(screen.queryByTestId('search-rail')).not.toBeInTheDocument();
+
+    // Back from the same toggle.
+    fireEvent.click(screen.getByTestId('open-search-rail'));
+    expect(screen.getByTestId('search-rail')).toBeInTheDocument();
+    // And it is not fought at the next search: the choice is kept.
+    fireEvent.click(screen.getByTestId('run-search'));
+    await waitFor(() => expect(api.search).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('search-rail')).toBeInTheDocument();
+
+    // The shortcut toggles it either way.
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+    expect(screen.queryByTestId('search-rail')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+    expect(screen.getByTestId('search-rail')).toBeInTheDocument();
+  });
+
   it('says why the contents are missing rather than showing an empty pane', async () => {
     api.toc.tree.mockRejectedValue(new Error('The table of contents is not available in this mode: toc.db ships with corpus 4.2.0'));
     api.toc.rows.mockRejectedValue(new Error('no toc'));

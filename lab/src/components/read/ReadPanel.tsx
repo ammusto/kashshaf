@@ -82,8 +82,20 @@ const memory = new Map<number, Remembered>();
  */
 let mounted = 0;
 
+/**
+ * The search rail makes way for a search: it folds when one runs, so the
+ * text and the results take the width. Opened back by hand (the button, or
+ * Ctrl/Cmd+B) it stays open for the rest of the session — the same rule as
+ * Kashshaf's sidebar. Session-wide, not per book: someone who wants it open
+ * wants it open in the next book too.
+ */
+let railOpen = true;
+let railPinnedOpen = false;
+
 export function resetReadMemory() {
   memory.clear();
+  railOpen = true;
+  railPinnedOpen = false;
 }
 
 function remembered(bookId: number | null): Remembered {
@@ -173,6 +185,19 @@ export function ReadPanel({
 
   const textRef = useRef<HTMLDivElement>(null);
   const { width: railWidth, handle: railHandle } = useDragWidth('lab.read.rail', 300, 220, 520);
+  const [railShown, setRailShown] = useState(railOpen);
+  const toggleRail = useCallback(() => {
+    setRailShown((was) => {
+      if (!was) railPinnedOpen = true;
+      railOpen = !was;
+      return !was;
+    });
+  }, []);
+  const foldRailForSearch = useCallback(() => {
+    if (railPinnedOpen) return;
+    railOpen = false;
+    setRailShown(false);
+  }, []);
 
   // --- the text ------------------------------------------------------------
 
@@ -316,6 +341,11 @@ export function ReadPanel({
         setTocOpen((v) => !v);
         return;
       }
+      if (showSearch && (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        toggleRail();
+        return;
+      }
       if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
       // The text reads right to left, so the right arrow goes back in it.
       if (e.key === 'ArrowRight') void go(index - 1);
@@ -323,7 +353,7 @@ export function ReadPanel({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [go, index]);
+  }, [go, index, showSearch, toggleRail]);
 
   const currentEntry = useMemo(
     () => (current ? entryForPage(rows, current.part_index, current.page_id) : null),
@@ -462,6 +492,7 @@ export function ReadPanel({
       if (and_terms.length === 0 && or_terms.length === 0) return;
       setSearching(true);
       setError(null);
+      foldRailForSearch();
       try {
         const r = await searchApi.book({ book_id: bookId, and_terms, or_terms, limit: PAGE_SIZE, offset: at });
         setResults(r);
@@ -475,7 +506,7 @@ export function ReadPanel({
         setSearching(false);
       }
     },
-    [bookId, andInputs, orInputs, mem]
+    [bookId, andInputs, orInputs, mem, foldRailForSearch]
   );
 
   const setInputs = (which: 'and' | 'or', next: SearchInput[]) => {
@@ -629,13 +660,41 @@ export function ReadPanel({
       onMouseEnter={() => (hot.current = true)}
       onMouseLeave={() => (hot.current = false)}
     >
-      {showSearch && (
+      {showSearch && !railShown && (
+        <div className="flex-shrink-0 w-10 bg-app-surface border-r border-app-border-light flex flex-col items-center pt-2">
+          <button
+            type="button"
+            onClick={toggleRail}
+            title="Open search (Ctrl+B)"
+            aria-label="Open search"
+            data-testid="open-search-rail"
+            className="p-1.5 rounded border border-app-border-medium text-app-text-secondary hover:text-app-accent hover:border-app-accent"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {showSearch && railShown && (
         <aside
           className="relative flex-shrink-0 bg-app-surface border-r border-app-border-light"
           style={{ width: railWidth }}
           data-testid="search-rail"
         >
           {railHandle}
+          <button
+            type="button"
+            onClick={toggleRail}
+            title="Collapse search (Ctrl+B)"
+            aria-label="Collapse search"
+            data-testid="collapse-search-rail"
+            className="absolute top-2 right-2 z-10 p-1 rounded text-app-text-tertiary hover:text-app-accent hover:bg-app-surface-variant"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
           <SearchForm
             tab={tab}
             onTab={(t) => {
