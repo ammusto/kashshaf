@@ -1,123 +1,87 @@
 # Kashshāf
 
-Desktop application for searching medieval Arabic texts (pre-750/1350) with token-level morphological data. For more info on features and other documentation, see the [Kashshāf website](https://www.kashshaf.com/)
+Desktop application for searching  Arabic texts (pre-1930) with token-level morphological data. Features and documentation at [kashshaf.com](https://www.kashshaf.com/).
 
 ## Features
 
-- **Lemma Search** - Find all inflected forms of a word automatically
-- **Root Search** - Search by Arabic triconsonantal root across all derivations
-- **Surface Search** - Exact word matching with optional clitic expansion
-- **Proximity Search** - Find terms within N words of each other
-- **Name Search** - Search Arabic personal names with pattern generation for kunyas, nasab, nisbas
-- **Wildcard Search** - Prefix and infix patterns (e.g., `أب*`, `أح*مد`)
-- **Boolean Queries** - Combine terms with AND/OR logic
-- **Token Overlay** - Click any word to see morphological analysis (lemma, root, POS, features)
-- **Filtering** - By period, author, genre, or specific texts
-- **Export** - Results and metadata to CSV/Excel
+- **Lemma search**: all inflected forms of a word
+- **Root search**: every derivation of a triconsonantal root
+- **Surface search**: exact forms, with optional clitic expansion
+- **Proximity search**: terms within N words of each other
+- **Name search**: pattern generation for kunya, nasab, and nisba
+- **Wildcards**: prefix, suffix, and infix patterns (`أب*`, `*رف`, `أح*مد`)
+- **Boolean queries**: AND/OR combinations
+- **Token overlay**: click any word for lemma, root, POS, and features
+- **Table of contents**: chapter structure for every text that has one
+- **Filtering**: period, author, genre, or chosen texts
+- **Export**: results and metadata to CSV
 
-> **NB:** Morphological analysis uses CAMeL Tools with the MSA morphological database. While MSA and Classical Arabic share core grammar, archaic vocabulary or rare classical forms may produce inaccurate lemmas or POS tags.
+Morphological analysis uses CAMeL Tools with the MSA database. Archaic vocabulary and rare classical forms may receive inaccurate lemmas or tags.
 
 ## Architecture
 
-The application uses a dual-mode architecture with an API abstraction layer that allows  switching between local and remote data sources.
-
 | Layer | Technology |
-|-------|------------|
-| UI | React 18, TailwindCSS |
-| Desktop Runtime | Tauri 2.x (Rust) |
-| Search Engine | Tantivy (local) / REST API (remote) |
-| Database | SQLite (tokens, metadata, history) |
+|---|---|
+| UI | React 18, Tailwind CSS |
+| Desktop | Tauri 2 (Rust) |
+| Search | Tantivy (local) or REST API (remote), sharing one engine crate |
+| Storage | SQLite (tokens, metadata, contents), Tantivy index |
 
-**Offline Mode** - Full corpus stored locally (~16 GB). Best performance, no internet required.
-
-**Online Mode** - Query remote API. No download required, but needs internet connection.
+**Offline**: full corpus on disk (8.8 GB). **Online**: queries go to the API; no download.
 
 ## Platforms
 
-- Windows
-- macOS (Universal: Intel + Apple Silicon)
-- Linux (AppImage, deb)
+Windows, macOS (Intel and Apple Silicon), Linux (AppImage, deb).
 
 ## Development
 
-### Prerequisites
-
-- Node.js 20+
-- Rust toolchain (stable)
-- Platform-specific dependencies for Tauri
-
-### Setup
+Node 20+, stable Rust, and Tauri's platform prerequisites.
 
 ```bash
 npm install
 npm run tauri dev
-```
-
-### Build
-
-```bash
 npm run tauri build
 ```
 
-## Data
+The workspace also contains `api/` (the server), `engine/` (shared search), and `lab/` (Kashshaf Lab, in development).
 
-### Corpus Statistics
+## Corpus
 
-| Metric | Value |
-|--------|-------|
-| Books | 6,917 |
-| Pages | 5,495,060 |
-| Tokens | 943,471,799 |
-| Unique token definitions | 4,529,873 |
-| Database size | ~16 GB |
+Version 4.2.0.
 
-### Data Pipeline
+| | |
+|---|---|
+| Texts | 7,199 |
+| Pages | 5,728,205 |
+| Tokens | 991,616,029 |
+| Distinct surface/lemma/root triples | 2,993,181 |
+| Download | 8.8 GB |
 
-The corpus is built with texts from al-Maktaba al-Shamela (4679), the OpenITI/KITAB corpus (2169), and Nuṣūṣ (69)  through the following pipeline:
+Sources: al-Maktaba al-Shāmila (4,679 texts), OpenITI/KITAB (2,451), Nuṣūṣ (69). All texts are from authors who died before 1348/1930.
+
+### Pipeline
 
 ```
-Shamela/OpenITI/Nuṣūṣ Sources
-        │
-        ▼
-   Fix Pages ────────► Split long pages, remove editorial content (e.g. endnotes and footnotes)
-        │
-        ▼
-   Clean Text ───────► Remove markup, normalize Arabic
-        │
-        ▼
-   BERT Analysis ────► Morphological tokenization
-        │
-        ▼
-   ┌────┴────┐
-   ▼         ▼
-SQLite    Tantivy
-Tokens    Index
+sources → canonical JSON → clean → CAMeL BERT morphology → corpus.db + Tantivy index
 ```
 
-**Stage 1: Fix Pages** - For texts without pagination, splits pages >2000 tokens, removes endnotes and malformed markers
+1. **Convert**: Shamela JSON, OpenITI mARkdown, and Nuṣūṣ TEI to one page-level JSON format. Long unpaginated pages are split; endnotes and footnotes removed.
+2. **Clean**: markup, control tokens, and stray Latin removed; entities decoded; chapter headings preserved as `<title>` tags.
+3. **Analyse**: CAMeL Tools with BERT disambiguation assigns surface, lemma, root, POS, features, and clitics to every token.
+4. **Build**: token definitions deduplicated into a triple table; page token streams stored as compressed id blobs; a single-segment Tantivy index in reading order; table of contents and frequency tables as sidecars.
 
-**Stage 2: Clean Text** - Strips HTML/XML, URLs, OpenITI tags; normalizes whitespace
+Pipeline code and metadata are in the separate `kashshaf-data` repository.
 
-**Stage 3: BERT Morphological Analysis and Lexical Features** - Uses CAMeL Tools with BERT disambiguation to extract:
-- Surface form (normalized Arabic)
-- Lemma (dictionary base form)
-- Root (3-letter Semitic root)
-- POS tag and grammatical features
-- Clitics (attached particles)
+### Files
 
-> **NB:** Morphological analysis uses CAMeL Tools with the MSA morphological database. While MSA and Classical Arabic share core grammar, archaic vocabulary or rare classical forms may produce inaccurate lemmas or POS tags.
-
-**Stage 4: Build SQLite Database** - Stores morphological and lexical feature data of 943M token occurrences but deduplicates definitions (4.5M unique) via foreign keys to shared lemma/root tables, achieving ~208x compression
-
-**Stage 5: Build Tantivy Index** - Full-text search index with three searchable fields (surface, lemma, root) and contains full body text for page display
-
-### Storage
-
-| File | Size | Purpose |
-|------|------|---------|
-| corpus.db | ~5.2 GB | Token database (morphological data) and metadata content|
-| tantivy_index/ | ~10.9 GB | Full-text search index and text content |
-
+| File | Size | Contents |
+|---|---|---|
+| `corpus.db` | 2.9 GB | token streams, definitions, triples |
+| `tantivy_index/` | 6.0 GB | full-text index and page bodies |
+| `toc.db` | 253 MB | chapter structure |
+| `triples.bin` | 168 MB | surface/lemma/root maps |
+| `metadata.db` | 41 MB | texts, authors, genres |
+| `lemma_freq.bin`, `root_freq.bin` | 30 MB | corpus frequencies |
 
 ## License
 
@@ -125,7 +89,4 @@ MIT
 
 ## Acknowledgments
 
-- [Shamela](https://shamela.ws/) for main source texts
-- [OpenITI](https://openiti.org/) for additional source texts
-- [Nusus](https://www.nusus.net/) for additional source texts
-- [CAMeL Lab](https://camel-lab.com/) for Arabic NLP tools
+[Shamela](https://shamela.ws/), [OpenITI](https://openiti.org/), and [Nuṣūṣ](https://www.nusus.net/) for the texts. [CAMeL Lab](https://camel-lab.com/) for the Arabic NLP tools.
