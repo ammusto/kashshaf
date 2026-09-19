@@ -102,7 +102,7 @@ export function Sidebar({
         <button
           onClick={onToggle}
           className="p-2.5 bg-app-surface-variant rounded-lg hover:bg-app-accent-light transition-colors"
-          title="Open sidebar"
+          title="Open sidebar (Ctrl+B)"
         >
           <svg className="w-5 h-5 text-app-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -151,7 +151,7 @@ export function Sidebar({
           <button
             onClick={onToggle}
             className="p-2 bg-app-surface-variant rounded-lg hover:bg-app-accent-light transition-colors flex-shrink-0"
-            title="Collapse sidebar"
+            title="Collapse sidebar (Ctrl+B)"
           >
             <svg className="w-4 h-4 text-app-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />

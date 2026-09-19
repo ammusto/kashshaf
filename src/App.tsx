@@ -9,6 +9,7 @@ import { BooksProvider } from './contexts/BooksContext';
 import { useSearch } from './hooks/useSearch';
 import { useReaderNavigation } from './hooks/useReaderNavigation';
 import { usePageHighlights } from './hooks/usePageHighlights';
+import { useSidebarForSearch } from './hooks/useSidebarForSearch';
 import { Sidebar } from './components/Sidebar';
 import { ReaderPanel, ResultsPanel, HelpPanel } from './components/panels';
 import { DraggableSplitter, UpdateBanner } from './components/ui';
@@ -53,7 +54,11 @@ function App() {
   const [showAnnouncementsModal, setShowAnnouncementsModal] = useState(false);
   const [announcementsChecked, setAnnouncementsChecked] = useState(false);
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Open by default; folds away when a search runs so the results and the
+  // reader take the width, unless the user has opened it back this session.
+  // Ctrl/Cmd+B toggles it from anywhere.
+  const sidebar = useSidebarForSearch();
+  const sidebarOpen = sidebar.open;
 
   // Tab-based state from context
   const {
@@ -600,10 +605,19 @@ function App() {
         <div className="flex-1 flex overflow-hidden">
         <Sidebar
           isOpen={sidebarOpen}
-          onToggle={() => setSidebarOpen(!sidebarOpen)}
-          onSearch={handleSearch}
-          onProximitySearch={handleProximitySearch}
-          onNameSearch={handleNameSearch}
+          onToggle={sidebar.toggle}
+          onSearch={(q) => {
+            sidebar.collapseForSearch();
+            return handleSearch(q);
+          }}
+          onProximitySearch={(q) => {
+            sidebar.collapseForSearch();
+            return handleProximitySearch(q);
+          }}
+          onNameSearch={() => {
+            sidebar.collapseForSearch();
+            void handleNameSearch();
+          }}
           onOpenTextSelection={() => {
             setTextSelectionMode('select');
             setTextSelectionModalOpen(true);
