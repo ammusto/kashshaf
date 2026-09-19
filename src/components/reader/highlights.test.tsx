@@ -190,12 +190,12 @@ describe('highlights follow the query', () => {
     (api.getMatchPositionsCombined as ReturnType<typeof vi.fn>).mockClear();
 
     // Straight through the book without pausing: each move resets the timer.
+    // A fling is one scroll event after another with no frame between, so
+    // the reader is not waited for in between.
     for (let i = 1; i < 12; i++) {
-      const mounted = [...document.querySelectorAll('[data-page-index]')].map((el) =>
-        Number((el as HTMLElement).dataset.pageIndex)
-      );
-      await layout.scrollToPage(mounted.includes(i) ? i : Math.max(...mounted));
+      layout.scrollToPageQuick(i);
     }
+    await layout.settle();
     await new Promise((r) => setTimeout(r, HIGHLIGHT_DEBOUNCE_MS * 4));
 
     const asked = new Set(

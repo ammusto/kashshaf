@@ -17,6 +17,7 @@ import type {
   WildcardGrammar,
   WalkStatus,
   PageEntry,
+  TocNode,
 } from '../types';
 import { stripPunctuation } from '@kashshaf/shared';
 
@@ -273,6 +274,19 @@ export class OnlineAPI implements SearchAPI {
 
   async listBookPages(id: number): Promise<PageEntry[]> {
     return fetchAPI<PageEntry[]>(`/book/${id}/pages`);
+  }
+
+  /**
+   * A 404 is "this server cannot serve a table of contents" — the route is
+   * absent before API 0.5.2, and a server whose corpus has no toc.db
+   * answers 404 too — which the pane reports as such rather than as an
+   * error. Anything else is an error.
+   */
+  async getBookToc(id: number): Promise<TocNode[] | null> {
+    const res = await fetch(`${API_BASE_URL}/book/${id}/toc`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Table of contents: HTTP ${res.status}`);
+    return (await res.json()) as TocNode[];
   }
 
   async getPageByLabel(

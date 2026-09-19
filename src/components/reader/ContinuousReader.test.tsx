@@ -222,6 +222,8 @@ describe('the reader as a scrolling book', () => {
     );
     await waitFor(() => expect(onActivePage).toHaveBeenCalled());
     expect(onActivePage.mock.calls[0][0]).toMatchObject({ part_index: 0, page_id: 1 });
+    // Nothing is followed until the opening placement has landed.
+    await layout.settle();
 
     await layout.scrollToPage(2);
     await waitFor(() =>

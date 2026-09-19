@@ -26,6 +26,8 @@ export interface FakeLayout {
   scrollTo: (top: number) => Promise<void>;
   /** Scroll so the page at this spine index sits under the viewport's midpoint. */
   scrollToPage: (index: number) => Promise<void>;
+  /** The same, without waiting for the reader: a fling, one event after another. */
+  scrollToPageQuick: (index: number) => void;
   /** Let pending frames and effects run without scrolling. */
   settle: () => Promise<void>;
   /** Spine indices mounted, in order. */
@@ -133,6 +135,16 @@ export function installLayout(options: LayoutOptions = {}): FakeLayout {
       let top = 0;
       for (let i = 0; i < index; i++) top += pageHeight(i);
       await this.scrollTo(Math.max(0, top + pageHeight(index) / 2 - viewportHeight / 2));
+    },
+    scrollToPageQuick(index: number) {
+      const c = container();
+      if (!c) throw new Error('the reader has not rendered');
+      let top = 0;
+      for (let i = 0; i < index; i++) top += pageHeight(i);
+      c.scrollTop = Math.max(0, top + pageHeight(index) / 2 - viewportHeight / 2);
+      act(() => {
+        c.dispatchEvent(new Event('scroll'));
+      });
     },
     async settle() {
       await flush();

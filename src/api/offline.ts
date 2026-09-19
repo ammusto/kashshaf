@@ -15,6 +15,7 @@ import type {
   EngineCapabilities,
   WalkStatus,
   PageEntry,
+  TocNode,
 } from '../types';
 import * as tauri from './tauri';
 
@@ -112,6 +113,10 @@ export class OfflineAPI implements SearchAPI {
 
   async listBookPages(id: number): Promise<PageEntry[]> {
     return tauri.listBookPages(id);
+  }
+
+  async getBookToc(id: number): Promise<TocNode[] | null> {
+    return tauri.getBookToc(id);
   }
 
   async getPageByLabel(

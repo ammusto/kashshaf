@@ -209,6 +209,24 @@ pub fn list_book_pages(
         .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
 }
 
+/// The book's table of contents as a tree, or `None` when this corpus has no
+/// `toc.db` (it ships with corpus 4.2.0). A book that has no headings is
+/// `Some(vec![])`: the two are different things and the pane says so.
+#[tauri::command]
+pub fn get_book_toc(
+    state: State<'_, ManagedAppState>,
+    id: u64,
+) -> Result<Option<Vec<kashshaf_engine::TocNode>>, KashshafError> {
+    let app_state = require_state(&state)?;
+    match &app_state.toc {
+        None => Ok(None),
+        Some(toc) => toc
+            .tree(id)
+            .map(Some)
+            .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string())),
+    }
+}
+
 #[tauri::command]
 pub fn get_page_by_label(
     state: State<'_, ManagedAppState>,

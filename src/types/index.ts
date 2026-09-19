@@ -148,6 +148,21 @@ export interface PageEntry {
   page_number: string;
 }
 
+/**
+ * One heading of a book's table of contents, nested. From `toc.db`, which
+ * ships with corpus 4.2.0; keyed by `(part_index, page_id)`.
+ */
+export interface TocNode {
+  id: number;
+  parent: number;
+  title: string;
+  part_index: number;
+  page_id: number;
+  page_number: string;
+  depth: number;
+  children: TocNode[];
+}
+
 /** Where the corpus lives: `get_data_directory_info` (Tauri). */
 export interface DataDirInfo {
   path: string;

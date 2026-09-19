@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PageEntry, Token } from '../../types';
+import type { PageEntry, Token, TocNode } from '../../types';
 import type { SearchAPI } from '../../api';
-import { TokenPopup } from '@kashshaf/shared';
+import { TokenPopup, entryForPage } from '@kashshaf/shared';
 import { Toast } from '../ui';
 import { useBooks } from '../../contexts/BooksContext';
 import { CitationBlock } from '../shared/CitationBlock';
@@ -9,6 +9,9 @@ import { BookDetailView } from '../modals/MetadataBrowser';
 import { usePageStack, type PageAnchor } from '../../hooks/usePageStack';
 import type { ClickedMatches } from '../../types/search';
 import { ContinuousReader, pageLabel, type ContinuousReaderHandle } from '../reader/ContinuousReader';
+import { ReaderTocPane } from '../reader/ReaderTocPane';
+import { useBookToc } from '../../hooks/useBookToc';
+import { useTocPane, READER_MIN_WIDTH } from '../../hooks/useTocPane';
 
 interface ReaderPanelProps {
   api: SearchAPI;
@@ -26,6 +29,8 @@ interface ReaderPanelProps {
   onActivePage?: (entry: PageEntry) => void;
   /** Jumping when the book has no spine. Returns false if there is no such page. */
   onNavigateToLabel?: (partLabel: string, pageNumber: string) => Promise<boolean>;
+  /** The pages come from the API server (online mode or the web build), not a local corpus. */
+  remote?: boolean;
 }
 
 /**
@@ -45,6 +50,7 @@ export function ReaderPanel({
   onMountedPages,
   onActivePage,
   onNavigateToLabel,
+  remote = false,
 }: ReaderPanelProps) {
   const { booksMap, authorsMap, genresMap } = useBooks();
   const [selectedToken, setSelectedToken] = useState<Token | null>(null);
@@ -61,6 +67,32 @@ export function ReaderPanel({
   const [active, setActive] = useState<PageEntry | null>(null);
 
   const stack = usePageStack({ api, bookId, anchor });
+
+  // --- the contents pane
+  const toc = useBookToc(api, bookId);
+  const tocPane = useTocPane();
+  // A book loaded from a result click opens the pane, the first time in the
+  // session; after that it stays as the user left it.
+  useEffect(() => {
+    if (bookId !== null && clickedMatches) tocPane.openedFromResult();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId, clickedMatches?.part_index, clickedMatches?.page_id]);
+
+  // With both sidebars open the reader takes what remains, and must not fall
+  // below a readable minimum: if it would, the contents pane yields.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [rootWidth, setRootWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setRootWidth(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const tocYields = rootWidth !== null && rootWidth > 0 && rootWidth - tocPane.width < READER_MIN_WIDTH;
+  const tocShown = tocPane.open && !tocYields;
 
   const book = bookId !== null ? booksMap.get(bookId) : null;
   const title = book?.title ?? (bookId !== null ? `Book ${bookId}` : '');
@@ -86,6 +118,21 @@ export function ReaderPanel({
       onActivePage?.(entry);
     },
     [onActivePage]
+  );
+
+  // The entry the page in view sits under, by (part_index, page_id).
+  const currentTocId = useMemo(
+    () => (active ? entryForPage(toc.rows, active.part_index, active.page_id)?.id ?? null : null),
+    [toc.rows, active]
+  );
+
+  /** A contents entry was clicked: goTo, the one way the view moves. */
+  const handleTocJump = useCallback(
+    (node: TocNode) => {
+      const index = stack.spine.findIndex((e) => e.part_index === node.part_index && e.page_id === node.page_id);
+      if (index >= 0) readerRef.current?.goTo(index);
+    },
+    [stack.spine]
   );
 
   const matchesForIndex = useCallback(
@@ -235,6 +282,18 @@ export function ReaderPanel({
         </div>
         {/* No Prev/Next: the column scrolls, the arrow keys and the wheel
             move it, and the page box with Go places a page. */}
+        <button
+          type="button"
+          onClick={tocPane.toggle}
+          aria-pressed={tocPane.open}
+          title={tocYields && tocPane.open ? 'The contents pane is hidden while the window is too narrow (Ctrl+T)' : 'Contents (Ctrl+T)'}
+          className={`px-3 py-2 rounded-md text-xs font-medium transition-colors border flex-shrink-0
+                     ${tocPane.open
+                       ? 'bg-app-accent-light text-app-accent border-app-accent'
+                       : 'bg-app-surface-variant text-app-text-primary border-app-border-light hover:bg-app-accent-light hover:text-app-accent'}`}
+        >
+          Contents
+        </button>
       </div>
 
       {stack.spineError && (
@@ -243,16 +302,37 @@ export function ReaderPanel({
         </div>
       )}
 
-      <ContinuousReader
-        ref={readerRef}
-        stack={stack}
-        matchesFor={matchesForIndex}
-        onWordClick={handleWordClick}
-        onActivePage={handleActivePage}
-        onMountedPages={onMountedPages}
-        multiPart={multiPart}
-        onBackgroundClick={handleClosePopup}
-      />
+      <div ref={rootRef} className="flex-1 min-h-0 flex">
+        <ContinuousReader
+          ref={readerRef}
+          stack={stack}
+          matchesFor={matchesForIndex}
+          onWordClick={handleWordClick}
+          onActivePage={handleActivePage}
+          onMountedPages={onMountedPages}
+          multiPart={multiPart}
+          onBackgroundClick={handleClosePopup}
+        />
+        {tocShown && (
+          <ReaderTocPane
+            toc={toc}
+            currentId={currentTocId}
+            label={(part, page) => {
+              const e = stack.spine.find((x) => x.part_index === part && x.page_id === page);
+              return e ? pageLabel(e, multiPart) : multiPart ? `${part + 1}:${page}` : String(page);
+            }}
+            onJump={handleTocJump}
+            onClose={tocPane.close}
+            width={tocPane.width}
+            onWidth={tocPane.setWidth}
+            unavailableMessage={
+              remote
+                ? 'Table of contents requires a newer server.'
+                : 'This corpus has no table of contents; it ships with corpus 4.2.0.'
+            }
+          />
+        )}
+      </div>
 
       {selectedToken && (
         <TokenPopup token={selectedToken} position={popupPosition} onClose={handleClosePopup} />

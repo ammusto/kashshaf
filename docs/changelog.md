@@ -340,6 +340,21 @@ select a passage.
 Lab keeps its own data beside Kashshaf's, so deleting Kashshaf's corpus never
 touches your work.
 
+## [0.5.3] - 2026-09-18
+
+- The reader shows the book as one scrolling column of pages, each drawn as
+  a page with its number at the corner. Reading on past the foot of a page
+  needs no click; clicking a result places its page at the top and marks
+  the hits on every page you scroll to. The Prev and Next buttons are gone:
+  scroll, or type a page and press Go.
+- A table of contents beside the text (Ctrl+T, or the Contents button). It
+  follows the page you are on, and clicking a heading places its page. Its
+  width is dragged from its edge. Needs corpus 4.2.0; online, the current
+  server serves it.
+- The search sidebar folds when a search runs, so the results and the text
+  take the width; Ctrl+B or its button opens it again with your terms still
+  in it.
+
 ## [0.5.2] - 2026-09-13
 
 - The corpus update prompt now tells an optional update apart from a first

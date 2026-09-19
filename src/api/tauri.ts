@@ -17,6 +17,7 @@ import type {
   WalkStatus,
   DataDirInfo,
   PageEntry,
+  TocNode,
 } from '../types';
 import { stripPunctuation } from '@kashshaf/shared';
 
@@ -46,6 +47,11 @@ export async function getPage(
   pageId: number
 ): Promise<SearchResult | null> {
   return invoke('get_page', { id, partIndex, pageId });
+}
+
+/** The book's table of contents, or null without a toc.db (`get_book_toc`). */
+export async function getBookToc(id: number): Promise<TocNode[] | null> {
+  return invoke('get_book_toc', { id });
 }
 
 /** The book's page spine in reading order (`list_book_pages`). */

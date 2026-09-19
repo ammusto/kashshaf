@@ -15,6 +15,7 @@ import type {
   EngineCapabilities,
   WalkStatus,
   PageEntry,
+  TocNode,
 } from '../types';
 import type { NameSearchForm } from './tauri';
 
@@ -136,6 +137,13 @@ export interface SearchAPI {
    * restart per part.
    */
   listBookPages(id: number): Promise<PageEntry[]>;
+
+  /**
+   * The book's table of contents, or `null` when this source cannot serve
+   * one: a corpus without `toc.db` (before 4.2.0), or a server without the
+   * route (before 0.5.2). A book with no headings is `[]`.
+   */
+  getBookToc(id: number): Promise<TocNode[] | null>;
 
   getPageTokens(
     id: number,

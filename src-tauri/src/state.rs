@@ -23,6 +23,10 @@ pub struct AppState {
     /// `db_info.schema_version` of corpus.db (None for a legacy build without db_info)
     pub db_schema_version: Option<i64>,
     pub corpus_version: Option<String>,
+    /// `toc.db` beside the corpus, when the downloaded corpus has one (it
+    /// ships with corpus 4.2.0). None on an older corpus: the reader's
+    /// contents pane says so rather than failing.
+    pub toc: Option<kashshaf_engine::TocDb>,
 }
 
 impl AppState {
@@ -85,6 +89,14 @@ impl AppState {
 
         Self::init_settings_db(&settings_db_path)?;
 
+        let toc = match kashshaf_engine::TocDb::open_in(&data_dir) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("[toc] no table of contents: {e}");
+                None
+            }
+        };
+
         Ok(Self {
             search_engine,
             token_cache,
@@ -94,6 +106,7 @@ impl AppState {
             data_dir,
             db_schema_version,
             corpus_version,
+            toc,
         })
     }
 

@@ -656,6 +656,7 @@ function App() {
                   onMountedPages={highlights.onMountedPages}
                   onActivePage={handleActivePage}
                   onNavigateToLabel={handleNavigateToLabel}
+                  remote={mode === 'online' || isWebTarget()}
                 />
               </div>
 
