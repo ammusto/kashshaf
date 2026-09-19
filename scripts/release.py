@@ -8,6 +8,11 @@ with `dry_run: false`).
                                     [--notes-file docs/changelog.md]
                                     [--dry-run]
 
+Release notes come from docs/changelog.md, which holds Kashshaf's sections
+only; `--app lab` reads docs/lab-changelog.md instead, whose sections are
+`## [lab X.Y.Z]`. Lab's version bump and tag are not automated here: with
+`--app lab` the script prints the notes it found and stops.
+
 What it touches:
   * Cargo.toml (workspace version) — or, before the workspace exists,
     src-tauri/Cargo.toml, api/Cargo.toml and engine/Cargo.toml
@@ -121,25 +126,37 @@ def update_tauri_conf(version: str) -> None:
 
 # ---------------------------------------------------------------- notes
 
-def notes_from_changelog(path: Path, version: str) -> str | None:
-    """The body of the `## [X.Y.Z]` section of a Keep-a-Changelog file."""
+def changelog_for(app: str) -> Path:
+    """Which changelog an app's notes come from."""
+    return ROOT / ("docs/lab-changelog.md" if app == "lab" else "docs/changelog.md")
+
+
+def section_heading(app: str, version: str) -> str:
+    """What is inside the brackets of the app's section: `0.6.0`, or `lab 0.10.0`."""
+    return f"lab {version}" if app == "lab" else version
+
+
+def notes_from_changelog(path: Path, version: str, app: str = "kashshaf") -> str | None:
+    """The body of the `## [X.Y.Z]` (or `## [lab X.Y.Z]`) section of a Keep-a-Changelog file."""
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8")
-    m = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, flags=re.MULTILINE | re.DOTALL)
+    heading = section_heading(app, version)
+    m = re.search(rf"^## \[{re.escape(heading)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, flags=re.MULTILINE | re.DOTALL)
     if not m:
         return None
     body = m.group(1).strip()
     return body or None
 
 
-def read_notes(notes_file: Path | None, version: str) -> str:
-    if notes_file is not None and notes_file.suffix.lower() == ".md" and notes_file.name.lower() == "changelog.md":
-        notes = notes_from_changelog(notes_file, version)
+def read_notes(notes_file: Path | None, version: str, app: str = "kashshaf") -> str:
+    if notes_file is not None and notes_file.name.lower().endswith("changelog.md"):
+        notes = notes_from_changelog(notes_file, version, app)
+        heading = section_heading(app, version)
         if notes:
-            print(f"OK Release notes: section [{version}] of {notes_file}")
+            print(f"OK Release notes: section [{heading}] of {notes_file}")
             return notes
-        print(f"!! {notes_file} has no ## [{version}] section")
+        print(f"!! {notes_file} has no ## [{heading}] section")
     elif notes_file is not None and notes_file.exists():
         print(f"OK Release notes: {notes_file}")
         return notes_file.read_text(encoding="utf-8").strip()
@@ -235,9 +252,12 @@ def main() -> int:
     parser.add_argument("--min-supported-version", dest="min_supported_version", default=None,
                         help="Minimum app version still allowed by the app manifest; written to "
                              ".release/min_supported_version for the workflow. Omit to keep the current value.")
-    parser.add_argument("--notes-file", type=Path, default=ROOT / "docs/changelog.md",
-                        help="Release notes: a changelog.md (its ## [X.Y.Z] section is used) or any text file "
-                             "(default: docs/changelog.md)")
+    parser.add_argument("--app", choices=("kashshaf", "lab"), default="kashshaf",
+                        help="Whose notes: kashshaf reads docs/changelog.md, lab reads docs/lab-changelog.md "
+                             "(default: kashshaf)")
+    parser.add_argument("--notes-file", type=Path, default=None,
+                        help="Release notes: a changelog (its ## [X.Y.Z] section is used) or any text file "
+                             "(default: the --app's changelog)")
     parser.add_argument("--dry-run", action="store_true", help="Print what would change; touch nothing")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
     args = parser.parse_args()
@@ -251,9 +271,20 @@ def main() -> int:
         print(f"Error: invalid --min-supported-version '{args.min_supported_version}', use X.Y.Z")
         return 1
 
+    notes_file = args.notes_file if args.notes_file is not None else changelog_for(args.app)
+    if args.app == "lab":
+        # Lab carries its own version (lab/package.json, lab/src-tauri/Cargo.toml)
+        # and no release job yet; the only thing this script knows how to do
+        # for it is find its notes.
+        print(f"\nKashshaf Lab v{version}: release notes only\n")
+        notes = read_notes(notes_file, version, args.app)
+        print("\n" + notes + "\n")
+        print("Lab's version bump and tag are not automated; nothing else was done.")
+        return 0
+
     print(f"\nReleasing Kashshaf v{version}{' (dry run)' if DRY else ''}\n")
     check_preconditions()
-    notes = read_notes(args.notes_file, version)
+    notes = read_notes(notes_file, version)
 
     update_cargo_versions(version)
     update_package_json(version)

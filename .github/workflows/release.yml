@@ -390,6 +390,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      # docs/changelog.md holds Kashshaf's sections only (Lab's are in
+      # docs/lab-changelog.md), the same file scripts/release.py and
+      # scripts/check_release.py read.
       - name: Release notes from docs/changelog.md
         run: |
           python3 - <<'PY'

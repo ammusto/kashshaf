@@ -10,7 +10,14 @@ Local (CI on every push, and before tagging):
     a path such as "../package.json" the two are the same by construction)
   * every workspace crate uses version.workspace = true
   * the tag, when given, equals v<version>
-  * docs/changelog.md has a "## [<version>]" section
+  * docs/changelog.md has a "## [<version>]" section (Kashshaf's sections
+    only; the release workflow takes the notes from the same file)
+
+    python scripts/check_release.py --local --app lab [--tag lab-v0.10.0]
+
+  * lab/src-tauri/Cargo.toml version == lab/package.json version
+  * the tag, when given, equals lab-v<version>
+  * docs/lab-changelog.md has a "## [lab <version>]" section
 
 Post-deploy (the workflow after deploy-api, or by hand):
 
@@ -132,11 +139,41 @@ def check_local(tag: str | None) -> None:
         else:
             fail(f"tag {tag} != v{ws}")
 
-    changelog = ROOT / "docs/changelog.md"
-    if changelog.exists() and re.search(rf"^## \[{re.escape(ws)}\]", changelog.read_text(encoding="utf-8"), flags=re.MULTILINE):
-        ok(f"docs/changelog.md has a [{ws}] section")
+    check_changelog("docs/changelog.md", ws)
+
+
+def check_changelog(rel: str, heading: str) -> None:
+    """The app's changelog has the section its notes come from."""
+    changelog = ROOT / rel
+    if changelog.exists() and re.search(rf"^## \[{re.escape(heading)}\]", changelog.read_text(encoding="utf-8"), flags=re.MULTILINE):
+        ok(f"{rel} has a [{heading}] section")
     else:
-        fail(f"docs/changelog.md has no ## [{ws}] section (release notes come from it)")
+        fail(f"{rel} has no ## [{heading}] section (release notes come from it)")
+
+
+def check_local_lab(tag: str | None) -> None:
+    """Lab's version lives in lab/, apart from the workspace, and its notes in docs/lab-changelog.md."""
+    toml = (ROOT / "lab/src-tauri/Cargo.toml").read_text(encoding="utf-8")
+    m = re.search(r'^version = "([^"]+)"', toml, flags=re.MULTILINE)
+    if not m:
+        fail("lab/src-tauri/Cargo.toml has no version line")
+        return
+    lv = m.group(1)
+    ok(f"lab version {lv}")
+
+    pkg = json.loads((ROOT / "lab/package.json").read_text(encoding="utf-8")).get("version")
+    if pkg == lv:
+        ok(f"lab/package.json version {pkg}")
+    else:
+        fail(f"lab/package.json version {pkg} != lab/src-tauri/Cargo.toml {lv}")
+
+    if tag is not None:
+        if tag == f"lab-v{lv}":
+            ok(f"tag {tag} matches")
+        else:
+            fail(f"tag {tag} != lab-v{lv}")
+
+    check_changelog("docs/lab-changelog.md", f"lab {lv}")
 
 
 # ---------------------------------------------------------------- post-deploy
@@ -235,7 +272,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--local", action="store_true")
     ap.add_argument("--post-deploy", action="store_true")
-    ap.add_argument("--tag", default=None, help="vX.Y.Z")
+    ap.add_argument("--app", choices=("kashshaf", "lab"), default="kashshaf",
+                    help="which app's versions and changelog to check locally (default: kashshaf)")
+    ap.add_argument("--tag", default=None, help="vX.Y.Z (lab-vX.Y.Z with --app lab)")
     ap.add_argument("--api", default=None, help="API base URL (post-deploy)")
     ap.add_argument("--app-manifest", default=None, help="URL or path of app_manifest.json (post-deploy)")
     ap.add_argument("--corpus-manifest", default=None, help="URL or path of corpus_manifest.json (post-deploy)")
@@ -244,7 +283,7 @@ def main() -> int:
     if not args.local and not args.post_deploy:
         ap.error("choose --local and/or --post-deploy")
     if args.local:
-        check_local(args.tag)
+        (check_local_lab if args.app == "lab" else check_local)(args.tag)
     if args.post_deploy:
         if not args.tag:
             ap.error("--post-deploy needs --tag")

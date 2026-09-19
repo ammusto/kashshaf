@@ -52,3 +52,5 @@ scripts/*
 dev-docs/
 # .release/min_supported_version is written by scripts/release.py and TRACKED:
 # the workflow's manifest job reads it from the tagged commit.
+
+CLAUDE.md
