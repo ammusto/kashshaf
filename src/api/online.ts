@@ -20,8 +20,13 @@ import type {
   TocNode,
 } from '../types';
 import { stripPunctuation } from '@kashshaf/shared';
+import { getApiBaseUrl } from '../utils/platform';
+import { noteRateLimited, retryAfterMs, waitIfThrottled } from './rateLimit';
+import type { PageBundle, PageBundleRequest } from './index';
 
-const API_BASE_URL = 'https://api.kashshaf.com';
+// VITE_API_URL at build time points a web build at another server, as the
+// rate-limit test does with a local API.
+const API_BASE_URL = getApiBaseUrl();
 
 // Proclitics for clitic expansion in surface mode
 const PROCLITICS = ['و', 'ف', 'ب', 'ل', 'ك'];
@@ -42,28 +47,44 @@ function expandWithClitics(query: string): string[] {
   return [base, ...PROCLITICS.map(p => `${p}${first} ${restJoined}`)];
 }
 
+/** How many times a rate-limited request is sent again before giving up. */
+const RATE_LIMIT_RETRIES = 3;
+
 /**
- * Helper to make API requests with error handling
+ * One API request.
+ *
+ * A GET carries no Content-Type: with one, the browser sends a preflight
+ * OPTIONS first, which doubles the requests a scroll makes and counts
+ * against the same rate limit. A 429 is waited out for as long as
+ * `Retry-After` says (every other request holds back too, see rateLimit.ts)
+ * and sent again, up to three times; only then is it an error.
  */
 async function fetchAPI<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
-  const response = await fetch(url, {
+  const hasBody = options.body !== undefined && options.body !== null;
+  const init: RequestInit = {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       ...options.headers,
     },
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(errorData.error || `HTTP ${response.status}`);
+  };
+  for (let attempt = 0; ; attempt++) {
+    await waitIfThrottled();
+    const response = await fetch(url, init);
+    if (response.status === 429 && attempt < RATE_LIMIT_RETRIES) {
+      noteRateLimited(retryAfterMs(response.headers.get('Retry-After')));
+      continue;
+    }
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || `HTTP ${response.status}`);
+    }
+    return response.json();
   }
-
-  return response.json();
 }
 
 /**
@@ -274,6 +295,55 @@ export class OnlineAPI implements SearchAPI {
 
   async listBookPages(id: number): Promise<PageEntry[]> {
     return fetchAPI<PageEntry[]>(`/book/${id}/pages`);
+  }
+
+  /**
+   * One request per page: `/page` with `include=tokens` and the search's
+   * terms (`q`/`mode` pairs, or `name` patterns). A server from before
+   * 0.6.0 ignores those and answers with the bare page, which is told
+   * apart by its shape; then the tokens and highlights are fetched the old
+   * way, so the web client still reads against the previous API.
+   */
+  async getPageBundle(
+    id: number,
+    partIndex: number,
+    pageId: number,
+    request: PageBundleRequest
+  ): Promise<PageBundle | null> {
+    const params = new URLSearchParams({
+      id: String(id),
+      part_index: String(partIndex),
+      page_id: String(pageId),
+    });
+    if (request.tokens) params.set('include', 'tokens');
+    for (const t of request.terms ?? []) {
+      params.append('q', t.query);
+      params.append('mode', t.mode);
+    }
+    for (const n of request.namePatterns ?? []) params.append('name', n);
+
+    let raw: unknown;
+    try {
+      raw = await fetchAPI<unknown>(`/page?${params}`);
+    } catch {
+      return null;
+    }
+    if (raw === null || raw === undefined) return null;
+    const asBundle = raw as Partial<PageBundle>;
+    if (asBundle.page) {
+      return { page: asBundle.page, tokens: asBundle.tokens ?? [], matches: asBundle.matches ?? null };
+    }
+    // A bare page: the server predates the bundle.
+    const page = raw as SearchResult;
+    const [tokens, matches] = await Promise.all([
+      request.tokens ? this.getPageTokens(id, partIndex, pageId) : Promise.resolve([] as Token[]),
+      request.namePatterns && request.namePatterns.length > 0
+        ? this.getNameMatchPositions(id, partIndex, pageId, request.namePatterns)
+        : request.terms && request.terms.length > 0
+          ? this.getMatchPositionsCombined(id, partIndex, pageId, request.terms)
+          : Promise.resolve(null),
+    ]);
+    return { page, tokens, matches };
   }
 
   /**

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { perfMark, perfMeasure } from '../../utils/perf';
+import type { HighlightRequest } from '../../utils/highlightRequest';
 import type { PageEntry, Token, TocNode } from '../../types';
 import type { SearchAPI } from '../../api';
 import { TokenPopup, entryForPage } from '@kashshaf/shared';
@@ -22,10 +23,8 @@ interface ReaderPanelProps {
   anchor: PageAnchor | null;
   /** The clicked result's own highlights, and the page they are on. */
   clickedMatches?: ClickedMatches | null;
-  /** Highlights for any page of the book, for the search that is running. */
-  matchesFor?: (entry: PageEntry) => readonly number[] | undefined;
-  /** Told which pages are mounted, so their highlights can be fetched. */
-  onMountedPages?: (entries: PageEntry[]) => void;
+  /** The running search, as what every fetched page is asked to highlight. */
+  highlight?: HighlightRequest | null;
   /** Told where the reader is, so the tab remembers it. */
   onActivePage?: (entry: PageEntry) => void;
   /** Jumping when the book has no spine. Returns false if there is no such page. */
@@ -47,8 +46,7 @@ export function ReaderPanel({
   bookId,
   anchor,
   clickedMatches,
-  matchesFor,
-  onMountedPages,
+  highlight = null,
   onActivePage,
   onNavigateToLabel,
   remote = false,
@@ -67,7 +65,7 @@ export function ReaderPanel({
   /** The page in view: what the header and the citation describe. */
   const [active, setActive] = useState<PageEntry | null>(null);
 
-  const stack = usePageStack({ api, bookId, anchor });
+  const stack = usePageStack({ api, bookId, anchor, highlight });
   // The commit in which the spine landed: the state update's own cost.
   useLayoutEffect(() => {
     if (stack.spine.length > 0) {
@@ -170,9 +168,14 @@ export function ReaderPanel({
       ) {
         return clickedMatches.indices;
       }
-      return matchesFor?.(entry) ?? [];
+      // Every other page carries its highlights from its own fetch, made
+      // under the running search; under another search they are stale and
+      // the page is being fetched again.
+      const loaded = stack.pages.get(index);
+      if (loaded && loaded.highlightKey === (highlight?.key ?? null)) return loaded.matches ?? [];
+      return [];
     },
-    [stack.spine, matchesFor, clickedMatches]
+    [stack.spine, stack.pages, highlight, clickedMatches]
   );
 
   const handleGoClick = async () => {
@@ -330,7 +333,6 @@ export function ReaderPanel({
           matchesFor={matchesForIndex}
           onWordClick={handleWordClick}
           onActivePage={handleActivePage}
-          onMountedPages={onMountedPages}
           multiPart={multiPart}
           onBackgroundClick={handleClosePopup}
         />

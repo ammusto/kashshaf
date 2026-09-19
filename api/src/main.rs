@@ -126,16 +126,6 @@ struct VariantsRequest {
 }
 
 #[derive(Deserialize)]
-struct PageQuery {
-    id: u64,
-    /// Optional for clients built before 0.5.0 (they addressed pages by
-    /// `(id, page_id)` only); defaults to the first part.
-    #[serde(default)]
-    part_index: u64,
-    page_id: u64,
-}
-
-#[derive(Deserialize)]
 struct PageByLabelQuery {
     id: u64,
     part_label: String,
@@ -391,15 +381,101 @@ async fn wildcard_search(
         .map_err(internal)
 }
 
+/// `/page` with `include=tokens` and/or highlight terms: the page, its
+/// tokens and its highlights in one response, so the reader makes one
+/// request per page rather than three (0.6.0). Without those parameters
+/// the route answers as it always has, a bare page.
+#[derive(Serialize)]
+struct PageBundle {
+    page: SearchResult,
+    /// Present when `include=tokens` was asked for.
+    tokens: Option<Vec<Token>>,
+    /// Present when `q`/`mode` pairs or `name` patterns were given: the
+    /// token indices to highlight, or none of them.
+    matches: Option<Vec<u32>>,
+}
+
+/// The reader's page parameters, read by hand because `q`, `mode` and
+/// `name` repeat: one `q`/`mode` pair per search term of a combined search,
+/// one `name` per pattern of a name search.
+struct PageParams {
+    id: u64,
+    part_index: u64,
+    page_id: u64,
+    tokens: bool,
+    terms: Vec<SearchTerm>,
+    names: Vec<String>,
+}
+
+fn page_params(pairs: &[(String, String)]) -> Result<PageParams, ApiError> {
+    let mut id = None;
+    let mut part_index = 0;
+    let mut page_id = None;
+    let mut tokens = false;
+    let mut queries: Vec<String> = Vec::new();
+    let mut modes: Vec<SearchMode> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    let bad = |what: &str, v: &str| bad_request(format!("{what}: {v:?}"));
+    for (k, v) in pairs {
+        match k.as_str() {
+            "id" => id = Some(v.parse::<u64>().map_err(|_| bad("id", v))?),
+            "part_index" => part_index = v.parse::<u64>().map_err(|_| bad("part_index", v))?,
+            "page_id" => page_id = Some(v.parse::<u64>().map_err(|_| bad("page_id", v))?),
+            "include" => tokens |= v.split(',').any(|x| x.trim() == "tokens"),
+            "q" => queries.push(v.clone()),
+            "mode" => modes.push(match v.as_str() {
+                "surface" => SearchMode::Surface,
+                "lemma" => SearchMode::Lemma,
+                "root" => SearchMode::Root,
+                _ => return Err(bad("mode", v)),
+            }),
+            "name" => names.push(v.clone()),
+            _ => {}
+        }
+    }
+    let terms = queries
+        .into_iter()
+        .enumerate()
+        .filter(|(_, q)| !q.trim().is_empty())
+        .map(|(i, query)| SearchTerm { query, mode: modes.get(i).copied().unwrap_or(SearchMode::Lemma) })
+        .collect();
+    Ok(PageParams {
+        id: id.ok_or_else(|| bad_request("id is required"))?,
+        part_index,
+        page_id: page_id.ok_or_else(|| bad_request("page_id is required"))?,
+        tokens,
+        terms,
+        names,
+    })
+}
+
 async fn get_page(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<PageQuery>,
-) -> Result<Json<Option<SearchResult>>, ApiError> {
-    state
-        .search_engine
-        .get_page(params.id, params.part_index, params.page_id)
-        .map(Json)
-        .map_err(internal)
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<axum::response::Response, ApiError> {
+    let p = page_params(&pairs)?;
+    let page = state.search_engine.get_page(p.id, p.part_index, p.page_id).map_err(internal)?;
+    let bundled = p.tokens || !p.terms.is_empty() || !p.names.is_empty();
+    if !bundled {
+        return Ok(Json(page).into_response());
+    }
+    let Some(page) = page else {
+        return Ok(Json(None::<PageBundle>).into_response());
+    };
+    let key = PageKey::new(p.id, p.part_index, p.page_id);
+    let tokens = if p.tokens {
+        Some(state.token_cache.get(&key).map(|t| (*t).clone()).map_err(internal)?)
+    } else {
+        None
+    };
+    let matches = if !p.names.is_empty() {
+        Some(state.search_engine.get_name_match_positions(p.id, p.part_index, p.page_id, &p.names).map_err(internal)?)
+    } else if !p.terms.is_empty() {
+        Some(state.search_engine.get_match_positions_combined(p.id, p.part_index, p.page_id, &p.terms).map_err(internal)?)
+    } else {
+        None
+    };
+    Ok(Json(Some(PageBundle { page, tokens, matches })).into_response())
 }
 
 async fn get_page_by_label(
@@ -653,15 +729,27 @@ async fn main() -> anyhow::Result<()> {
             .ok();
     }
 
-    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
+    // CORS is the outermost layer, below at the end of the chain: a 429 from
+    // either limiter passes back through it and carries the CORS headers,
+    // so a browser can read the status and Retry-After instead of reporting
+    // a CORS failure it cannot act on.
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .expose_headers([axum::http::header::RETRY_AFTER]);
 
-    // Everything except /health goes through the per-IP rate limiter below.
-    // /health is registered on its own router and merged in after the
-    // limiter is applied: the deploy (switch_release.sh) polls it every
-    // 2-5 s for up to 12 minutes, an uptime monitor polls it too, and a
-    // 429 there would read as "not ready" and trigger a false rollback.
-    // nginx exempts it for the same reason (no limit_req in location = /health).
-    let limited = Router::new()
+    // Two per-IP buckets. Searches are the expensive calls and keep the
+    // strict limit (KASHSHAF_RATE_LIMIT, 10 req/s burst 30). The reader's
+    // calls — a page, the spine, the contents — are cheap and come in
+    // runs as a book is scrolled, so they have a bucket of their own
+    // (KASHSHAF_RATE_LIMIT_READER, 60 req/s burst 120); before 0.6.0 a
+    // scroll through a few pages emptied the strict bucket. /health is on
+    // neither: the deploy (switch_release.sh) polls it every 2-5 s for up
+    // to 12 minutes, an uptime monitor polls it too, and a 429 there would
+    // read as "not ready" and trigger a false rollback. nginx exempts it for
+    // the same reason (no limit_req in location = /health).
+    let searches = Router::new()
         .route("/search/status", get(walk_status))
         .route("/search", get(simple_search))
         .route("/search/combined", post(combined_search))
@@ -669,6 +757,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/search/name", post(name_search))
         .route("/search/variants", post(search_variants))
         .route("/search/wildcard", get(wildcard_search))
+        .route("/books", get(get_all_books))
+        .route("/authors", get(get_all_authors))
+        .route("/genres", get(get_all_genres));
+    let reader = Router::new()
         .route("/page", get(get_page))
         .route("/page/by-label", get(get_page_by_label))
         .route("/page/tokens", get(get_page_tokens))
@@ -677,40 +769,60 @@ async fn main() -> anyhow::Result<()> {
         .route("/page/matches/combined", post(get_match_positions_combined))
         .route("/page/matches/name", post(get_name_match_positions))
         .route("/book/:id/pages", get(get_book_pages))
-        .route("/books", get(get_all_books))
-        .route("/authors", get(get_all_authors))
-        .route("/genres", get(get_all_genres));
+        .route("/book/:id/toc", get(get_book_toc));
 
-    // Per-client-IP rate limit, enabled by KASHSHAF_RATE_LIMIT ("1" for the
-    // defaults 10 req/s, burst 30; or "<per_second>[,<burst>]"). Off when
-    // unset so local runs are unaffected; production sits behind a proxy
-    // that limits as well. Applied to `limited` only, never to /health.
-    let limited = match rate_limit_from_env() {
+    // One per-IP bucket. A 429 says how long to wait in `Retry-After` (whole
+    // seconds, at least 1) as well as in the body, since that header is what a
+    // browser client backs off by. A closure, as the config's type names
+    // private middleware types and cannot be written out.
+    let governor = |per_second: u32, burst: u32| {
+    GovernorConfigBuilder::default()
+        .per_millisecond((1000 / per_second.max(1)) as u64)
+        .burst_size(burst)
+        .key_extractor(SmartIpKeyExtractor)
+        .error_handler(|e: GovernorError| -> axum::response::Response {
+            match e {
+                GovernorError::TooManyRequests { wait_time, .. } => {
+                    let wait = wait_time.max(1);
+                    (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        [(axum::http::header::RETRY_AFTER, wait.to_string())],
+                        Json(ErrorResponse { error: format!("rate limit exceeded; retry in {} s", wait) }),
+                    )
+                        .into_response()
+                }
+                GovernorError::UnableToExtractKey => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: "rate limiter could not read the client address".to_string() }),
+                )
+                    .into_response(),
+                GovernorError::Other { msg, .. } => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: msg.unwrap_or_else(|| "rate limiter error".to_string()) }),
+                )
+                    .into_response(),
+            }
+        })
+        .finish()
+        .expect("rate limit configuration")
+    };
+
+    let (searches, reader) = match rate_limit_from_env() {
         Some((per_second, burst)) => {
-            let conf = GovernorConfigBuilder::default()
-                .per_millisecond((1000 / per_second.max(1)) as u64)
-                .burst_size(burst)
-                .key_extractor(SmartIpKeyExtractor)
-                .error_handler(|e: GovernorError| -> axum::response::Response {
-                    let (status, msg) = match e {
-                        GovernorError::TooManyRequests { wait_time, .. } => {
-                            (StatusCode::TOO_MANY_REQUESTS, format!("rate limit exceeded; retry in {} s", wait_time))
-                        }
-                        GovernorError::UnableToExtractKey => {
-                            (StatusCode::INTERNAL_SERVER_ERROR, "rate limiter could not read the client address".to_string())
-                        }
-                        GovernorError::Other { msg, .. } => {
-                            (StatusCode::INTERNAL_SERVER_ERROR, msg.unwrap_or_else(|| "rate limiter error".to_string()))
-                        }
-                    };
-                    (status, Json(ErrorResponse { error: msg })).into_response()
-                })
-                .finish()
-                .expect("rate limit configuration");
-            tracing::info!("rate limit: {} req/s, burst {}, per client IP (/health exempt)", per_second, burst);
-            limited.layer(GovernorLayer { config: Arc::new(conf) })
+            let (reader_per_second, reader_burst) = reader_rate_limit_from_env();
+            tracing::info!(
+                "rate limit per client IP: searches {} req/s burst {}; reader {} req/s burst {} (/health exempt)",
+                per_second,
+                burst,
+                reader_per_second,
+                reader_burst
+            );
+            (
+                searches.layer(GovernorLayer { config: Arc::new(governor(per_second, burst)) }),
+                reader.layer(GovernorLayer { config: Arc::new(governor(reader_per_second, reader_burst)) }),
+            )
         }
-        None => limited,
+        None => (searches, reader),
     };
 
     // /book/{id}/tokens is exempt from the per-request limiter (Lab spec
@@ -720,8 +832,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/book/:id/tokens", get(bulk::get_book_tokens))
-        .route("/book/:id/toc", get(get_book_toc))
-        .merge(limited)
+        .merge(searches)
+        .merge(reader)
         .layer(cors)
         .with_state(state);
 
@@ -729,6 +841,18 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Listening on http://{}", bind);
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
+}
+
+/// `KASHSHAF_RATE_LIMIT_READER` → the reader bucket, "<per_second>[,<burst>]";
+/// 60 req/s, burst 120 when unset. Only consulted while the limiter is on.
+fn reader_rate_limit_from_env() -> (u32, u32) {
+    let raw = std::env::var("KASHSHAF_RATE_LIMIT_READER").unwrap_or_default();
+    let mut it = raw.split(',').map(|s| s.trim().parse::<u32>().ok());
+    match (it.next().flatten(), it.next().flatten()) {
+        (Some(p), Some(b)) if p > 0 => (p, b.max(1)),
+        (Some(p), None) if p > 0 => (p, p * 2),
+        _ => (60, 120),
+    }
 }
 
 /// `KASHSHAF_RATE_LIMIT` → (requests per second, burst). Unset, empty, "0" or

@@ -12,6 +12,7 @@ import {
   MOUNTED_AFTER,
   CACHE_MARGIN,
   DEFAULT_PAGE_HEIGHT,
+  wantedFor,
 } from './pageWindow';
 
 describe('windowFor', () => {
@@ -156,5 +157,19 @@ describe('scrolling a 200-page book', () => {
     expect(loaded.size).toBeLessThanOrEqual(MOUNTED_BEFORE + MOUNTED_AFTER + 1 + 2 * CACHE_MARGIN);
     // Only the heights survive the whole book: two numbers a page.
     expect(heights.size).toBe(200);
+  });
+});
+
+describe('wantedFor', () => {
+  it('is the pages in view and one on in the direction of travel, inside the window', () => {
+    const w = { start: 3, end: 10 };
+    expect(wantedFor([5, 6], 1, w)).toEqual([5, 6, 7]);
+    expect(wantedFor([5, 6], -1, w)).toEqual([4, 5, 6]);
+    // At the window's edge there is nothing beyond to ask for.
+    expect(wantedFor([9], 1, w)).toEqual([9]);
+    expect(wantedFor([3], -1, w)).toEqual([3]);
+    // Nothing in view (a spacer under the probe): nothing wanted.
+    expect(wantedFor([], 1, w)).toEqual([]);
+    expect(wantedFor([1, 2], 1, w)).toEqual([]);
   });
 });

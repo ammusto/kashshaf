@@ -5,7 +5,7 @@ import type { PageEntry, SearchResult, Token } from '../../types';
 import type { SearchAPI } from '../../api';
 import { ReaderPanel } from '../panels/ReaderPanel';
 import { BooksProvider } from '../../contexts/BooksContext';
-import { installLayout, installResizeObserver, type FakeLayout } from './testLayout';
+import { installLayout, installResizeObserver, type FakeLayout, withPageBundle } from './testLayout';
 
 /**
  * Reader navigation as a matrix: every way the view can be asked to move,
@@ -64,7 +64,7 @@ interface World {
 
 function makeWorld(): World {
   const heights = new Map<number, number>();
-  const api = {
+  const api = withPageBundle({
     listBookPages: vi.fn(async () => spine()),
     getPage: vi.fn(async (id: number, part: number, page: number) => {
       return {
@@ -87,7 +87,7 @@ function makeWorld(): World {
     getAllBooks: vi.fn(async () => [{ id: 7, title: 'كتاب', author_id: 1, parts: 2, in_corpus: true }]),
     getAuthors: vi.fn(async () => [[1, 'مؤلف']]),
     getGenres: vi.fn(async () => []),
-  } as unknown as SearchAPI;
+  } as unknown as SearchAPI);
   return { api, heights };
 }
 

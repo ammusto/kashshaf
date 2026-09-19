@@ -5,7 +5,7 @@ import type { PageEntry, SearchResult, Token } from '../../types';
 import type { SearchAPI } from '../../api';
 import { ReaderPanel } from '../panels/ReaderPanel';
 import { BooksProvider } from '../../contexts/BooksContext';
-import { installLayout, installResizeObserver, type FakeLayout } from './testLayout';
+import { installLayout, installResizeObserver, type FakeLayout, withPageBundle } from './testLayout';
 
 /**
  * The reader as the user meets it: a book that scrolls, with only a few of
@@ -51,7 +51,7 @@ function tokensFor(page: number): Token[] {
 
 function makeApi(spine: PageEntry[]) {
   const pageCalls: string[] = [];
-  const api = {
+  const api = withPageBundle({
     listBookPages: vi.fn(async () => spine),
     getPage: vi.fn(async (id: number, part: number, page: number): Promise<SearchResult> => {
       pageCalls.push(`${part}:${page}`);
@@ -75,7 +75,7 @@ function makeApi(spine: PageEntry[]) {
     ]),
     getAuthors: vi.fn(async () => [[1, 'مؤلف']]),
     getGenres: vi.fn(async () => []),
-  } as unknown as SearchAPI;
+  } as unknown as SearchAPI);
   return { api, pageCalls };
 }
 
@@ -126,9 +126,11 @@ describe('the reader as a scrolling book', () => {
 
     expect(api.listBookPages).toHaveBeenCalledTimes(1);
     expect(api.listBookPages).toHaveBeenCalledWith(7);
-    // Anchored on the first page: nothing before it, three after.
+    // Anchored on the first page: nothing before it, three after — mounted,
+    // but only the page in view and the one after it are fetched.
     expect(mountedIndices()).toEqual([0, 1, 2, 3]);
-    expect(api.getPage).toHaveBeenCalledTimes(4);
+    await layout.settle();
+    expect(api.getPage).toHaveBeenCalledTimes(2);
   });
 
   it('follows the page that comes into view and keeps at most 7 pages mounted', async () => {

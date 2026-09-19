@@ -27,6 +27,38 @@ export type OperatingMode = 'online' | 'offline' | 'pending';
 /**
  * Search term with query and mode
  */
+/** What `getPageBundle` should include besides the page. */
+export interface PageBundleRequest {
+  tokens: boolean;
+  /** The running search's terms, for the highlights; none when no search runs. */
+  terms?: SearchTerm[];
+  /** A name search's patterns instead of terms. */
+  namePatterns?: string[];
+}
+
+export interface PageBundle {
+  page: SearchResult;
+  tokens: Token[];
+  /** Token indices to highlight, or null when nothing was asked for. */
+  matches: number[] | null;
+}
+
+/** What `getPageBundle` should include besides the page. */
+export interface PageBundleRequest {
+  tokens: boolean;
+  /** The running search's terms, for the highlights; none when no search runs. */
+  terms?: SearchTerm[];
+  /** A name search's patterns instead of terms. */
+  namePatterns?: string[];
+}
+
+export interface PageBundle {
+  page: SearchResult;
+  tokens: Token[];
+  /** Token indices to highlight, or null when nothing was asked for. */
+  matches: number[] | null;
+}
+
 export interface SearchTerm {
   query: string;
   mode: SearchMode;
@@ -150,6 +182,32 @@ export interface SearchAPI {
     partIndex: number,
     pageId: number
   ): Promise<Token[]>;
+
+  /**
+   * A page, its tokens and its highlights in one call: what the reader
+   * fetches for every page it shows. Online this is one request (`/page`
+   * with `include=tokens` and the terms); on the desktop, three local
+   * calls. `null` when there is no such page.
+   */
+  getPageBundle(
+    id: number,
+    partIndex: number,
+    pageId: number,
+    request: PageBundleRequest
+  ): Promise<PageBundle | null>;
+
+  /**
+   * A page, its tokens and its highlights in one call: what the reader
+   * fetches for every page it shows. Online this is one request (`/page`
+   * with `include=tokens` and the terms); on the desktop, three local
+   * calls. `null` when there is no such page.
+   */
+  getPageBundle(
+    id: number,
+    partIndex: number,
+    pageId: number,
+    request: PageBundleRequest
+  ): Promise<PageBundle | null>;
 
   getMatchPositions(
     id: number,

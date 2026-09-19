@@ -1,5 +1,31 @@
 import { act } from '@testing-library/react';
 import { vi } from 'vitest';
+import type { PageBundleRequest, SearchAPI } from '../../api';
+
+/**
+ * Give a mocked API the one call the reader makes per page, composed from
+ * the three it mocks — so a test's `getPage` counts and bodies still hold,
+ * and its `getMatchPositionsCombined` can be asserted on.
+ */
+export function withPageBundle<T extends object>(api: T): T & SearchAPI {
+  const a = api as unknown as SearchAPI & Record<string, unknown>;
+  if (!a.getPageBundle) {
+    a.getPageBundle = vi.fn(async (id: number, part: number, page: number, request: PageBundleRequest) => {
+      const p = await a.getPage(id, part, page);
+      if (!p) return null;
+      const [tokens, matches] = await Promise.all([
+        request.tokens ? a.getPageTokens(id, part, page) : Promise.resolve([]),
+        request.namePatterns && request.namePatterns.length > 0
+          ? a.getNameMatchPositions(id, part, page, request.namePatterns)
+          : request.terms && request.terms.length > 0
+            ? a.getMatchPositionsCombined(id, part, page, request.terms)
+            : Promise.resolve(null),
+      ]);
+      return { page: p, tokens, matches };
+    });
+  }
+  return a as T & SearchAPI;
+}
 
 /**
  * A scroll container with geometry, for jsdom, which has none.

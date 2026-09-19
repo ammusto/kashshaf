@@ -46,6 +46,23 @@ export function windowFor(anchor: number, count: number): PageWindow {
   };
 }
 
+/** Which way the reader last moved; 1 (down, on into the book) before it has. */
+export type ScrollDirection = 1 | -1;
+
+/**
+ * The pages worth fetching: the ones in view, and one beyond them in the
+ * direction of travel, all within the mounted window. Not the whole window:
+ * seven mounted pages would be seven requests, and a rate limit.
+ */
+export function wantedFor(visible: number[], direction: ScrollDirection, w: PageWindow): number[] {
+  const inWindow = visible.filter((i) => i >= w.start && i < w.end);
+  if (inWindow.length === 0) return [];
+  const out = new Set(inWindow);
+  const ahead = direction >= 0 ? Math.max(...inWindow) + 1 : Math.min(...inWindow) - 1;
+  if (ahead >= w.start && ahead < w.end) out.add(ahead);
+  return [...out].sort((a, b) => a - b);
+}
+
 /** Indices worth keeping loaded for `window`: the window plus a small margin. */
 export function cacheRange(w: PageWindow, count: number): PageWindow {
   return {

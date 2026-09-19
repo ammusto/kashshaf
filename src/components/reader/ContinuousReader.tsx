@@ -1,8 +1,8 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import { perfMark, perfMeasure } from '../../utils/perf';
 import type { PageEntry, Token } from '../../types';
 import { PageView } from './PageView';
-import { indexAtOffset, spacerAfter, spacerBefore } from '../../utils/pageWindow';
+import { estimateHeight, indexAtOffset, spacerAfter, spacerBefore, type ScrollDirection } from '../../utils/pageWindow';
 import type { PageStack } from '../../hooks/usePageStack';
 
 /**
@@ -51,8 +51,6 @@ interface ContinuousReaderProps {
   onWordClick: (e: React.MouseEvent, token: Token) => void;
   /** Called with the page the reader is on whenever it changes. */
   onActivePage: (entry: PageEntry, index: number) => void;
-  /** Called with the mounted pages, so their highlights can be fetched. */
-  onMountedPages?: (entries: PageEntry[]) => void;
   /** Single-part books print the page number alone. */
   multiPart: boolean;
   onBackgroundClick?: () => void;
@@ -92,13 +90,12 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     matchesFor,
     onWordClick,
     onActivePage,
-    onMountedPages,
     multiPart,
     onBackgroundClick,
   }: ContinuousReaderProps,
   ref
 ) {
-  const { spine, mounted, pages, offsets, heights, measure, setAnchorIndex, anchorIndex, request } = stack;
+  const { spine, mounted, pages, offsets, heights, measure, setAnchorIndex, setVisible, anchorIndex, request } = stack;
   const containerRef = useRef<HTMLDivElement>(null);
   const elements = useRef<Map<number, HTMLElement>>(new Map());
   const [placing, setPlacing] = useState<Placement | null>(null);
@@ -112,6 +109,8 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   const pinned = useRef<{ index: number; top: number } | null>(null);
   /** Where the reader last put the scroll itself, while that is still true. */
   const selfTop = useRef<number | null>(null);
+  /** The scroll position last reported, for the direction of travel. */
+  const lastTop = useRef(0);
 
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
   const isSelfScroll = (top: number) =>
@@ -151,6 +150,27 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     }
     return below && below.top - probe <= CARD_GAP + 1 ? below.index : null;
   }, []);
+
+  /**
+   * Tell the stack which mounted pages are in the pane and which way the
+   * reader is moving: that, plus one page on, is what it fetches.
+   */
+  const reportVisible = useCallback(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const top = c.getBoundingClientRect().top;
+    const bottom = top + c.clientHeight;
+    const seen: number[] = [];
+    for (const [index, el] of elements.current) {
+      const r = el.getBoundingClientRect();
+      if (r.height === 0) continue;
+      if (r.bottom > top && r.top < bottom) seen.push(index);
+    }
+    seen.sort((a, b) => a - b);
+    const direction: ScrollDirection = c.scrollTop < lastTop.current ? -1 : 1;
+    lastTop.current = c.scrollTop;
+    setVisible(seen, direction);
+  }, [setVisible]);
 
   /** Remember where the page in view sits, so a re-render can put it back. */
   const pin = useCallback((index: number) => {
@@ -210,10 +230,11 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       const index = pageAtTop() ?? indexAtOffset(offsets, c.scrollTop + CARD_GAP + 1);
       setAnchorIndex(index);
       pin(index);
+      reportVisible();
     });
     // `isSelfScroll` closes over refs only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offsets, setAnchorIndex, spine.length, pageAtTop, pin]);
+  }, [offsets, setAnchorIndex, spine.length, pageAtTop, pin, reportVisible]);
 
   // ---------------------------------------------------------------- goTo
 
@@ -319,9 +340,11 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     }
   }, [placing, pages, heights, mounted, topOf, holdFrame, pin]);
 
-  // --- hold the visible content still across every re-render
+  // --- hold the visible content still across every re-render, and say
+  //     what is in view now that it is
   useLayoutEffect(() => {
     repin();
+    reportVisible();
   });
 
   // --- tell the rest of the app where the reader is
@@ -335,20 +358,11 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     onActivePage(activeEntry, anchorIndex);
   }, [activeEntry, anchorIndex, onActivePage, placing]);
 
-  const mountedEntries = useMemo(() => {
-    const out: PageEntry[] = [];
-    for (let i = mounted.start; i < mounted.end; i++) {
-      if (spine[i]) out.push(spine[i]);
-    }
-    return out;
-  }, [spine, mounted]);
-
-  useEffect(() => {
-    onMountedPages?.(mountedEntries);
-  }, [mountedEntries, onMountedPages]);
-
   const before = spacerBefore(mounted, offsets);
   const after = spacerAfter(mounted, offsets);
+  // A page not yet fetched stands at the height the offsets assume for it,
+  // so what is below it does not move when it arrives.
+  const placeholderHeight = Math.max(200, estimateHeight(heights) - CARD_GAP);
 
   const items: React.ReactNode[] = [];
   for (let i = mounted.start; i < mounted.end; i++) {
@@ -362,7 +376,7 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
           <div
             className="bg-app-surface border border-app-border-light rounded shadow-app-sm
                        px-10 py-12 text-sm text-app-text-tertiary"
-            style={{ minHeight: 200 }}
+            style={{ minHeight: placeholderHeight }}
           >
             Loading {pageLabel(entry, multiPart)}…
           </div>

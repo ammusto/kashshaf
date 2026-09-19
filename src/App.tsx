@@ -8,7 +8,8 @@ import { useOperatingMode, saveOnlineModePreference } from './contexts/Operating
 import { BooksProvider } from './contexts/BooksContext';
 import { useSearch } from './hooks/useSearch';
 import { useReaderNavigation } from './hooks/useReaderNavigation';
-import { usePageHighlights } from './hooks/usePageHighlights';
+import { highlightRequestOf } from './utils/highlightRequest';
+import { RateLimitIndicator } from './components/shared/RateLimitIndicator';
 import { useSidebarForSearch } from './hooks/useSidebarForSearch';
 import { useSearchForm } from './contexts/SearchFormContext';
 import { Sidebar } from './components/Sidebar';
@@ -112,13 +113,10 @@ function App() {
     [activeTab?.currentBookId, activeTab?.currentPartIndex, activeTab?.currentPageId]
   );
 
-  // Highlights for whatever page scrolls into view, for the search this tab
-  // is running: reading on from a hit marks the hits on the pages after it.
-  const highlights = usePageHighlights({
-    api,
-    bookId: activeTab?.currentBookId ?? null,
-    searchContext: activeTab?.searchContext ?? null,
-  });
+  // What every page the reader fetches is asked to highlight: the search
+  // this tab is running, so reading on from a hit marks the hits on the
+  // pages after it.
+  const highlight = useMemo(() => highlightRequestOf(activeTab?.searchContext ?? null), [activeTab?.searchContext]);
 
   // The reader scrolled onto another page: remember it, so the tab comes back
   // where it was left and the citation follows the page in view.
@@ -652,8 +650,7 @@ function App() {
                   bookId={activeTab?.currentBookId ?? null}
                   anchor={readerAnchor}
                   clickedMatches={activeTab?.clickedMatches ?? null}
-                  matchesFor={highlights.matchesFor}
-                  onMountedPages={highlights.onMountedPages}
+                  highlight={highlight}
                   onActivePage={handleActivePage}
                   onNavigateToLabel={handleNavigateToLabel}
                   remote={mode === 'online' || isWebTarget()}
@@ -732,6 +729,7 @@ function App() {
           onSave={handleSaveCollection}
           existingNames={collections.map(c => c.name)}
         />
+        <RateLimitIndicator />
       </div>
     </BooksProvider>
   );

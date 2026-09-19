@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { PageBundle, PageBundleRequest } from './index';
 import type {
   SearchMode,
   SearchFilters,
@@ -52,6 +53,30 @@ export async function getPage(
 /** The book's table of contents, or null without a toc.db (`get_book_toc`). */
 export async function getBookToc(id: number): Promise<TocNode[] | null> {
   return invoke('get_book_toc', { id });
+}
+
+/**
+ * The page, its tokens and its highlights: three local calls, since the
+ * desktop pays nothing per call. One shape with the online client's single
+ * request, so the reader does not know which it is on.
+ */
+export async function getPageBundle(
+  id: number,
+  partIndex: number,
+  pageId: number,
+  request: PageBundleRequest
+): Promise<PageBundle | null> {
+  const page = await getPage(id, partIndex, pageId);
+  if (!page) return null;
+  const [tokens, matches] = await Promise.all([
+    request.tokens ? getPageTokens(id, partIndex, pageId) : Promise.resolve([] as Token[]),
+    request.namePatterns && request.namePatterns.length > 0
+      ? getNameMatchPositions(id, partIndex, pageId, request.namePatterns)
+      : request.terms && request.terms.length > 0
+        ? getMatchPositionsCombined(id, partIndex, pageId, request.terms)
+        : Promise.resolve(null),
+  ]);
+  return { page, tokens, matches };
 }
 
 /** The book's page spine in reading order (`list_book_pages`). */

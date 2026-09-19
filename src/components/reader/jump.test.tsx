@@ -5,7 +5,7 @@ import type { PageEntry, SearchResult, Token } from '../../types';
 import type { SearchAPI } from '../../api';
 import { ReaderPanel } from '../panels/ReaderPanel';
 import { BooksProvider } from '../../contexts/BooksContext';
-import { installLayout, installResizeObserver, type FakeLayout } from './testLayout';
+import { installLayout, installResizeObserver, type FakeLayout, withPageBundle } from './testLayout';
 import { CARD_GAP } from './ContinuousReader';
 
 /**
@@ -35,7 +35,7 @@ function spine(): PageEntry[] {
 }
 
 function makeApi() {
-  return {
+  return withPageBundle({
     listBookPages: vi.fn(async () => spine()),
     getPage: vi.fn(async (id: number, part: number, page: number) => ({
       id,
@@ -56,7 +56,7 @@ function makeApi() {
     getAllBooks: vi.fn(async () => [{ id: 7, title: 'كتاب', author_id: 1, parts: 2, in_corpus: true }]),
     getAuthors: vi.fn(async () => [[1, 'مؤلف']]),
     getGenres: vi.fn(async () => []),
-  } as unknown as SearchAPI;
+  } as unknown as SearchAPI);
 }
 
 let layout: FakeLayout;

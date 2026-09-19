@@ -10,6 +10,8 @@
 
 **Fixed.** Export returns the full 2,000 rows; the corpus update prompt no longer says "must" for optional updates.
 
+**Web.** Scrolling a book no longer trips the server's rate limit: a page is one request (text, tokens and highlights together), only the pages in view and the next one are fetched, and if the server does ask the app to wait it waits quietly and carries on. The server gives the reader its own, larger allowance; searches keep the strict one.
+
 ## [0.5.3] - 2026-09-18
 
 - The reader shows the book as one scrolling column of pages, each drawn as

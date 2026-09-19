@@ -7,7 +7,7 @@ by `.github/workflows/release.yml` (with `dry_run: false`).
 | File | Purpose |
 |---|---|
 | `kashshaf-api.service` | systemd unit: user `kashshaf`, `ExecStart=/opt/kashshaf/api/bin/current`, environment (below); `ProtectSystem=full` and no `ReadOnlyPaths=` because the data directory is a symlink (see "Corpus layout") |
-| `nginx-api.kashshaf.com.conf` | reverse proxy with TLS, 10 req/s burst 30 per IP (`limit_req` inside `location /`; `/health` has none, which is how nginx exempts a location), JSON 429. The `ssl_certificate` lines are live and point at certbot's paths, so the file passes `nginx -t` wherever the certificate exists; the TLS `server` block sits between `begin/end tls server` markers so `install.sh` can leave it out until certbot has run |
+| `nginx-api.kashshaf.com.conf` | reverse proxy with TLS, two `limit_req` zones per IP — 10 req/s burst 30 in `location /` (searches), 60 req/s burst 120 in the `/page*`, `/book/{id}/pages` and `/book/{id}/toc` location (the reader); `/health` has none, which is how nginx exempts a location — and a JSON 429 that carries the CORS headers and `Retry-After` (`add_header … always`), so a browser sees a 429 rather than a CORS failure. The `ssl_certificate` lines are live and point at certbot's paths, so the file passes `nginx -t` wherever the certificate exists; the TLS `server` block sits between `begin/end tls server` markers so `install.sh` can leave it out until certbot has run |
 | `install.sh` | one-time setup: packages, user, directories, sudoers rule, unit, optional nginx + certbot. Without a certificate it installs the port-80 site only, runs `certbot certonly --nginx`, then installs the full site; with one it installs the full site directly |
 | `switch_release.sh` | run by the workflow over SSH: repoint `bin/current`, restart, wait for `/health.version` and `warm_cache == complete`, smoke test, roll back on failure, keep three binaries |
 | `smoke.sh` | the post-deploy checks (also run from the runner against the public URL) |
@@ -32,7 +32,8 @@ by `.github/workflows/release.yml` (with `dry_run: false`).
 | `KASHSHAF_DATA_DIR` | `/opt/kashshaf/data` | index and databases |
 | `KASHSHAF_BIND` | `127.0.0.1:3000` | listen behind nginx only |
 | `KASHSHAF_WARM_CACHE` | `1` | read the index and corpus.db once at startup; `/health.warm_cache` goes `pending` → `complete` (the deploy waits for it); unset = `disabled` |
-| `KASHSHAF_RATE_LIMIT` | `1` | in-process limiter, 10 req/s burst 30 per client IP (`<per_second>[,<burst>]` to change; unset/`0` off) |
+| `KASHSHAF_RATE_LIMIT` | `1` | in-process limiter for searches, 10 req/s burst 30 per client IP (`<per_second>[,<burst>]` to change; unset/`0` off) |
+| `KASHSHAF_RATE_LIMIT_READER` | unset | the reader's bucket (`/page*`, `/book/{id}/pages`, `/book/{id}/toc`) while the limiter is on: 60 req/s burst 120 by default (`<per_second>[,<burst>]`) |
 | `KASHSHAF_MAX_CONCURRENT_WALKS` | `4` | detached verified walks running at once (default would be `nproc - 2`); `KASHSHAF_MAX_WALKS` is an alias |
 | `RUST_LOG` | `info` | tracing filter |
 
