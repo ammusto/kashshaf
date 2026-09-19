@@ -83,19 +83,16 @@ const memory = new Map<number, Remembered>();
 let mounted = 0;
 
 /**
- * The search rail makes way for a search: it folds when one runs, so the
- * text and the results take the width. Opened back by hand (the button, or
- * Ctrl/Cmd+B) it stays open for the rest of the session — the same rule as
- * Kashshaf's sidebar. Session-wide, not per book: someone who wants it open
- * wants it open in the next book too.
+ * The search rail makes way for a search: every search folds it, so the
+ * text and the results take the width, and the button or Ctrl/Cmd+B opens
+ * it again — the same rule as Kashshaf's sidebar. Whether it is open is
+ * remembered across panels for the session, not per book.
  */
 let railOpen = true;
-let railPinnedOpen = false;
 
 export function resetReadMemory() {
   memory.clear();
   railOpen = true;
-  railPinnedOpen = false;
 }
 
 function remembered(bookId: number | null): Remembered {
@@ -188,13 +185,11 @@ export function ReadPanel({
   const [railShown, setRailShown] = useState(railOpen);
   const toggleRail = useCallback(() => {
     setRailShown((was) => {
-      if (!was) railPinnedOpen = true;
       railOpen = !was;
       return !was;
     });
   }, []);
   const foldRailForSearch = useCallback(() => {
-    if (railPinnedOpen) return;
     railOpen = false;
     setRailShown(false);
   }, []);

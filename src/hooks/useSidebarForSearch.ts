@@ -1,19 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 /**
  * The search sidebar makes way for a search.
  *
- * When a search runs the sidebar folds away, so the results and the reader
- * take the width. The user can open it again from the same toggle or with
- * Ctrl/Cmd+B, and having done so, keeps it: the choice is remembered for the
- * session, so someone who reopened it is not fought at every search. A
- * manual collapse leaves the policy alone.
+ * Every search folds the sidebar, so the results and the reader take the
+ * width; the user opens it again from the same toggle or with Ctrl/Cmd+B.
+ * That is the whole rule. An earlier version remembered a reopen and stopped
+ * folding for the session, which read as the fold being broken.
  */
 export interface SidebarForSearch {
   open: boolean;
-  /** The toggle button and the shortcut. Opening by hand pins it open for the session. */
+  /** The toggle button and the shortcut. */
   toggle: () => void;
-  /** A search is starting: collapse, unless the user has pinned it open. */
+  /** A search is starting: fold. */
   collapseForSearch: () => void;
 }
 
@@ -24,20 +23,10 @@ export function isSidebarShortcut(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'me
 
 export function useSidebarForSearch(initiallyOpen = true): SidebarForSearch {
   const [open, setOpen] = useState(initiallyOpen);
-  /** The user opened it after a search folded it: leave it alone from now on. */
-  const pinnedOpen = useRef(false);
 
-  const toggle = useCallback(() => {
-    setOpen((was) => {
-      if (!was) pinnedOpen.current = true;
-      return !was;
-    });
-  }, []);
+  const toggle = useCallback(() => setOpen((was) => !was), []);
 
-  const collapseForSearch = useCallback(() => {
-    if (pinnedOpen.current) return;
-    setOpen(false);
-  }, []);
+  const collapseForSearch = useCallback(() => setOpen(false), []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

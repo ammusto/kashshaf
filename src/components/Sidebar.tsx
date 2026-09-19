@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useSearchForm } from '../contexts/SearchFormContext';
 import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from '../types/search';
 import type { NameFormData } from '../utils/namePatterns';
 import { NameSearchForm } from './name-search';
@@ -46,8 +47,9 @@ export function Sidebar({
   onNameFormDataChange,
   generatedPatterns,
 }: SidebarProps) {
-  // Term search mode: 'boolean' or 'proximity' (only used when appSearchMode === 'terms')
-  const [termSearchMode, setTermSearchMode] = useState<'boolean' | 'proximity'>('boolean');
+  // Term search mode: 'boolean' or 'proximity' (only used when appSearchMode === 'terms').
+  // In the store, so it survives the sidebar folding away for a search.
+  const { termSearchMode, setTermSearchMode } = useSearchForm();
 
   // Toast state for validation errors
   const [toastMessage, setToastMessage] = useState<string | null>(null);

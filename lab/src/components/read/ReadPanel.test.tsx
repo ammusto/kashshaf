@@ -421,7 +421,7 @@ describe('ReadPanel', () => {
     await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:8'));
   });
 
-  it('folds the search rail when a search runs, and keeps it open once reopened by hand', async () => {
+  it('folds the search rail on every search; the button and the shortcut open it again', async () => {
     render(<ReadPanel book={book} />);
     await waitFor(() => expect(screen.getByTestId('read-locator')).toHaveTextContent('1:7'));
     expect(screen.getByTestId('search-rail')).toBeInTheDocument();
@@ -432,19 +432,20 @@ describe('ReadPanel', () => {
     // The results and the text take the width.
     expect(screen.queryByTestId('search-rail')).not.toBeInTheDocument();
 
-    // Back from the same toggle.
+    // Back from the same toggle, with the terms still in it.
     fireEvent.click(screen.getByTestId('open-search-rail'));
     expect(screen.getByTestId('search-rail')).toBeInTheDocument();
-    // And it is not fought at the next search: the choice is kept.
+    expect((screen.getAllByLabelText('Term')[0] as HTMLInputElement).value).toBe('قال');
+    // Every search folds it, not only the first.
     fireEvent.click(screen.getByTestId('run-search'));
     await waitFor(() => expect(api.search).toHaveBeenCalledTimes(2));
-    expect(screen.getByTestId('search-rail')).toBeInTheDocument();
+    expect(screen.queryByTestId('search-rail')).not.toBeInTheDocument();
 
-    // The shortcut toggles it either way.
+    // The shortcut opens and closes it.
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+    expect(screen.getByTestId('search-rail')).toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
     expect(screen.queryByTestId('search-rail')).not.toBeInTheDocument();
-    fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
-    expect(screen.getByTestId('search-rail')).toBeInTheDocument();
   });
 
   it('says why the contents are missing rather than showing an empty pane', async () => {

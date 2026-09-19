@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement, PageEntry } from './types';
-import type { AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from './types/search';
+import type { CombinedSearchQuery, ProximitySearchQuery } from './types/search';
 import type { Collection } from './types/collections';
 import { MAX_RESULTS } from './constants/search';
 import { useSearchTabsContext } from './contexts/SearchTabsContext';
@@ -10,6 +10,7 @@ import { useSearch } from './hooks/useSearch';
 import { useReaderNavigation } from './hooks/useReaderNavigation';
 import { usePageHighlights } from './hooks/usePageHighlights';
 import { useSidebarForSearch } from './hooks/useSidebarForSearch';
+import { useSearchForm } from './contexts/SearchFormContext';
 import { Sidebar } from './components/Sidebar';
 import { ReaderPanel, ResultsPanel, HelpPanel } from './components/panels';
 import { DraggableSplitter, UpdateBanner } from './components/ui';
@@ -25,8 +26,6 @@ import {
 } from './components/modals';
 import { Toolbar } from './components/Toolbar';
 import { SearchTabs, type TabData } from './components/SearchTabs';
-import type { NameFormData } from './utils/namePatterns';
-import { createEmptyNameForm } from './utils/namePatterns';
 import { isWebTarget } from './utils/platform';
 import { getEligibleAnnouncements } from './utils/announcements';
 import { markMultipleAnnouncementsDismissed, setSkipAnnouncementPopups } from './utils/storage';
@@ -54,9 +53,8 @@ function App() {
   const [showAnnouncementsModal, setShowAnnouncementsModal] = useState(false);
   const [announcementsChecked, setAnnouncementsChecked] = useState(false);
 
-  // Open by default; folds away when a search runs so the results and the
-  // reader take the width, unless the user has opened it back this session.
-  // Ctrl/Cmd+B toggles it from anywhere.
+  // Open by default; every search folds it so the results and the reader
+  // take the width. The toggle or Ctrl/Cmd+B opens it again.
   const sidebar = useSidebarForSearch();
   const sidebarOpen = sidebar.open;
 
@@ -75,12 +73,10 @@ function App() {
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
 
-  // App-level search mode (terms, names)
-  const [appSearchMode, setAppSearchMode] = useState<AppSearchMode>('terms');
-
-  // Name search form state (kept in App for sidebar)
-  const [nameFormData, setNameFormData] = useState<NameFormData[]>([createEmptyNameForm('form-0')]);
-  const [generatedPatterns, setGeneratedPatterns] = useState<string[][]>([]);
+  // The search form's state — terms/names, the name forms, the patterns —
+  // lives in the store (SearchFormContext), so it survives the sidebar
+  // folding away for a search.
+  const { appSearchMode, setAppSearchMode, nameFormData, setNameFormData, generatedPatterns, setGeneratedPatterns } = useSearchForm();
 
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
 

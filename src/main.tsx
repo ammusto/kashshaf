@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import { OperatingModeProvider } from './contexts/OperatingModeContext'
 import { SearchTabsProvider } from './contexts/SearchTabsContext'
+import { SearchFormProvider } from './contexts/SearchFormContext'
 import './styles/index.css'
 
 // OperatingModeProvider is at the top to provide API
@@ -11,7 +12,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <OperatingModeProvider>
       <SearchTabsProvider>
+      <SearchFormProvider>
         <App />
+      </SearchFormProvider>
       </SearchTabsProvider>
     </OperatingModeProvider>
   </React.StrictMode>,

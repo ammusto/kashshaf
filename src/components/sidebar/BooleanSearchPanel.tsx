@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
 import type { SearchInput, CombinedSearchQuery } from '../../types/search';
+import { useSearchForm } from '../../contexts/SearchFormContext';
 import { SearchInputRow } from './SearchInputRow';
 import { validateWildcard } from '../../utils/wildcardValidation';
 import { useOperatingMode } from '../../contexts/OperatingModeContext';
@@ -17,14 +17,8 @@ export function BooleanSearchPanel({
   loading,
   showToast,
 }: BooleanSearchPanelProps) {
-  const [activeTab, setActiveTab] = useState<'and' | 'or'>('and');
-  const [andInputs, setAndInputs] = useState<SearchInput[]>([
-    { id: 1, query: '', mode: 'surface', cliticToggle: false }
-  ]);
-  const [orInputs, setOrInputs] = useState<SearchInput[]>([
-    { id: 1, query: '', mode: 'surface', cliticToggle: false }
-  ]);
-  const nextIdRef = useRef(2);
+  // The form's state is the store's, so it survives the sidebar folding.
+  const { activeTab, setActiveTab, andInputs, setAndInputs, orInputs, setOrInputs, nextInputId } = useSearchForm();
   const { capabilities } = useOperatingMode();
   const wildcardGrammar = capabilities?.wildcard_grammar ?? 'glob';
 
@@ -34,7 +28,7 @@ export function BooleanSearchPanel({
   const handleAddInput = () => {
     if (currentInputs.length >= 3) return;
     const newInput: SearchInput = {
-      id: nextIdRef.current++,
+      id: nextInputId(),
       query: '',
       mode: 'surface',
       cliticToggle: false,
@@ -52,8 +46,8 @@ export function BooleanSearchPanel({
   };
 
   const handleClear = () => {
-    setAndInputs([{ id: nextIdRef.current++, query: '', mode: 'surface', cliticToggle: false }]);
-    setOrInputs([{ id: nextIdRef.current++, query: '', mode: 'surface', cliticToggle: false }]);
+    setAndInputs([{ id: nextInputId(), query: '', mode: 'surface', cliticToggle: false }]);
+    setOrInputs([{ id: nextInputId(), query: '', mode: 'surface', cliticToggle: false }]);
     setActiveTab('and');
     onClearForm();
   };

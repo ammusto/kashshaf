@@ -10,27 +10,19 @@ describe('the sidebar makes way for a search', () => {
     expect(result.current.open).toBe(false);
   });
 
-  it('once opened back by hand, stays open through later searches', () => {
+  it('folds on every search, however often it was reopened', () => {
     const { result } = renderHook(() => useSidebarForSearch());
     act(() => result.current.collapseForSearch());
     act(() => result.current.toggle());
     expect(result.current.open).toBe(true);
     act(() => result.current.collapseForSearch());
-    expect(result.current.open).toBe(true);
-    act(() => result.current.collapseForSearch());
-    expect(result.current.open).toBe(true);
-  });
-
-  it('a manual collapse does not pin anything', () => {
-    const { result } = renderHook(() => useSidebarForSearch());
-    act(() => result.current.toggle()); // closed by hand
     expect(result.current.open).toBe(false);
-    act(() => result.current.toggle()); // opened by hand: pinned
+    act(() => result.current.toggle());
     act(() => result.current.collapseForSearch());
-    expect(result.current.open).toBe(true);
+    expect(result.current.open).toBe(false);
   });
 
-  it('Ctrl+B and Cmd+B toggle it, and opening that way pins it too', () => {
+  it('Ctrl+B and Cmd+B toggle it', () => {
     const { result } = renderHook(() => useSidebarForSearch());
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true }));
@@ -39,8 +31,6 @@ describe('the sidebar makes way for a search', () => {
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'B', metaKey: true }));
     });
-    expect(result.current.open).toBe(true);
-    act(() => result.current.collapseForSearch());
     expect(result.current.open).toBe(true);
   });
 

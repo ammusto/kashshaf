@@ -1,6 +1,6 @@
-import { useState } from 'react';
 import type { ProximitySearchQuery } from '../../types/search';
-import { ProximityInputRow, type ProximityInput } from './ProximityInputRow';
+import { ProximityInputRow } from './ProximityInputRow';
+import { useSearchForm } from '../../contexts/SearchFormContext';
 
 interface ProximitySearchPanelProps {
   onSearch: (query: ProximitySearchQuery) => void;
@@ -13,9 +13,9 @@ export function ProximitySearchPanel({
   onClearForm,
   loading,
 }: ProximitySearchPanelProps) {
-  const [proximityInput1, setProximityInput1] = useState<ProximityInput>({ term: '', field: 'surface' });
-  const [proximityInput2, setProximityInput2] = useState<ProximityInput>({ term: '', field: 'surface' });
-  const [proximityDistance, setProximityDistance] = useState(10);
+  // The form's state is the store's, so it survives the sidebar folding.
+  const { proximityInput1, setProximityInput1, proximityInput2, setProximityInput2, proximityDistance, setProximityDistance } =
+    useSearchForm();
 
   const handleClear = () => {
     setProximityInput1({ term: '', field: 'surface' });
