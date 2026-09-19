@@ -194,18 +194,6 @@ describe('the reader as a scrolling book', () => {
     await waitFor(() => expect(screen.getByText('1:3 of 200')).toBeInTheDocument());
   });
 
-  it('Next steps one page and Prev steps back', async () => {
-    const { api } = makeApi(spineOf());
-    renderReader(api);
-    await waitFor(() => expect(screen.getByText('1:1 of 200')).toBeInTheDocument());
-
-    await userEvent.click(screen.getByRole('button', { name: '← Next' }));
-    await waitFor(() => expect(screen.getByText('1:2 of 200')).toBeInTheDocument());
-
-    await userEvent.click(screen.getByRole('button', { name: 'Prev →' }));
-    await waitFor(() => expect(screen.getByText('1:1 of 200')).toBeInTheDocument());
-  });
-
   it('Go jumps to a printed page number without asking the server', async () => {
     const { api } = makeApi(spineOf());
     renderReader(api);

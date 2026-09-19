@@ -525,14 +525,8 @@ export function ReadPanel({
 
   const toolbar = (
     <div className="flex items-center gap-3 px-3 py-1.5 border-b border-app-border-light bg-app-surface text-xs">
-      {/* RTL: the next page is to the left, the previous to the right. */}
-      <button
-        onClick={() => void go(index + 1)}
-        disabled={index >= pages.length - 1 || loading}
-        className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
-      >
-        ‹ Next
-      </button>
+      {/* No Prev/Next buttons: the arrow keys page (right arrow goes back,
+          the text being right to left), and the boxes with Go place a page. */}
       <form
         className="flex items-center gap-1"
         onSubmit={(e) => {
@@ -562,13 +556,6 @@ export function ReadPanel({
           Go
         </button>
       </form>
-      <button
-        onClick={() => void go(index - 1)}
-        disabled={index <= 0 || loading}
-        className="px-2 py-1 border border-app-border-medium rounded disabled:opacity-40"
-      >
-        Prev ›
-      </button>
 
       {currentEntry?.title ? (
         <span

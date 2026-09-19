@@ -11,7 +11,7 @@ import { installLayout, installResizeObserver, type FakeLayout } from './testLay
  * Reader navigation as a matrix: every way the view can be asked to move,
  * against every shape the target can have.
  *
- *   entry points   open at page, Go, result click, ToC click, Prev, Next
+ *   entry points   open at page, Go, result click, ToC click
  *   targets        mounted, unmounted, adjacent at the top edge, adjacent at
  *                  the bottom edge, in another part, taller than the viewport
  *
@@ -27,7 +27,7 @@ import { installLayout, installResizeObserver, type FakeLayout } from './testLay
  * The quiet period the report asks for is two seconds. Here it is 500 ms
  * sampled every 50 ms: everything the reader does on its own (animation
  * frames, the highlight debounce, a glide's landing watch) is over well
- * inside that, and 36 cells at two seconds each would not be run.
+ * inside that, and 24 cells at two seconds each would not be run.
  */
 
 const VIEWPORT = 600;
@@ -38,9 +38,9 @@ const GAP = 24;
 const PART_1 = 200;
 const PAGES = 400;
 
-type Entry = 'open' | 'go' | 'result' | 'toc' | 'prev' | 'next';
+type Entry = 'open' | 'go' | 'result' | 'toc';
 type Target = 'mounted' | 'unmounted' | 'adjacentTop' | 'adjacentBottom' | 'otherPart' | 'tall';
-const ENTRIES: Entry[] = ['open', 'go', 'result', 'toc', 'prev', 'next'];
+const ENTRIES: Entry[] = ['open', 'go', 'result', 'toc'];
 const TARGETS: Target[] = ['mounted', 'unmounted', 'adjacentTop', 'adjacentBottom', 'otherPart', 'tall'];
 
 function spine(): PageEntry[] {
@@ -59,18 +59,14 @@ function labelOf(index: number): string {
 
 interface World {
   api: SearchAPI;
-  /** Pages whose fetch is held back, so they are not loaded when asked for. */
-  slow: Set<number>;
   heights: Map<number, number>;
 }
 
 function makeWorld(): World {
-  const slow = new Set<number>();
   const heights = new Map<number, number>();
   const api = {
     listBookPages: vi.fn(async () => spine()),
     getPage: vi.fn(async (id: number, part: number, page: number) => {
-      if (slow.has(page - 1)) await new Promise((r) => setTimeout(r, 400));
       return {
         id,
         part_index: part,
@@ -92,7 +88,7 @@ function makeWorld(): World {
     getAuthors: vi.fn(async () => [[1, 'مؤلف']]),
     getGenres: vi.fn(async () => []),
   } as unknown as SearchAPI;
-  return { api, slow, heights };
+  return { api, heights };
 }
 
 let layout: FakeLayout;
@@ -185,28 +181,21 @@ interface Cell {
   bottomEdge?: boolean;
 }
 
-/** The start and target for an entry point against a target shape. */
-function cellFor(entry: Entry, target: Target): Cell | null {
-  const stepping = entry === 'prev' || entry === 'next';
-  const dir = entry === 'next' ? 1 : -1;
+/** The start and target for a target shape. */
+function cellFor(target: Target): Cell {
   switch (target) {
     case 'mounted':
-      return stepping ? { start: 50, target: 50 + dir } : { start: 50, target: 52 };
+      return { start: 50, target: 52 };
     case 'unmounted':
-      // For a step, the neighbour is made slow to load, so it is not there
-      // when the button is pressed.
-      return stepping ? { start: 50, target: 50 + dir } : { start: 50, target: 300 };
+      return { start: 50, target: 300 };
     case 'adjacentTop':
-      return stepping ? (dir === -1 ? { start: 50, target: 49 } : { start: 50, target: 51 }) : { start: 50, target: 49 };
+      return { start: 50, target: 49 };
     case 'adjacentBottom':
-      return stepping
-        ? { start: 50, target: 50 + dir, bottomEdge: true }
-        : { start: 50, target: 51, bottomEdge: true };
+      return { start: 50, target: 51, bottomEdge: true };
     case 'otherPart':
-      // The step crosses the part boundary; the others land deep in part 2.
-      return stepping ? (dir === -1 ? { start: PART_1, target: PART_1 - 1 } : { start: PART_1 - 1, target: PART_1 }) : { start: 50, target: 250 };
+      return { start: 50, target: 250 };
     case 'tall':
-      return stepping ? { start: 50, target: 50 + dir } : { start: 50, target: 52 };
+      return { start: 50, target: 52 };
   }
 }
 
@@ -218,9 +207,8 @@ async function openAt(index: number) {
 }
 
 async function runCell(entry: Entry, target: Target) {
-  const cell = cellFor(entry, target)!;
+  const cell = cellFor(target);
   if (target === 'tall') world.heights.set(cell.target, TALL);
-  if (target === 'unmounted' && (entry === 'prev' || entry === 'next')) world.slow.add(cell.target);
 
   const start = entry === 'open' ? cell.target : cell.start!;
   const r = await openAt(start);
@@ -255,16 +243,8 @@ async function runCell(entry: Entry, target: Target) {
     case 'toc':
       r.clickToc(cell.target);
       break;
-    case 'prev':
-      await userEvent.click(screen.getByRole('button', { name: 'Prev →' }));
-      break;
-    case 'next':
-      await userEvent.click(screen.getByRole('button', { name: '← Next' }));
-      break;
   }
 
-  // Let it land, including a slow page.
-  await new Promise((res) => setTimeout(res, 450));
   await settled();
 
   const observed = observedIndex();

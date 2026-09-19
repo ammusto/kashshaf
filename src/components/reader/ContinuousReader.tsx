@@ -12,8 +12,9 @@ import type { PageStack } from '../../hooks/usePageStack';
  * stands for the whole book.
  *
  * There is one way the view moves: `goTo(index)`. Opening at a page, Go, a
- * clicked result, a contents entry, Prev and Next all call it and nothing
- * else, so there is one rule to get right:
+ * clicked result and a contents entry all call it and nothing else, so there
+ * is one rule to get right. Between those, the column scrolls: the wheel,
+ * the arrow keys, the scrollbar. There are no Prev/Next buttons.
  *
  *  - **target mounted and measured**: one smooth scroll that puts the page's
  *    measured top at the top of the pane, with the gap above it showing.
@@ -67,8 +68,6 @@ export function pageLabel(entry: PageEntry, multiPart: boolean): string {
 export interface ContinuousReaderHandle {
   /** The one way the view moves. */
   goTo: (index: number) => void;
-  /** Prev/Next: one page from the page in view. */
-  step: (direction: number) => void;
 }
 
 /**
@@ -280,18 +279,7 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     [spine.length, pages, heights, glideTo, setAnchorIndex]
   );
 
-  /** Prev/Next: one page from the page in view, read from the geometry. */
-  const step = useCallback(
-    (direction: number) => {
-      if (spine.length === 0) return;
-      const from = pageAtTop() ?? anchorIndex;
-      const target = Math.min(Math.max(from + direction, 0), spine.length - 1);
-      if (target !== from) goTo(target);
-    },
-    [spine.length, pageAtTop, anchorIndex, goTo]
-  );
-
-  useImperativeHandle(ref, () => ({ goTo, step }), [goTo, step]);
+  useImperativeHandle(ref, () => ({ goTo }), [goTo]);
 
   // --- a request from outside (opening at a page, a clicked result, a
   //     contents entry): goTo, like everything else

@@ -24,8 +24,6 @@ interface ReaderPanelProps {
   onMountedPages?: (entries: PageEntry[]) => void;
   /** Told where the reader is, so the tab remembers it. */
   onActivePage?: (entry: PageEntry) => void;
-  /** Stepping when the book has no spine (an older server). */
-  onNavigate?: (direction: number) => void;
   /** Jumping when the book has no spine. Returns false if there is no such page. */
   onNavigateToLabel?: (partLabel: string, pageNumber: string) => Promise<boolean>;
 }
@@ -46,7 +44,6 @@ export function ReaderPanel({
   matchesFor,
   onMountedPages,
   onActivePage,
-  onNavigate,
   onNavigateToLabel,
 }: ReaderPanelProps) {
   const { booksMap, authorsMap, genresMap } = useBooks();
@@ -140,14 +137,6 @@ export function ReaderPanel({
     } finally {
       setNavigating(false);
     }
-  };
-
-  const handleStep = (direction: number) => {
-    if (stack.spine.length > 0) {
-      readerRef.current?.step(direction);
-      return;
-    }
-    onNavigate?.(direction);
   };
 
   const handleWordClick = useCallback((e: React.MouseEvent, token: Token) => {
@@ -244,27 +233,8 @@ export function ReaderPanel({
             Go
           </button>
         </div>
-        {/* The text is RTL, so the next page lies to the left and the
-            previous to the right. The arrows point the way the reader
-            moves, not the way a Latin page turns. */}
-        <div className="flex gap-2 flex-shrink-0">
-          <button
-            onClick={() => handleStep(1)}
-            className="px-2 py-2 bg-app-surface-variant rounded-md text-xs font-medium
-                     hover:bg-app-accent-light hover:text-app-accent transition-colors
-                     border border-app-border-light"
-          >
-            ← Next
-          </button>
-          <button
-            onClick={() => handleStep(-1)}
-            className="px-2 py-2 bg-app-surface-variant rounded-md text-xs font-medium
-                     hover:bg-app-accent-light hover:text-app-accent transition-colors
-                     border border-app-border-light"
-          >
-            Prev →
-          </button>
-        </div>
+        {/* No Prev/Next: the column scrolls, the arrow keys and the wheel
+            move it, and the page box with Go places a page. */}
       </div>
 
       {stack.spineError && (

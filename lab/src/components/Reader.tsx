@@ -245,6 +245,23 @@ export function Reader({
   const canPrev = index > 0;
   const canNext = index >= 0 && index < pages.length - 1;
 
+  // The default toolbar's paging, by keyboard. A panel that supplies its own
+  // toolbar (the Read panel) handles the keys itself.
+  const over = useRef(false);
+  useEffect(() => {
+    if (toolbar) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!over.current || loading) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'ArrowRight' && canPrev) onNavigate(index - 1);
+      if (e.key === 'ArrowLeft' && canNext) onNavigate(index + 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toolbar, loading, canPrev, canNext, index, onNavigate]);
+
   // One mark per token, so rendering a run is a lookup rather than a scan.
   const markByToken = useMemo(() => {
     const m = new Map<number, Mark>();
@@ -260,26 +277,20 @@ export function Reader({
   const misaligned = page != null && displayCount !== page.tokens.length;
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className="flex flex-col h-full"
+      onMouseEnter={() => {
+        over.current = true;
+      }}
+      onMouseLeave={() => {
+        over.current = false;
+      }}
+    >
       {toolbar ?? (
       <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-app-border-light bg-app-surface">
-        {/* RTL: the next page is to the left, the previous to the right. */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onNavigate(index + 1)}
-            disabled={!canNext || loading}
-            className="px-2 py-1 text-sm border border-app-border-medium rounded disabled:opacity-40"
-          >
-            ‹ Next
-          </button>
-          <button
-            onClick={() => onNavigate(index - 1)}
-            disabled={!canPrev || loading}
-            className="px-2 py-1 text-sm border border-app-border-medium rounded disabled:opacity-40"
-          >
-            Prev ›
-          </button>
-        </div>
+        {/* No Prev/Next buttons: the arrow keys page while the pointer is over
+            the text (the text reads right to left, so the right arrow goes
+            back in it), as in the Read panel. */}
         <div className="text-xs text-app-text-secondary" data-testid="page-locator">
           {page ? (labels ?? Pages.empty()).label(page.part_index, page.page_id) : '—'}
         </div>

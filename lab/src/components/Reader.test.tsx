@@ -225,20 +225,31 @@ describe('Reader', () => {
     expect(container.querySelectorAll('[data-token]')).toHaveLength(0);
   });
 
-  it('navigates within the page list and stops at both ends', () => {
+  it('pages with the arrow keys while the pointer is over it, and stops at both ends', () => {
     const onNavigate = vi.fn();
-    const { rerender } = render(
+    const { rerender, container } = render(
       <Reader page={page()} pages={refs} index={0} onNavigate={onNavigate} loading={false} error={null} />
     );
-    expect(screen.getByRole('button', { name: /Prev/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: /Next/ }));
+    expect(screen.queryByRole('button', { name: /Prev|Next/ })).not.toBeInTheDocument();
+    // Not over the reader: the keys belong to something else.
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    expect(onNavigate).not.toHaveBeenCalled();
+
+    fireEvent.mouseEnter(container.firstChild as HTMLElement);
+    // Right to left: the left arrow goes on, the right arrow goes back.
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(onNavigate).not.toHaveBeenCalled(); // already at the first page
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
     expect(onNavigate).toHaveBeenCalledWith(1);
 
     rerender(
       <Reader page={page()} pages={refs} index={1} onNavigate={onNavigate} loading={false} error={null} />
     );
-    expect(screen.getByRole('button', { name: /Next/ })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Prev/ })).toBeEnabled();
+    onNavigate.mockClear();
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    expect(onNavigate).not.toHaveBeenCalled(); // already at the last page
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(onNavigate).toHaveBeenCalledWith(0);
   });
 
   it('shows a page error instead of a blank pane', () => {

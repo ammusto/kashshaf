@@ -100,7 +100,7 @@ function App() {
   const [editingCollection, setEditingCollection] = useState<Collection | undefined>(undefined);
 
   // Reader navigation hook
-  const { handleNavigatePage, handleNavigateToLabel, loadResultIntoTab } = useReaderNavigation({ api });
+  const { handleNavigateToLabel, loadResultIntoTab } = useReaderNavigation({ api });
 
   // Where the reader should be. Only the coordinates: the reader loads the
   // pages around them itself.
@@ -655,7 +655,6 @@ function App() {
                   matchesFor={highlights.matchesFor}
                   onMountedPages={highlights.onMountedPages}
                   onActivePage={handleActivePage}
-                  onNavigate={handleNavigatePage}
                   onNavigateToLabel={handleNavigateToLabel}
                 />
               </div>

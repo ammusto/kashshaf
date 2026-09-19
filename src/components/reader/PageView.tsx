@@ -105,8 +105,6 @@ export function PageView({
     return () => onMount(index, null);
   }, [index, onMount]);
 
-  let firstHighlightSeen = false;
-
   return (
     // The gap below the card is inside the measured element, so the spacer
     // that replaces this page later is exactly as tall as the space it took.
@@ -133,14 +131,11 @@ export function PageView({
                 return run.text === '\n' ? <br key={i} /> : <span key={i}>{run.text}</span>;
               }
               const token = tokenByIdx.get(run.token);
-              const isFirst = run.highlighted && !firstHighlightSeen;
-              if (isFirst) firstHighlightSeen = true;
               return (
                 <span
                   key={i}
                   data-token={run.token}
                   data-highlight={run.highlighted ? 'true' : undefined}
-                  data-highlight-first={isFirst ? 'true' : undefined}
                   onClick={token ? (e) => onWordClick(e, token) : undefined}
                   // A highlight changes colour only. A weight or a border
                   // would reflow the line and change the page's height after

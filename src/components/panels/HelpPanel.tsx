@@ -358,7 +358,7 @@ function FeaturesTab() {
 
       <Section title="Keyboard Navigation">
         <ul className="list-disc list-inside text-app-text-secondary space-y-1">
-          <li>Use <strong>Prev/Next</strong> buttons or navigate between pages in the reader</li>
+          <li>The reader scrolls: the wheel, the arrow keys and the scrollbar move through the book; type a volume and page and press <strong>Go</strong> to place a page</li>
           <li>Results panel supports scrolling with keyboard</li>
           <li>Press Enter in search fields to execute the search</li>
         </ul>

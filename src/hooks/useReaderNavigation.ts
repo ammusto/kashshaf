@@ -9,8 +9,6 @@ export interface UseReaderNavigationOptions {
 }
 
 export interface UseReaderNavigationReturn {
-  /** Fallback stepping for a corpus with no page list; otherwise the reader steps itself. */
-  handleNavigatePage: (direction: number) => Promise<void>;
   /** Jump to a specific part_label/page_number. Returns false if no such page exists. */
   handleNavigateToLabel: (partLabel: string, pageNumber: string) => Promise<boolean>;
   loadResultIntoTab: (tabId: string, result: SearchResult) => Promise<void>;
@@ -52,9 +50,9 @@ export function getSearchTermsFromContext(context: SearchContext): SearchTerm[] 
 
 /**
  * Moving the reader from outside it: clicking a result, jumping to a printed
- * page number, stepping when the corpus has no page list.
+ * page number.
  *
- * All three do the same small thing — set the tab's anchor, `(currentBookId,
+ * Both do the same small thing — set the tab's anchor, `(currentBookId,
  * currentPartIndex, currentPageId)`. The reader watches that and fetches the
  * pages around it itself, so nothing here loads a body or a token list.
  */
@@ -112,26 +110,6 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
     }
   }, [updateTab, api, tabs]);
 
-  // Stepping without a page list: the next page id in the same part, which is
-  // all an older corpus can offer. With a list the reader steps itself, in
-  // reading order and across part boundaries.
-  const handleNavigatePage = useCallback(async (direction: number) => {
-    if (!activeTab || activeTab.currentBookId === null) return;
-    const newPageId = activeTab.currentPageId + direction;
-    if (newPageId < 1) return;
-    const page = await api.getPage(activeTab.currentBookId, activeTab.currentPartIndex, newPageId);
-    if (!page) return;
-    updateTab(activeTab.id, {
-      errorMessage: '',
-      currentPageId: newPageId,
-      clickedMatches: null,
-      currentPage: {
-        bookId: page.id,
-        meta: `${page.part_label}:${page.page_number}`,
-      },
-    });
-  }, [activeTab, updateTab, api]);
-
   // Jump to a printed page number. The reader resolves this against the page
   // list when it has one; this is the fallback, and the path a jump into a
   // book the reader has not opened yet still takes.
@@ -158,7 +136,6 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
   }, [activeTab, updateTab, api]);
 
   return {
-    handleNavigatePage,
     handleNavigateToLabel,
     loadResultIntoTab,
   };
