@@ -1,4 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { perfMark, perfMeasure } from '../../utils/perf';
 import type { PageEntry, Token } from '../../types';
 import { PageView } from './PageView';
 import { indexAtOffset, spacerAfter, spacerBefore } from '../../utils/pageWindow';
@@ -306,7 +307,16 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       c.scrollTop = top;
     }
     pin(placing.index);
-    if (pages.has(placing.index) && heights.has(placing.index)) setPlacing(null);
+    if (pages.has(placing.index) && heights.has(placing.index)) {
+      setPlacing(null);
+      perfMark('reader:placed');
+      perfMeasure('reader:click-to-placed', 'reader:click');
+      // The frame after this commit is the first the page is painted in.
+      requestAnimationFrame(() => {
+        perfMark('reader:first-paint');
+        perfMeasure('reader:click-to-first-paint', 'reader:click');
+      });
+    }
   }, [placing, pages, heights, mounted, topOf, holdFrame, pin]);
 
   // --- hold the visible content still across every re-render

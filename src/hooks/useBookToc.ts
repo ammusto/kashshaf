@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { flattenToc } from '@kashshaf/shared';
 import type { TocNode } from '../types';
 import type { SearchAPI } from '../api';
+import { perfMark, perfMeasure } from '../utils/perf';
 
 /** What the contents pane can be showing. */
 export type TocAvailability =
@@ -44,10 +45,13 @@ export function useBookToc(api: SearchAPI, bookId: number | null): BookToc {
     setState(NONE);
     // Through a promise even for a synchronous throw (a source without the
     // method at all), so nothing here can take the reader down.
+    perfMark('reader:toc-fetch-start');
     Promise.resolve()
       .then(() => api.getBookToc(bookId))
       .then((tree) => {
         if (!live) return;
+        perfMark('reader:toc-fetched');
+        perfMeasure('reader:toc-fetch', 'reader:toc-fetch-start');
         if (tree === null) {
           setState({ availability: 'unavailable', tree: [], rows: [], error: null });
           return;

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { perfMark, perfMeasure } from '../../utils/perf';
 import type { PageEntry, Token, TocNode } from '../../types';
 import type { SearchAPI } from '../../api';
 import { TokenPopup, entryForPage } from '@kashshaf/shared';
@@ -67,6 +68,13 @@ export function ReaderPanel({
   const [active, setActive] = useState<PageEntry | null>(null);
 
   const stack = usePageStack({ api, bookId, anchor });
+  // The commit in which the spine landed: the state update's own cost.
+  useLayoutEffect(() => {
+    if (stack.spine.length > 0) {
+      perfMark('reader:spine-rendered');
+      perfMeasure('reader:spine-render', 'reader:spine-fetched');
+    }
+  }, [stack.spine]);
 
   // --- the contents pane
   const toc = useBookToc(api, bookId);

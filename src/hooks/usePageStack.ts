@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PageEntry, Token } from '../types';
 import type { SearchAPI } from '../api';
+import { perfMark, perfMeasure } from '../utils/perf';
 import {
   cacheRange,
   evictable,
@@ -112,10 +113,13 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
     setSpineError(null);
     setLoadingSpine(true);
     let cancelled = false;
+    perfMark('reader:spine-fetch-start');
     api
       .listBookPages(bookId)
       .then((entries) => {
         if (cancelled || gen !== generation.current) return;
+        perfMark('reader:spine-fetched');
+        perfMeasure('reader:spine-fetch', 'reader:spine-fetch-start');
         // Resolve the anchor in the same render the spine lands in. Setting
         // the spine alone would mount the first pages for one frame, and
         // that frame is reported upward as "the reader is on page 1" — from
@@ -157,6 +161,8 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
   }, [anchor, spine]);
 
   const mounted = useMemo(() => windowFor(anchorIndex, spine.length), [anchorIndex, spine.length]);
+  const anchorIndexRef = useRef(anchorIndex);
+  anchorIndexRef.current = anchorIndex;
 
   // --- fetch what the window needs, drop what it no longer does
   useEffect(() => {
@@ -175,6 +181,10 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
         .then(([page, tokens]) => {
           if (gen !== generation.current) return;
           if (!page) return;
+          if (i === anchorIndexRef.current) {
+            perfMark('reader:anchor-page-fetched');
+            perfMeasure('reader:anchor-page-fetch', 'reader:spine-fetched');
+          }
           setPages((prev) => {
             // Between the request and the response the window may have moved
             // past this page; do not resurrect it.

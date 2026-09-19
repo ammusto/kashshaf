@@ -1384,18 +1384,65 @@ impl SearchEngine {
     /// about 130 ms for the largest book in the corpus, against seconds for
     /// a `get_page` loop, which also decompresses each page's body.
     pub fn book_page_labels(&self, id: u64) -> Result<Vec<(u64, u64, String, String)>> {
+        use std::collections::HashMap;
         let searcher = self.reader.searcher();
         let f = self.fields;
         let query = TermQuery::new(Term::from_field_u64(f.text_id, id), IndexRecordOption::Basic);
         let addrs = searcher.search(&query, &tantivy::collector::DocSetCollector)?;
+
+        // The four values are read from the fast-field columns, never from
+        // the doc store: a stored document carries the page body, and
+        // fetching 33,000 of them decompresses most of a long book's text
+        // to read four short fields from each — two seconds in release,
+        // twelve in debug, for Tārīkh Dimashq. The columns hold exactly
+        // these fields, and the two strings are dictionary-encoded, so a
+        // book's few hundred distinct labels are looked up once each.
+        struct Cols {
+            part: tantivy::columnar::Column<u64>,
+            page: tantivy::columnar::Column<u64>,
+            part_label: Option<tantivy::columnar::StrColumn>,
+            page_number: Option<tantivy::columnar::StrColumn>,
+            label_cache: HashMap<u64, String>,
+            number_cache: HashMap<u64, String>,
+        }
+        let mut per_segment: HashMap<u32, Cols> = HashMap::new();
+        let schema = searcher.schema();
+        let name = |field: tantivy::schema::Field| schema.get_field_name(field);
+
+        fn str_at(col: &Option<tantivy::columnar::StrColumn>, cache: &mut HashMap<u64, String>, doc: u32) -> String {
+            let Some(col) = col else { return String::new() };
+            let Some(ord) = col.term_ords(doc).next() else { return String::new() };
+            if let Some(s) = cache.get(&ord) {
+                return s.clone();
+            }
+            let mut s = String::new();
+            let _ = col.ord_to_str(ord, &mut s);
+            cache.insert(ord, s.clone());
+            s
+        }
+
         let mut out = Vec::with_capacity(addrs.len());
         for addr in addrs {
-            let doc: TantivyDocument = searcher.doc(addr)?;
+            let cols = match per_segment.entry(addr.segment_ord) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    let ff = searcher.segment_reader(addr.segment_ord).fast_fields();
+                    e.insert(Cols {
+                        part: ff.u64(name(f.part_index))?,
+                        page: ff.u64(name(f.page_id))?,
+                        part_label: ff.str(name(f.part_label))?,
+                        page_number: ff.str(name(f.page_number))?,
+                        label_cache: HashMap::new(),
+                        number_cache: HashMap::new(),
+                    })
+                }
+            };
+            let doc = addr.doc_id;
             out.push((
-                u64_of(&doc, f.part_index).unwrap_or(0),
-                u64_of(&doc, f.page_id).unwrap_or(0),
-                str_of(&doc, f.part_label),
-                str_of(&doc, f.page_number),
+                cols.part.first(doc).unwrap_or(0),
+                cols.page.first(doc).unwrap_or(0),
+                str_at(&cols.part_label, &mut cols.label_cache, doc),
+                str_at(&cols.page_number, &mut cols.number_cache, doc),
             ));
         }
         out.sort_by_key(|(part, page, _, _)| (*part, *page));

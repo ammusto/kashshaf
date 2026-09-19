@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { perfMark, perfReset } from '../utils/perf';
 import type { SearchResult, SearchMode } from '../types';
 import type { SearchAPI, SearchTerm } from '../api';
 import type { SearchContext } from '../types/search';
@@ -62,6 +63,8 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
 
   // Point a tab's reader at a result.
   const loadResultIntoTab = useCallback(async (tabId: string, result: SearchResult) => {
+    perfReset('reader:');
+    perfMark('reader:click');
     updateTab(tabId, {
       errorMessage: '',
       currentBookId: result.id,

@@ -356,6 +356,9 @@ touches your work.
 - The search sidebar folds when a search runs, so the results and the text
   take the width; Ctrl+B or its button opens it again with your terms still
   in it.
+- Opening a long book from a result no longer freezes the app: Tārīkh
+  Dimashq (33,204 pages) opens in under 150 ms where it took seconds, and
+  its contents pane draws only the headings in view.
 
 ## [0.5.2] - 2026-09-13
 

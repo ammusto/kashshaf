@@ -198,7 +198,7 @@ pub fn get_page(
 /// restart their page ids per part), the part boundaries themselves, and
 /// jump-to-page, from one call per book.
 #[tauri::command]
-pub fn list_book_pages(
+pub async fn list_book_pages(
     state: State<'_, ManagedAppState>,
     id: u64,
 ) -> Result<Vec<kashshaf_engine::PageEntry>, KashshafError> {
@@ -213,7 +213,7 @@ pub fn list_book_pages(
 /// `toc.db` (it ships with corpus 4.2.0). A book that has no headings is
 /// `Some(vec![])`: the two are different things and the pane says so.
 #[tauri::command]
-pub fn get_book_toc(
+pub async fn get_book_toc(
     state: State<'_, ManagedAppState>,
     id: u64,
 ) -> Result<Option<Vec<kashshaf_engine::TocNode>>, KashshafError> {
