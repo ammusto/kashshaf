@@ -25,8 +25,9 @@ import type { PageStack } from '../../hooks/usePageStack';
  *     above it. Measured spacers alone are not enough: a page's height is
  *     only known after its first render.
  *  3. **Scrolls the reader makes itself are not read back.** A glide (Prev,
- *     Next) raises a flag for as long as it takes to land, and scroll events
- *     are ignored while it is up.
+ *     Next) raises a flag until it has landed, and scroll events are ignored
+ *     while it is up; landing is watched frame by frame, and the page in
+ *     view is then read from the geometry, never assumed.
  *  4. **A jump is a placement, not a scroll.** Opening at a page, Go, a
  *     clicked result: the window is mounted centred on that page, the spacer
  *     above it is sized by estimate, and the page is pinned at the top of the
@@ -58,11 +59,8 @@ export function pageLabel(entry: PageEntry, multiPart: boolean): string {
   return `${part}:${entry.page_number || entry.page_id}`;
 }
 
-/** Where the reader has been told to be, and how to get there. */
+/** Where the reader has been told to be. */
 interface Jump {
-  index: number;
-}
-interface Glide {
   index: number;
 }
 
@@ -74,12 +72,8 @@ export interface ContinuousReaderHandle {
   jumpTo: (index: number) => void;
 }
 
-/**
- * How long a *smooth* scroll the reader makes itself is given to land. An
- * instant one is over within the frame, and suppressing longer than that
- * would swallow the user's own next scroll.
- */
-const SETTLE_SMOOTH_MS = 700;
+/** The longest a glide is given before the reader stops waiting for it. */
+const GLIDE_MAX_MS = 1200;
 
 export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousReaderProps>(function ContinuousReader(
   {
@@ -97,13 +91,12 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   const containerRef = useRef<HTMLDivElement>(null);
   const elements = useRef<Map<number, HTMLElement>>(new Map());
   const [jump, setJump] = useState<Jump | null>(null);
-  const [glide, setGlide] = useState<Glide | null>(null);
   /** The jump in progress, readable from the scroll handler without a render. */
   const jumping = useRef<Jump | null>(null);
   jumping.current = jump;
+  /** A glide (Prev/Next) is in flight; its landing is being watched. */
+  const gliding = useRef(false);
   const rafPending = useRef(false);
-  /** Until when scrolls are the reader's own doing and must not be read back. */
-  const settleUntil = useRef(0);
   /** The page under the midpoint and where it sat, so it can be put back. */
   const pinned = useRef<{ index: number; top: number } | null>(null);
 
@@ -116,21 +109,18 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
    *
    * An instant scroll is recognised by where it landed, not by when: a user
    * scroll in the same frame lands somewhere else, and ignoring it would
-   * lose it — there is no second event to catch up on. A glide is
-   * recognised by time, because every position it passes through is its own.
+   * lose it — there is no second event to catch up on. A glide is every
+   * position between where it started and where it lands, and is flagged
+   * for exactly as long as it is in flight.
    */
   const isSelfScroll = (top: number) =>
-    (selfTop.current !== null && Math.abs(top - selfTop.current) <= 2) || now() < settleUntil.current;
+    (selfTop.current !== null && Math.abs(top - selfTop.current) <= 2) || gliding.current;
   /** An instant scroll is over at once: only the event it caused is ignored. */
   const holdFrame = useCallback((expected: number) => {
     selfTop.current = expected;
     requestAnimationFrame(() => {
       selfTop.current = null;
     });
-  }, []);
-  /** A glide takes time, and every position it passes would re-anchor. */
-  const holdStill = useCallback((ms: number) => {
-    settleUntil.current = Math.max(settleUntil.current, now() + ms);
   }, []);
 
   /**
@@ -179,9 +169,9 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       rafPending.current = false;
       const c = containerRef.current;
       if (!c || spine.length === 0) return;
-      // Until a jump has landed nothing is followed: the only scrolls are the
-      // reader's own placements.
-      if (jumping.current) return;
+      // Until a jump or a glide has landed nothing is followed: the only
+      // scrolls are the reader's own.
+      if (jumping.current || gliding.current) return;
       if (isSelfScroll(c.scrollTop)) return;
       // Geometry first; the estimated offsets only answer for a fling that
       // has outrun the mounted window, where there is nothing to measure.
@@ -197,32 +187,89 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   useEffect(() => {
     if (scrollRequest === 0) return;
     pinned.current = null;
-    setGlide(null);
+    gliding.current = false;
     setJump({ index: anchorIndex });
     // anchorIndex is read once, when the request is made; following it here
     // would re-place on every page the reader passes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollRequest]);
 
-  const step = useCallback(
-    (direction: number) => {
-      const next = Math.min(Math.max(anchorIndex + direction, 0), Math.max(0, spine.length - 1));
-      if (next === anchorIndex) return;
-      setAnchorIndex(next);
-      setJump(null);
-      setGlide({ index: next });
-    },
-    [anchorIndex, spine.length, setAnchorIndex]
-  );
-
   const jumpTo = useCallback(
     (index: number) => {
       pinned.current = null;
+      gliding.current = false;
       setAnchorIndex(index);
-      setGlide(null);
       setJump({ index });
     },
     [setAnchorIndex]
+  );
+
+  /**
+   * A glide to a mounted, measured page: a smooth scroll that puts its
+   * measured top at the top of the viewport. The window does not move while
+   * it is in flight (the anchor is only updated on landing), so the target
+   * cannot shift under it. Landing is watched frame by frame — at the
+   * target, or no longer moving after having moved, or out of time — and
+   * then the page in view is read from the geometry. If the glide did not
+   * land where it aimed, that is what the header will say.
+   */
+  const glideTo = useCallback(
+    (target: number): boolean => {
+      const c = containerRef.current;
+      const el = elements.current.get(target);
+      if (!c || !el) return false;
+      const top = Math.max(0, c.scrollTop + el.getBoundingClientRect().top - c.getBoundingClientRect().top);
+      pinned.current = null;
+      gliding.current = true;
+      const started = now();
+      const from = c.scrollTop;
+      let last = from;
+      let moved = false;
+      let still = 0;
+      c.scrollTo({ top, behavior: 'smooth' });
+      const tick = () => {
+        const cur = containerRef.current;
+        if (!cur || !gliding.current) {
+          gliding.current = false;
+          return;
+        }
+        const at = cur.scrollTop;
+        if (Math.abs(at - from) > 0.5) moved = true;
+        still = Math.abs(at - last) < 0.5 ? still + 1 : 0;
+        last = at;
+        const landed = Math.abs(at - top) <= 1 || (moved && still >= 3) || now() - started > GLIDE_MAX_MS;
+        if (!landed) {
+          requestAnimationFrame(tick);
+          return;
+        }
+        gliding.current = false;
+        const observed = pageAtMidpoint() ?? target;
+        setAnchorIndex(observed);
+        pin(observed);
+      };
+      requestAnimationFrame(tick);
+      return true;
+    },
+    [pageAtMidpoint, setAnchorIndex, pin]
+  );
+
+  /**
+   * Prev/Next: one page from the page in view — the one under the midpoint,
+   * read from the geometry, never a counter of presses. A mounted, measured
+   * target is glided to; anything else is a jump, which mounts the window
+   * around it and places it without a scroll.
+   */
+  const step = useCallback(
+    (direction: number) => {
+      if (spine.length === 0) return;
+      const from = pageAtMidpoint() ?? anchorIndex;
+      const target = Math.min(Math.max(from + direction, 0), spine.length - 1);
+      if (target === from) return;
+      const ready = pages.has(target) && heights.has(target) && elements.current.has(target);
+      if (ready && glideTo(target)) return;
+      jumpTo(target);
+    },
+    [spine.length, pageAtMidpoint, anchorIndex, pages, heights, glideTo, jumpTo]
   );
 
   useImperativeHandle(ref, () => ({ step, jumpTo }), [step, jumpTo]);
@@ -259,28 +306,6 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       setJump(null);
     }
   }, [jump, pages, heights, mounted, holdFrame, pin]);
-
-  // --- a glide (Prev/Next): a smooth scroll to the adjacent page's top
-  useLayoutEffect(() => {
-    if (!glide) return;
-    const c = containerRef.current;
-    if (!c) return;
-    if (glide.index < mounted.start || glide.index >= mounted.end) {
-      setGlide(null);
-      return;
-    }
-    const target = elements.current.get(glide.index);
-    if (!target) return;
-    const within = target.getBoundingClientRect().top - c.getBoundingClientRect().top;
-    const top = Math.max(0, c.scrollTop + within);
-    pinned.current = null;
-    holdStill(SETTLE_SMOOTH_MS);
-    c.scrollTo({ top, behavior: 'smooth' });
-    if (pages.has(glide.index)) {
-      setGlide(null);
-      pin(glide.index);
-    }
-  }, [glide, pages, mounted, holdStill, pin]);
 
   // --- hold the visible content still across every re-render
   //
