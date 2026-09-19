@@ -15,3 +15,5 @@ export * from './utils/sanitize';
 export * from './utils/citation';
 export { TokenPopup } from './components/TokenPopup';
 export type { TokenPopupProps } from './components/TokenPopup';
+export { TocTree, ancestorsOf, prune, flattenToc, entryForPage } from './components/TocTree';
+export type { TocEntry, TocRowLike, TocTreeProps } from './components/TocTree';
