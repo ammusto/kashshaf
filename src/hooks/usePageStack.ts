@@ -39,6 +39,8 @@ export interface PageStack {
   pages: ReadonlyMap<number, LoadedPage>;
   /** Cumulative pixel offsets, one longer than `spine`. */
   offsets: number[];
+  /** Measured heights by spine index; a page absent here is still an estimate. */
+  heights: ReadonlyMap<number, number>;
   /** Record a rendered page's height so its spacer can stand in for it. */
   measure: (index: number, height: number) => void;
   /** Follow the reader: called as pages scroll past. Does not scroll anything. */
@@ -113,7 +115,16 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
       .listBookPages(bookId)
       .then((entries) => {
         if (cancelled || gen !== generation.current) return;
+        // Resolve the anchor in the same render the spine lands in. Setting
+        // the spine alone would mount the first pages for one frame, and
+        // that frame is reported upward as "the reader is on page 1" — from
+        // which the requested page is a jump, and the tab's anchor and the
+        // reader's chase each other.
+        const at = indexOfAnchor(entries, requestedAnchor.current);
+        resolvedAgainst.current = entries;
         setSpine(entries);
+        setAnchorIndexState(at);
+        setScrollRequest((n) => n + 1);
       })
       .catch((err) => {
         if (cancelled || gen !== generation.current) return;
@@ -223,6 +234,7 @@ export function usePageStack({ api, bookId, anchor }: UsePageStackOptions): Page
     mounted,
     pages,
     offsets,
+    heights,
     measure,
     setAnchorIndex,
     scrollRequest,

@@ -24,10 +24,17 @@ import type { PageStack } from '../../hooks/usePageStack';
  *     it was, whatever mounting, unmounting or measuring did to the spacers
  *     above it. Measured spacers alone are not enough: a page's height is
  *     only known after its first render.
- *  3. **Scrolls the reader makes itself are not read back.** A programmatic
- *     scroll raises a flag for as long as it takes to land, and scroll events
- *     are ignored while it is up, so a jump cannot be mistaken for the user
- *     scrolling somewhere and re-anchored out from under itself.
+ *  3. **Scrolls the reader makes itself are not read back.** A glide (Prev,
+ *     Next) raises a flag for as long as it takes to land, and scroll events
+ *     are ignored while it is up.
+ *  4. **A jump is a placement, not a scroll.** Opening at a page, Go, a
+ *     clicked result: the window is mounted centred on that page, the spacer
+ *     above it is sized by estimate, and the page is pinned at the top of the
+ *     viewport before the first paint. Nothing is followed until that page
+ *     has loaded and been measured, so the estimate being wrong moves the
+ *     spacer, not the reader. Opening at page 36 used to start at page 1 and
+ *     scroll to a guess, then re-anchor as pages measured — and the frame at
+ *     page 1 was reported upward and came back as a jump to page 1.
  */
 
 interface ContinuousReaderProps {
@@ -51,9 +58,12 @@ export function pageLabel(entry: PageEntry, multiPart: boolean): string {
   return `${part}:${entry.page_number || entry.page_id}`;
 }
 
-export interface ScrollTarget {
+/** Where the reader has been told to be, and how to get there. */
+interface Jump {
   index: number;
-  smooth: boolean;
+}
+interface Glide {
+  index: number;
 }
 
 /** What the header's Prev/Next and Go drive. */
@@ -83,10 +93,14 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   }: ContinuousReaderProps,
   ref
 ) {
-  const { spine, mounted, pages, offsets, measure, setAnchorIndex, anchorIndex, scrollRequest } = stack;
+  const { spine, mounted, pages, offsets, heights, measure, setAnchorIndex, anchorIndex, scrollRequest } = stack;
   const containerRef = useRef<HTMLDivElement>(null);
   const elements = useRef<Map<number, HTMLElement>>(new Map());
-  const [pending, setPending] = useState<ScrollTarget | null>(null);
+  const [jump, setJump] = useState<Jump | null>(null);
+  const [glide, setGlide] = useState<Glide | null>(null);
+  /** The jump in progress, readable from the scroll handler without a render. */
+  const jumping = useRef<Jump | null>(null);
+  jumping.current = jump;
   const rafPending = useRef(false);
   /** Until when scrolls are the reader's own doing and must not be read back. */
   const settleUntil = useRef(0);
@@ -165,6 +179,9 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       rafPending.current = false;
       const c = containerRef.current;
       if (!c || spine.length === 0) return;
+      // Until a jump has landed nothing is followed: the only scrolls are the
+      // reader's own placements.
+      if (jumping.current) return;
       if (isSelfScroll(c.scrollTop)) return;
       // Geometry first; the estimated offsets only answer for a fling that
       // has outrun the mounted window, where there is nothing to measure.
@@ -175,6 +192,95 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     // `isSelfScroll` and `now` are stable closures over refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offsets, setAnchorIndex, spine.length, pageAtMidpoint, pin]);
+
+  // --- something outside the reader moved the anchor: a jump, not a scroll
+  useEffect(() => {
+    if (scrollRequest === 0) return;
+    pinned.current = null;
+    setGlide(null);
+    setJump({ index: anchorIndex });
+    // anchorIndex is read once, when the request is made; following it here
+    // would re-place on every page the reader passes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollRequest]);
+
+  const step = useCallback(
+    (direction: number) => {
+      const next = Math.min(Math.max(anchorIndex + direction, 0), Math.max(0, spine.length - 1));
+      if (next === anchorIndex) return;
+      setAnchorIndex(next);
+      setJump(null);
+      setGlide({ index: next });
+    },
+    [anchorIndex, spine.length, setAnchorIndex]
+  );
+
+  const jumpTo = useCallback(
+    (index: number) => {
+      pinned.current = null;
+      setAnchorIndex(index);
+      setGlide(null);
+      setJump({ index });
+    },
+    [setAnchorIndex]
+  );
+
+  useImperativeHandle(ref, () => ({ step, jumpTo }), [step, jumpTo]);
+
+  // --- a jump: place the page at the top of the viewport before paint, and
+  //     keep it there until it has loaded and been measured
+  //
+  // Runs on every render while a jump is open. The first render after the
+  // request has the window mounted around the target and the spacer above it
+  // sized by estimate; the page is put at the top and pinned, so from here on
+  // the pin effect below keeps it there while the pages around it mount and
+  // measure. Only a loaded, measured target settles the jump: until then the
+  // element is a placeholder that will change height.
+  useLayoutEffect(() => {
+    if (!jump) return;
+    const c = containerRef.current;
+    if (!c) return;
+    // The window is not around the target yet (the stack has not caught up).
+    if (jump.index < mounted.start || jump.index >= mounted.end) return;
+    const target = elements.current.get(jump.index);
+    if (!target) return;
+    const box = c.getBoundingClientRect();
+    const first = target.querySelector<HTMLElement>('[data-highlight-first="true"]');
+    const anchorEl = first ?? target;
+    const within = anchorEl.getBoundingClientRect().top - box.top;
+    const top = Math.max(0, c.scrollTop + within - (first ? c.clientHeight / 3 : 0));
+    if (Math.abs(top - c.scrollTop) > 0.5) {
+      holdFrame(top);
+      c.scrollTop = top;
+    }
+    pin(jump.index);
+    if (pages.has(jump.index) && heights.has(jump.index)) {
+      // Landed. The pin holds it from here; nothing else needs to move.
+      setJump(null);
+    }
+  }, [jump, pages, heights, mounted, holdFrame, pin]);
+
+  // --- a glide (Prev/Next): a smooth scroll to the adjacent page's top
+  useLayoutEffect(() => {
+    if (!glide) return;
+    const c = containerRef.current;
+    if (!c) return;
+    if (glide.index < mounted.start || glide.index >= mounted.end) {
+      setGlide(null);
+      return;
+    }
+    const target = elements.current.get(glide.index);
+    if (!target) return;
+    const within = target.getBoundingClientRect().top - c.getBoundingClientRect().top;
+    const top = Math.max(0, c.scrollTop + within);
+    pinned.current = null;
+    holdStill(SETTLE_SMOOTH_MS);
+    c.scrollTo({ top, behavior: 'smooth' });
+    if (pages.has(glide.index)) {
+      setGlide(null);
+      pin(glide.index);
+    }
+  }, [glide, pages, mounted, holdStill, pin]);
 
   // --- hold the visible content still across every re-render
   //
@@ -195,78 +301,17 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
     c.scrollTop += delta;
   });
 
-  // --- something outside the reader moved the anchor: scroll there
-  useEffect(() => {
-    if (scrollRequest === 0) return;
-    setPending({ index: anchorIndex, smooth: false });
-    // anchorIndex is read once, when the request is made; following it here
-    // would re-scroll on every page the reader passes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrollRequest]);
-
-  const step = useCallback(
-    (direction: number) => {
-      const next = Math.min(Math.max(anchorIndex + direction, 0), Math.max(0, spine.length - 1));
-      if (next === anchorIndex) return;
-      setAnchorIndex(next);
-      setPending({ index: next, smooth: true });
-    },
-    [anchorIndex, spine.length, setAnchorIndex]
-  );
-
-  const jumpTo = useCallback(
-    (index: number) => {
-      setAnchorIndex(index);
-      setPending({ index, smooth: false });
-    },
-    [setAnchorIndex]
-  );
-
-  useImperativeHandle(ref, () => ({ step, jumpTo }), [step, jumpTo]);
-
-  // --- carry out a pending scroll, and keep carrying it out until the target
-  //     page is really there: before it loads we can only scroll to its
-  //     estimated offset, and measuring it moves everything below.
-  useLayoutEffect(() => {
-    if (!pending) return;
-    const c = containerRef.current;
-    if (!c) return;
-    // The reader has scrolled somewhere else since, or the page never
-    // loaded: stop chasing it.
-    if (pending.index < mounted.start || pending.index >= mounted.end) {
-      setPending(null);
-      return;
-    }
-    // A scroll the reader is making itself: do not read it back as the user
-    // moving, and do not let the pin drag it back to where it started.
-    pinned.current = null;
-    const target = elements.current.get(pending.index);
-    if (target) {
-      const box = c.getBoundingClientRect();
-      const first = target.querySelector<HTMLElement>('[data-highlight-first="true"]');
-      const anchorEl = first ?? target;
-      const within = anchorEl.getBoundingClientRect().top - box.top;
-      const top = Math.max(0, c.scrollTop + within - (first ? c.clientHeight / 3 : 0));
-      if (pending.smooth) holdStill(SETTLE_SMOOTH_MS);
-      else holdFrame(top);
-      c.scrollTo({ top, behavior: pending.smooth ? 'smooth' : 'auto' });
-      // Only a loaded page settles the scroll; a placeholder will still grow.
-      if (pages.has(pending.index)) {
-        setPending(null);
-        pin(pending.index);
-      }
-    } else {
-      const top = offsets[pending.index] ?? 0;
-      holdFrame(top);
-      c.scrollTo({ top, behavior: 'auto' });
-    }
-  }, [pending, pages, offsets, mounted, holdStill, holdFrame, pin]);
-
   // --- tell the rest of the app where the reader is
+  //
+  // During a jump the reader is, by definition, on the page it was asked for;
+  // no frame in between is reported, so the tab cannot be told "page 1" on
+  // the way to page 36 and hand that back as a jump to page 1.
   const activeEntry = spine[anchorIndex];
   useEffect(() => {
-    if (activeEntry) onActivePage(activeEntry, anchorIndex);
-  }, [activeEntry, anchorIndex, onActivePage]);
+    if (!activeEntry) return;
+    if (jump && jump.index !== anchorIndex) return;
+    onActivePage(activeEntry, anchorIndex);
+  }, [activeEntry, anchorIndex, onActivePage, jump]);
 
   const mountedEntries = useMemo(() => {
     const out: PageEntry[] = [];
@@ -293,7 +338,7 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       items.push(
         <div key={`${entry.part_index}:${entry.page_id}`} data-page-index={i} ref={(el) => registerPage(i, el)} className="pb-6">
           <div
-            className="bg-app-surface border border-app-border-light rounded-lg shadow-app-sm
+            className="bg-app-surface border border-app-border-light rounded shadow-app-sm
                        px-10 py-12 text-sm text-app-text-tertiary"
             style={{ minHeight: 200 }}
           >
