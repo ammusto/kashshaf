@@ -84,6 +84,12 @@ export function PageView({
 }: PageViewProps) {
   const ref = useRef<HTMLDivElement>(null);
 
+  // The highlight lists are compared by content, not identity: a caller
+  // that builds them during render must not make this page re-measure.
+  // (`runs` below is what the measure effect keys on.)
+  const matchedKey = matched.join(',');
+  const pageTermsKey = pageTerms ? pageTerms.join(',') : '';
+
   const { runs, tokenByIdx } = useMemo(() => {
     const plain = stripHtml(body);
     const charToToken = buildCharToTokenMap(plain);
@@ -101,7 +107,9 @@ export function PageView({
     const byIdx = new Map<number, Token>();
     for (const t of tokens) byIdx.set(t.idx, t);
     return { runs: toRuns(plain, charToToken, highlighted, secondary), tokenByIdx: byIdx };
-  }, [body, tokens, matched, pageTerms]);
+    // The lists are read through their content keys.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [body, tokens, matchedKey, pageTermsKey]);
 
   // Measure after layout, and again when the text or the window width change
   // the wrapping. The spacer that replaces this page uses the last height
@@ -111,8 +119,11 @@ export function PageView({
     if (!el) return;
     onMeasure(index, el.getBoundingClientRect().height);
     if (typeof ResizeObserver === 'undefined') return;
+    // The same box as above: `contentRect` is the content box, the gap
+    // below the card (`pb-6`) shorter, and two measurements of one card
+    // that disagree are a state update each.
     const ro = new ResizeObserver((entries) => {
-      for (const e of entries) onMeasure(index, e.contentRect.height);
+      for (const e of entries) onMeasure(index, (e.target as HTMLElement).getBoundingClientRect().height);
     });
     ro.observe(el);
     return () => ro.disconnect();

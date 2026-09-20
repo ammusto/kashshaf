@@ -6,6 +6,8 @@ import type { PageEntry, SearchResult, Token } from '../../types';
 import type { SearchAPI } from '../../api';
 import { ReaderPanel } from '../panels/ReaderPanel';
 import { BooksProvider } from '../../contexts/BooksContext';
+import type { SearchContext } from '../../types/search';
+import { highlightRequestOf, type HighlightRequest } from '../../utils/highlightRequest';
 import { installLayout, installResizeObserver, type FakeLayout, type FakeResizeObserver, withPageBundle } from './testLayout';
 
 /**
@@ -130,7 +132,7 @@ function anchorOf(index: number) {
 }
 
 /** Renders the reader; returns a way to change the anchor as the app would. */
-function mountReader(index: number) {
+function mountReader(index: number, highlight: HighlightRequest | null = null) {
   const onActivePage = vi.fn();
   const tree = (at: number, matches: boolean) => (
     <Profiler
@@ -147,6 +149,7 @@ function mountReader(index: number) {
           bookId={7}
           anchor={anchorOf(at)}
           clickedMatches={matches ? { ...anchorOf(at), indices: [0, 1] } : null}
+          highlight={highlight}
           onActivePage={onActivePage}
         />
       </BooksProvider>
@@ -236,8 +239,8 @@ function cellFor(target: Target): Cell {
   }
 }
 
-async function openAt(index: number) {
-  const r = mountReader(index);
+async function openAt(index: number, highlight: HighlightRequest | null = null) {
+  const r = mountReader(index, highlight);
   await waitFor(() => expect(document.querySelector(`[data-page-index="${index}"]`)).toBeTruthy());
   await settled();
   return r;
@@ -418,4 +421,77 @@ describe('resize', () => {
     if (commits !== at) failures.push(`${commits - at} commit(s) after settling`);
     expect(failures, `${kind}: ${failures.join('; ')}`).toEqual([]);
   }, 20000);
+});
+
+// ---------------------------------------------------------------- scrolling under a search
+//
+// Reading on with a search running: every page comes with its highlights,
+// and a proximity search's page terms come apart, for a second colour. Those
+// arrays are props of every card. A card that is handed a new array on every
+// render re-measures on every render, and a measurement is a state update:
+// "Maximum update depth exceeded" at usePageStack's setHeights, from
+// PageView. So: fifty pages down under each kind of search, and once settled
+// no commits at all.
+
+const PROXIMITY_WITH_PAGE_TERMS: SearchContext = {
+  type: 'proximity',
+  proximityQuery: {
+    terms: [
+      { query: 'نص', mode: 'surface' },
+      { query: 'الصفحة', mode: 'surface' },
+    ],
+    distances: [3],
+    ordered: false,
+    pageTerms: [{ query: '100', mode: 'surface' }],
+  },
+};
+const PROXIMITY_WITHOUT_PAGE_TERMS: SearchContext = {
+  ...PROXIMITY_WITH_PAGE_TERMS,
+  proximityQuery: { ...PROXIMITY_WITH_PAGE_TERMS.proximityQuery!, pageTerms: [] },
+};
+const SEARCHES: [string, SearchContext | null][] = [
+  ['proximity with page terms', PROXIMITY_WITH_PAGE_TERMS],
+  ['proximity without page terms', PROXIMITY_WITHOUT_PAGE_TERMS],
+  ['no search', null],
+];
+
+describe('scrolling fifty pages under a search', () => {
+  it.each(SEARCHES)('%s: the reader settles, and then commits nothing', async (_name, context) => {
+    // The chain's words sit at 0 on every page, the page term at 1 (the
+    // page number at 2 is digits, which the tokenizer does not count).
+    (world.api.getMatchPositionsCombined as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_i: number, _p: number, _page: number, terms: { query: string }[]) => (terms.length === 1 ? [1] : [0])
+    );
+    // As in a browser, a card's box (border-box, what getBoundingClientRect
+    // gives) is its gap taller than what the ResizeObserver reports for it
+    // (content-box). Measured once per change the two agree soon enough;
+    // measured on every render they never do.
+    resizer = installResizeObserver((i) => pageHeight(i) - GAP);
+    await openAt(50, highlightRequestOf(context));
+    expect(observedIndex()).toBe(50);
+
+    for (let i = 51; i <= 100; i++) {
+      await layout.scrollToPage(i);
+    }
+    await settled();
+    expect(observedIndex()).toBe(100);
+    if (context) {
+      // The highlights came with the pages.
+      expect(document.querySelector('[data-page-index="100"] [data-highlight="true"]')).toBeTruthy();
+      if (context.proximityQuery!.pageTerms.length > 0) {
+        expect(document.querySelector('[data-page-index="100"] [data-highlight="page"]')).toBeTruthy();
+      }
+    }
+
+    const after = await quiet();
+    const failures: string[] = [];
+    if (after.scrollMoved) failures.push('scroll moved on its own afterwards');
+    if (after.windowChanged) failures.push('mounted window changed on its own afterwards');
+    if (after.pageChanged) failures.push('page in view changed on its own afterwards');
+    const at = commits;
+    for (let i = 0; i < 3; i++) await layout.settle();
+    await new Promise((r) => setTimeout(r, 100));
+    if (commits !== at) failures.push(`${commits - at} commit(s) after settling`);
+    expect(failures, failures.join('; ')).toEqual([]);
+  }, 60000);
 });

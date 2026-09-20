@@ -41,6 +41,13 @@ interface ReaderPanelProps {
  * needs no click and crossing into the next part needs no special case. The
  * page in view drives the header's label and the citation.
  */
+/**
+ * The one empty list every page without highlights gets. A fresh `[]` per
+ * page per render is a new prop each time, and a card handed a new highlight
+ * list re-measures: a state update on every render, which looped.
+ */
+const NONE: readonly number[] = Object.freeze([]);
+
 export function ReaderPanel({
   api,
   bookId,
@@ -157,7 +164,7 @@ export function ReaderPanel({
   const matchesForIndex = useCallback(
     (index: number): readonly number[] => {
       const entry = stack.spine[index];
-      if (!entry) return [];
+      if (!entry) return NONE;
       // The clicked result already answered for its own page: show that at
       // once rather than waiting for the lookup to repeat it.
       if (
@@ -172,8 +179,8 @@ export function ReaderPanel({
       // under the running search; under another search they are stale and
       // the page is being fetched again.
       const loaded = stack.pages.get(index);
-      if (loaded && loaded.highlightKey === (highlight?.key ?? null)) return loaded.matches ?? [];
-      return [];
+      if (loaded && loaded.highlightKey === (highlight?.key ?? null)) return loaded.matches ?? NONE;
+      return NONE;
     },
     [stack.spine, stack.pages, highlight, clickedMatches]
   );
@@ -182,8 +189,8 @@ export function ReaderPanel({
   const pageTermsFor = useCallback(
     (index: number): readonly number[] => {
       const loaded = stack.pages.get(index);
-      if (!loaded || loaded.highlightKey !== (highlight?.key ?? null)) return [];
-      return loaded.pageTermMatches ?? [];
+      if (!loaded || loaded.highlightKey !== (highlight?.key ?? null)) return NONE;
+      return loaded.pageTermMatches ?? NONE;
     },
     [stack.pages, highlight]
   );
