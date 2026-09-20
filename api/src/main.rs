@@ -11,7 +11,7 @@ use axum::{
 };
 use kashshaf_engine::{
     check_corpus_schema_supported, compute_variants, ensure_corpus_indexes, EngineConfig, PageKey, PageWithMatches,
-    PageMatches, SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, Token, TokenCache,
+    SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, Token, TokenCache,
     VariantsResponse, WalkStatus, WildcardGrammar, MAX_SUPPORTED_DB_SCHEMA,
 };
 use kashshaf_engine::memory::process_memory;
@@ -509,18 +509,18 @@ async fn get_page_tokens(
         .map_err(internal)
 }
 
-/// Since 0.7.0 the answer is `{ indices, continues_prev, continues_next }`
-/// rather than a bare array: a phrase can run off either edge of the page
-/// (corpus 4.3.0's boundary index), and the reader marks the edge.
+/// A bare array, as it has always been: a 0.6.0 client reads this route on
+/// its fallback path and would break on anything else. Whether a match runs
+/// off the page's edge (corpus 4.3.0's boundary index) is on the `/page`
+/// bundle only.
 async fn get_match_positions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MatchPositionsQuery>,
-) -> Result<Json<PageMatches>, ApiError> {
+) -> Result<Json<Vec<u32>>, ApiError> {
     let mode = params.mode.unwrap_or(SearchMode::Lemma);
-    let term = SearchTerm { query: params.q.clone(), mode };
     state
         .search_engine
-        .get_page_matches(params.id, params.part_index, params.page_id, std::slice::from_ref(&term))
+        .get_match_positions(params.id, params.part_index, params.page_id, &params.q, mode)
         .map(Json)
         .map_err(internal)
 }
@@ -540,10 +540,10 @@ async fn get_page_with_matches(
 async fn get_match_positions_combined(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MatchPositionsCombinedRequest>,
-) -> Result<Json<PageMatches>, ApiError> {
+) -> Result<Json<Vec<u32>>, ApiError> {
     state
         .search_engine
-        .get_page_matches(req.id, req.part_index, req.page_id, &req.terms)
+        .get_match_positions_combined(req.id, req.part_index, req.page_id, &req.terms)
         .map(Json)
         .map_err(internal)
 }

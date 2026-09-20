@@ -412,10 +412,7 @@ export class OnlineAPI implements SearchAPI {
       mode,
     });
 
-    // Since 0.7.0 the server answers { indices, continues_prev, continues_next };
-    // before that, a bare array. Both are read.
-    const raw = await fetchAPI<number[] | { indices: number[] }>(`/page/matches?${params}`);
-    return Array.isArray(raw) ? raw : raw.indices;
+    return fetchAPI<number[]>(`/page/matches?${params}`);
   }
 
   async getMatchPositionsCombined(

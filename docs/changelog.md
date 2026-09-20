@@ -16,24 +16,6 @@
 
 **Web.** Scrolling a book no longer trips the server's rate limit: a page is one request (text, tokens and highlights together), only the pages in view and the next one are fetched, and if the server does ask the app to wait it waits quietly and carries on. The server gives the reader its own, larger allowance; searches keep the strict one.
 
-## [0.5.3] - 2026-09-18
-
-- The reader shows the book as one scrolling column of pages, each drawn as
-  a page with its number at the corner. Reading on past the foot of a page
-  needs no click; clicking a result places its page at the top and marks
-  the hits on every page you scroll to. The Prev and Next buttons are gone:
-  scroll, or type a page and press Go.
-- A table of contents beside the text (Ctrl+T, or the Contents button). It
-  follows the page you are on, and clicking a heading places its page. Its
-  width is dragged from its edge. Needs corpus 4.2.0; online, the current
-  server serves it.
-- The search sidebar folds when a search runs, so the results and the text
-  take the width; Ctrl+B or its button opens it again with your terms still
-  in it.
-- Opening a long book from a result no longer freezes the app: Tārīkh
-  Dimashq (33,204 pages) opens in under 150 ms where it took seconds, and
-  its contents pane draws only the headings in view.
-
 ## [0.5.2] - 2026-09-13
 
 - The corpus update prompt now tells an optional update apart from a first
