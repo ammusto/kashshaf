@@ -14,6 +14,10 @@
 //!   proximity distances come from the page's token ids (forward index)
 //!   through the attached `TokenCache`.
 
+/// Diagnostic instrumentation of the name search; nothing in the app calls it.
+#[doc(hidden)]
+pub mod name_probe;
+
 use crate::cache::TokenCache;
 use crate::collectors::{AllDocsCollector, ReadingOrderCollector};
 use crate::boundary::{BoundaryIndex, CrossHit, CrossStream, Interleave, MatchKind, OrderKey as CrossOrderKey, ScanSources};
