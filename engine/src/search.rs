@@ -16,7 +16,7 @@
 
 use crate::cache::TokenCache;
 use crate::collectors::{AllDocsCollector, ReadingOrderCollector};
-use crate::boundary::{BoundaryIndex, CrossHit, Interleave, MatchKind, OrderKey as CrossOrderKey, ScanLimits};
+use crate::boundary::{BoundaryIndex, CrossHit, CrossStream, Interleave, MatchKind, OrderKey as CrossOrderKey, ScanSources};
 use crate::forward;
 use crate::forward::Members;
 use crate::glob::GlobPattern;
@@ -763,61 +763,48 @@ impl SearchEngine {
         self.boundary.is_some()
     }
 
-    /// How far a boundary scan goes: as far as the walk it joins.
-    fn scan_limits(&self) -> ScanLimits {
-        let l = self.walk_limits();
-        ScanLimits { max_hits: l.max_hits, budget: l.budget }
+    /// What a boundary scan may verify wide slots on.
+    fn scan_sources(&self) -> ScanSources {
+        ScanSources { cache: self.cache.clone(), triples: self.triples.clone(), threshold: self.config.wildcard_expansion_threshold }
     }
 
-    /// Straddling matches of one phrase (a term of several words). Empty for
-    /// a single word, which cannot straddle, and without the index.
-    fn cross_hits_phrase(&self, sets: &[Vec<u32>], filters: &SearchFilters, limits: ScanLimits) -> Result<(Vec<CrossHit>, bool)> {
-        let Some(b) = &self.boundary else { return Ok((Vec::new(), false)) };
+    /// Straddling matches of one phrase (a term of several words), as a
+    /// stream pulled as far as the consumer goes. None for a single word,
+    /// which cannot straddle, and without the index.
+    fn cross_stream_phrase(&self, sets: &[Vec<u32>], filters: &SearchFilters) -> Option<CrossStream> {
+        let b = self.boundary.as_ref()?;
         if sets.len() < 2 {
-            return Ok((Vec::new(), false));
+            return None;
         }
-        b.cross_hits(MatchKind::Phrase, sets, filters, limits)
+        b.scan(MatchKind::Phrase, sets.to_vec(), filters, &self.scan_sources())
     }
 
     /// Straddling matches for a boolean query: one phrase, or phrases joined
-    /// by OR (the clitic expansion of a surface phrase is one). A query that
-    /// needs two different terms on one page has no boundary reading.
-    fn cross_hits_for_terms(&self, and_terms: &[SearchTerm], or_terms: &[SearchTerm], filters: &SearchFilters, limits: ScanLimits) -> Result<(Vec<CrossHit>, bool)> {
-        if self.boundary.is_none() {
-            return Ok((Vec::new(), false));
-        }
+    /// by OR (the clitic expansion of a surface phrase is one), merged in
+    /// reading order. A query that needs two different terms on one page has
+    /// no boundary reading.
+    fn cross_stream_for_terms(&self, and_terms: &[SearchTerm], or_terms: &[SearchTerm], filters: &SearchFilters) -> Option<CrossStream> {
+        self.boundary.as_ref()?;
         let terms: &[SearchTerm] = if and_terms.len() == 1 && or_terms.is_empty() {
             and_terms
         } else if and_terms.is_empty() {
             or_terms
         } else {
-            return Ok((Vec::new(), false));
+            return None;
         };
-        let mut all: Vec<CrossHit> = Vec::new();
-        let mut capped = false;
-        for t in terms {
-            let sets = self.term_sets(t);
-            let (hits, c) = self.cross_hits_phrase(&sets, filters, limits)?;
-            capped |= c;
-            all.extend(hits);
-        }
-        if terms.len() > 1 {
-            // Two variants can match the same span; count it once.
-            all.sort_by(|a, b| a.order_key.cmp(&b.order_key).then_with(|| a.primary_positions.cmp(&b.primary_positions)));
-            all.dedup_by(|a, b| a.primary == b.primary && a.secondary == b.secondary && a.primary_positions == b.primary_positions);
-        }
-        Ok((all, capped))
+        let streams: Vec<CrossStream> = terms.iter().filter_map(|t| self.cross_stream_phrase(&self.term_sets(t), filters)).collect();
+        CrossStream::merged(streams)
     }
 
     /// The window `[offset, offset + limit)` of the query's matches with the
     /// cross hits interleaved by reading order, and the exact total of both.
     /// The main matches are walked in doc order, which is reading order.
-    fn paged_with_cross(&self, searcher: &Searcher, query: &dyn Query, cross: Vec<CrossHit>, limit: usize, offset: usize) -> Result<(usize, Vec<(DocAddress, Option<CrossRef>)>)> {
-        if cross.is_empty() || !self.reading_order {
+    fn paged_with_cross(&self, searcher: &Searcher, query: &dyn Query, cross: Option<CrossStream>, limit: usize, offset: usize) -> Result<(usize, Vec<(DocAddress, Option<CrossRef>)>)> {
+        let mut inter = Interleave::new(cross);
+        if inter.is_empty() || !self.reading_order {
             let (total, addrs) = self.paged(searcher, query, limit, offset)?;
             return Ok((total, addrs.into_iter().map(|a| (a, None)).collect()));
         }
-        let mut inter = Interleave::new(cross);
         let end = offset.saturating_add(limit);
         let mut seen = 0usize;
         let mut out: Vec<(DocAddress, Option<CrossRef>)> = Vec::new();
@@ -837,15 +824,13 @@ impl SearchEngine {
                 if alive.map_or(true, |b| b.is_alive(doc)) {
                     let addr = DocAddress::new(seg_ord as u32, doc);
                     let key = cols.order_key(doc);
-                    let before: Vec<CrossHit> = inter.before(key).cloned().collect();
-                    for c in before {
+                    for c in inter.before(key) {
                         if let Some(item) = self.cross_item(searcher, &c)? {
                             take(item, &mut seen);
                         }
                     }
                     take((addr, None), &mut seen);
-                    let at: Vec<CrossHit> = inter.at(key).cloned().collect();
-                    for c in at {
+                    for c in inter.at(key) {
                         if let Some(item) = self.cross_item(searcher, &c)? {
                             take(item, &mut seen);
                         }
@@ -854,8 +839,7 @@ impl SearchEngine {
                 doc = scorer.advance();
             }
         }
-        let rest: Vec<CrossHit> = inter.rest().cloned().collect();
-        for c in rest {
+        for c in inter.rest() {
             if let Some(item) = self.cross_item(searcher, &c)? {
                 take(item, &mut seen);
             }
@@ -865,8 +849,18 @@ impl SearchEngine {
 
     /// A cross hit as a main-index address (its primary page) plus the other page.
     fn cross_item(&self, searcher: &Searcher, c: &CrossHit) -> Result<Option<(DocAddress, Option<CrossRef>)>> {
-        let Some(addr) = self.find_page(searcher, c.primary.id, c.primary.part_index, c.primary.page_id)? else {
-            return Ok(None);
+        let by_order = if searcher.segment_readers().len() == 1 {
+            let cols = self.columns(searcher, 0);
+            doc_by_order_key(&cols, searcher.segment_reader(0).max_doc(), c.order_key).map(|d| DocAddress::new(0, d))
+        } else {
+            None
+        };
+        let addr = match by_order {
+            Some(a) => a,
+            None => match self.find_page(searcher, c.primary.id, c.primary.part_index, c.primary.page_id)? {
+                Some(a) => a,
+                None => return Ok(None),
+            },
         };
         Ok(Some((addr, Some(CrossRef {
             primary: c.primary,
@@ -1101,7 +1095,7 @@ impl SearchEngine {
         searcher: &Searcher,
         query: Box<dyn Query>,
         verify: Arc<dyn Fn(&[u32]) -> Option<Vec<u32>> + Send + Sync>,
-        cross: (Vec<CrossHit>, bool),
+        cross: Option<CrossStream>,
     ) -> Result<Walker> {
         let Some(cache) = self.cache.clone() else {
             anyhow::bail!("forward-index verification requires an attached TokenCache");
@@ -1173,7 +1167,7 @@ impl SearchEngine {
         limit: usize,
         offset: usize,
         verify: Arc<dyn Fn(&[u32]) -> Option<Vec<u32>> + Send + Sync>,
-        cross: (Vec<CrossHit>, bool),
+        cross: Option<CrossStream>,
     ) -> Result<WalkWindow> {
         self.walks
             .window(key, offset, limit, self.walk_limits(), || self.verified_walker(searcher, query, verify, cross))
@@ -1904,11 +1898,7 @@ impl SearchEngine {
             }
         }
         // Phrases across page breaks, for the paths below (compound only).
-        let cross = if self.kind == IndexKind::Compound {
-            self.cross_hits_for_terms(and_terms, or_terms, filters, self.scan_limits())?
-        } else {
-            (Vec::new(), false)
-        };
+        let cross = if self.kind == IndexKind::Compound { self.cross_stream_for_terms(and_terms, or_terms, filters) } else { None };
 
         let mut and_plans = Vec::with_capacity(and_terms.len());
         for t in and_terms {
@@ -1994,11 +1984,9 @@ impl SearchEngine {
                 complete: Some(complete),
             });
         }
-        // The paged path is exact, so the boundary scan for it ran to the
-        // end too: a capped scan here can only mean the walk limits, which
-        // this path does not use.
+        // The paged path is exact, and drains the boundary stream to its end.
         let (total_hits, items) = self
-            .paged_with_cross(&searcher, &*final_query, cross.0, limit, offset)
+            .paged_with_cross(&searcher, &*final_query, cross, limit, offset)
             .map_err(|e| map_expansion_error(e, "the phrase"))?;
         let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
         let was_capped = false;
@@ -2084,20 +2072,20 @@ impl SearchEngine {
                 let mut sets2 = self.highlight_sets(term2);
                 let single_words = sets1.len() == 1 && sets2.len() == 1;
                 let key = self.walk_key("prox", &(term1, term2, max_distance), filters);
-                // The pair across a page break, from the boundary index: the
-                // positional path there whatever the sides are.
+                // The pair across a page break, from the boundary index, as a
+                // stream the walk pulls as far as it goes.
                 let cross = match &self.boundary {
                     Some(b) if !sets1.is_empty() && !sets2.is_empty() => {
                         let mut slots: Vec<Vec<u32>> = sets1.clone();
                         slots.extend(sets2.iter().cloned());
-                        b.cross_hits(
+                        b.scan(
                             MatchKind::Proximity { len1: sets1.len(), len2: sets2.len(), max_distance: max_distance as u32 },
-                            &slots,
+                            slots,
                             filters,
-                            self.scan_limits(),
-                        )?
+                            &self.scan_sources(),
+                        )
                     }
-                    _ => (Vec::new(), false),
+                    _ => None,
                 };
                 if self.config.proximity_impl == ProximityImpl::Positional && single_words {
                     let (s1, s2) = (sets1.pop().unwrap(), sets2.pop().unwrap());
@@ -2178,7 +2166,7 @@ impl SearchEngine {
     /// index.
     #[allow(clippy::too_many_arguments)]
     fn phrase_positional(&self, searcher: &Searcher, term: &SearchTerm, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, start: std::time::Instant) -> Result<SearchResults> {
-        let cross = self.cross_hits_phrase(&sets, filters, self.scan_limits())?;
+        let cross = self.cross_stream_phrase(&sets, filters);
         let w = self.phrase_positional_core(searcher, key, sets, filters, limit, offset, cross)?;
         Ok(SearchResults {
             query: term.query.clone(),
@@ -2195,7 +2183,7 @@ impl SearchEngine {
     /// (total hits, result window, was_capped) for a compound phrase given
     /// its per-slot triple sets, through the walk cache.
     #[allow(clippy::too_many_arguments)]
-    fn phrase_positional_core(&self, searcher: &Searcher, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, cross: (Vec<CrossHit>, bool)) -> Result<Walked> {
+    fn phrase_positional_core(&self, searcher: &Searcher, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<Walked> {
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
         let threshold = self.config.wildcard_expansion_threshold;
@@ -2300,7 +2288,7 @@ impl SearchEngine {
     /// `tokens` postings as a cached, capped walk.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
-    fn proximity_positional(&self, searcher: &Searcher, key: String, set1: Vec<u32>, set2: Vec<u32>, filters: &SearchFilters, max_distance: usize, limit: usize, offset: usize, cross: (Vec<CrossHit>, bool)) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+    fn proximity_positional(&self, searcher: &Searcher, key: String, set1: Vec<u32>, set2: Vec<u32>, filters: &SearchFilters, max_distance: usize, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
         let mut stats = ProximityStats { path: "positional-walk", set1_size: set1.len(), set2_size: set2.len(), ..Default::default() };
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
@@ -2418,7 +2406,7 @@ impl SearchEngine {
     /// in reading order and measure the distance on the forward index, as a
     /// cached, capped walk.
     #[allow(clippy::too_many_arguments)]
-    fn proximity_forward(&self, searcher: &Searcher, key: String, query: Box<dyn Query>, sets1: Sets, sets2: Sets, max_distance: usize, limit: usize, offset: usize, cross: (Vec<CrossHit>, bool)) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+    fn proximity_forward(&self, searcher: &Searcher, key: String, query: Box<dyn Query>, sets1: Sets, sets2: Sets, max_distance: usize, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
         let mut stats = ProximityStats { path: "forward-walk", ..Default::default() };
         let sets1 = Self::hash_sets(&sets1);
         let sets2 = Self::hash_sets(&sets2);
@@ -2542,7 +2530,7 @@ impl SearchEngine {
                 Some(positions)
             });
             let key = self.walk_key("name", &patterns_by_form, filters);
-            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, (Vec::new(), false))?;
+            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, None)?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
             return Ok(SearchResults {
                 query: query_display,
@@ -2753,12 +2741,12 @@ impl SearchEngine {
         // exceed the budget skips the (sort-heavy) trie count.
         let ids_total: usize = sizes.iter().sum();
         let states: usize = if sets.len() > 1 && ids_total <= REGEX_STATE_BUDGET { sets.iter().map(|s| trie_nodes(s)).sum() } else { ids_total };
-        let cross = self.cross_hits_phrase(&sets, filters, self.scan_limits())?;
+        let cross = self.cross_stream_phrase(&sets, filters);
         if sets.len() == 1 || states <= REGEX_STATE_BUDGET {
             let plan = self.compound_plan(&sets)?;
             debug_assert!(plan.verify.is_none());
             let final_query = self.with_filters(plan.query, filters);
-            let (total, items) = self.paged_with_cross(searcher, &*final_query, cross.0, limit, offset)?;
+            let (total, items) = self.paged_with_cross(searcher, &*final_query, cross, limit, offset)?;
             let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
             let mut results = self.results_with_cross(searcher, &items, None)?;
             let keys = self.keys_of(searcher, &addrs);
@@ -3002,6 +2990,21 @@ impl SearchEngine {
     }
 }
 
+/// The doc with exactly this reading-order key in a segment sorted by it,
+/// by binary search over the fast-field columns.
+fn doc_by_order_key(cols: &SegmentColumns, max_doc: DocId, key: OrderKey) -> Option<DocId> {
+    let (mut lo, mut hi) = (0u32, max_doc);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if cols.order_key(mid) < key {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo < max_doc && cols.order_key(lo) == key).then_some(lo)
+}
+
 fn segment_columns(searcher: &Searcher, seg_ord: u32) -> SegmentColumns {
     let ff = searcher.segment_reader(seg_ord).fast_fields();
     SegmentColumns {
@@ -3105,14 +3108,12 @@ struct CrossMerge {
     searcher: Searcher,
     fields: Fields,
     columns: HashMap<u32, SegmentColumns>,
-    /// The boundary scan stopped early: the walk's count is a lower bound.
-    capped: bool,
     stopped: bool,
 }
 
 impl CrossMerge {
-    fn new(searcher: &Searcher, fields: Fields, cross: (Vec<CrossHit>, bool)) -> Self {
-        Self { inter: Interleave::new(cross.0), searcher: searcher.clone(), fields, columns: HashMap::new(), capped: cross.1, stopped: false }
+    fn new(searcher: &Searcher, fields: Fields, cross: Option<CrossStream>) -> Self {
+        Self { inter: Interleave::new(cross), searcher: searcher.clone(), fields, columns: HashMap::new(), stopped: false }
     }
 
     fn key_of(&mut self, addr: DocAddress) -> CrossOrderKey {
@@ -3121,8 +3122,20 @@ impl CrossMerge {
         cols.order_key(addr.doc_id)
     }
 
-    fn find_page(&self, key: PageKey) -> Result<Option<DocAddress>> {
+    /// The primary page's document. The main index is in reading order (a
+    /// precondition of the boundary index), so its doc ids are sorted by the
+    /// same key the cross hit carries: a binary search over the fast-field
+    /// columns, not a query per hit — thousands of them in one walk.
+    fn find_page(&mut self, c: &CrossHit) -> Result<Option<DocAddress>> {
+        if self.searcher.segment_readers().len() == 1 {
+            let searcher = &self.searcher;
+            let cols = self.columns.entry(0).or_insert_with(|| segment_columns(searcher, 0));
+            if let Some(doc) = doc_by_order_key(cols, self.searcher.segment_reader(0).max_doc(), c.order_key) {
+                return Ok(Some(DocAddress::new(0, doc)));
+            }
+        }
         let f = self.fields;
+        let key = c.primary;
         let q = BooleanQuery::new(vec![
             (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(f.text_id, key.id), IndexRecordOption::Basic)) as Box<dyn Query>),
             (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(f.part_index, key.part_index), IndexRecordOption::Basic))),
@@ -3133,7 +3146,7 @@ impl CrossMerge {
     }
 
     fn push_cross(&mut self, sink: &mut Sink, c: &CrossHit) -> Result<bool> {
-        let Some(addr) = self.find_page(c.primary)? else { return Ok(true) };
+        let Some(addr) = self.find_page(c)? else { return Ok(true) };
         let hit = WalkHit {
             addr,
             positions: c.primary_positions.clone(),
@@ -3156,7 +3169,7 @@ impl CrossMerge {
     fn push_main(&mut self, sink: &mut Sink, addr: DocAddress, positions: Vec<u32>) -> Result<bool> {
         if !self.inter.is_empty() {
             let key = self.key_of(addr);
-            let before: Vec<CrossHit> = self.inter.before(key).cloned().collect();
+            let before = self.inter.before(key);
             for c in &before {
                 if !self.push_cross(sink, c)? {
                     return Ok(false);
@@ -3166,7 +3179,7 @@ impl CrossMerge {
                 self.stopped = true;
                 return Ok(false);
             }
-            let at: Vec<CrossHit> = self.inter.at(key).cloned().collect();
+            let at = self.inter.at(key);
             for c in &at {
                 if !self.push_cross(sink, c)? {
                     return Ok(false);
@@ -3181,16 +3194,14 @@ impl CrossMerge {
         Ok(true)
     }
 
-    /// The cross hits after the last main hit. Nothing more once the sink
-    /// has stopped: the walk is capped and would only overrun.
+    /// The cross hits after the last main hit: the scan runs to its end.
+    /// Nothing more once the sink has stopped — the walk is capped, would
+    /// only overrun, and dropping the stream ends the scan where it is.
     fn finish(&mut self, sink: &mut Sink) -> Result<()> {
-        if self.capped {
-            sink.mark_capped();
-        }
         if self.stopped {
             return Ok(());
         }
-        let rest: Vec<CrossHit> = self.inter.rest().cloned().collect();
+        let rest = self.inter.rest();
         for c in &rest {
             if !self.push_cross(sink, c)? {
                 return Ok(());

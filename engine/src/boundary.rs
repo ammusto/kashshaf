@@ -11,6 +11,21 @@
 //! positional intersection, and keeps only what straddles the midpoint —
 //! what the main index cannot have found — so nothing is counted twice.
 //!
+//! The scan is a stream, pulled: a thread walks the boundary index in
+//! reading order and hands over one straddling match at a time through a
+//! bounded channel, and the consumer — a walk merging them among its own
+//! hits — pulls only as far as it goes. A walk that stops at its hit cap
+//! after a fraction of the main index takes the same fraction of the
+//! boundary index with it; dropping the receiver ends the scan. Before this
+//! the whole boundary index was scanned up front, serially, for every
+//! query, which cost a capped proximity search ten times its main walk.
+//!
+//! A slot wider than the expansion threshold (a glob such as `ال*`, hundreds
+//! of thousands of triples) is not opened as that many posting cursors:
+//! like the main index, the scan takes candidates from the bitset hybrid
+//! and verifies them on the forward index, rebuilding the 40-token window
+//! from the two pages' token ids.
+//!
 //! Absent beside the main index (an older corpus), everything here is off
 //! and the engine behaves as before.
 //!
@@ -20,16 +35,19 @@
 //! back to page coordinates with the stored left page length: on the left
 //! page, `page_len_left - 20 + pos`; on the right, `pos - 20`.
 
-use crate::positional::{intersect_n_stream, PositionalHit, StreamSink};
+use crate::cache::TokenCache;
+use crate::forward::{self, Members};
+use crate::positional::{cooccurring_hybrid_stream, intersect_n_stream, PositionalHit, StreamSink};
 use crate::search::SearchFilters;
 use crate::tokens::PageKey;
-use crate::triples::triple_term;
+use crate::triples::{triple_term, TripleMaps};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::Arc;
 use tantivy::query::{BooleanQuery, Occur, Query, RangeQuery, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, Schema, Term};
 use tantivy::{DocAddress, Index, IndexReader, ReloadPolicy, Searcher};
@@ -46,6 +64,10 @@ pub const DIR_NAME: &str = "boundary_index";
 pub const META_FILE: &str = "boundary.json";
 /// The layout this build reads.
 pub const FORMAT: u64 = 1;
+/// Hits buffered between the scanning thread and its consumer.
+const STREAM_DEPTH: usize = 1024;
+/// Candidate boundary documents verified per forward-index batch (hybrid path).
+const HYBRID_CHUNK: usize = 2_000;
 
 /// The reading-order key the engine merges by: (death_ah or MAX, text_id, part_index, page_id).
 pub type OrderKey = (u64, u64, u64, u64);
@@ -140,11 +162,14 @@ pub enum MatchKind {
     Proximity { len1: usize, len2: usize, max_distance: u32 },
 }
 
-/// How far a boundary scan goes.
-#[derive(Debug, Clone, Copy)]
-pub struct ScanLimits {
-    pub max_hits: Option<usize>,
-    pub budget: Option<Duration>,
+/// What a scan may draw on besides the index: the forward index, for
+/// verifying the candidates of a wide slot, and the threshold that makes a
+/// slot wide.
+#[derive(Clone)]
+pub struct ScanSources {
+    pub cache: Option<Arc<TokenCache>>,
+    pub triples: Option<Arc<TripleMaps>>,
+    pub threshold: usize,
 }
 
 /// Straddle test for a span `s..=e`: it starts before the midpoint and ends at or past it.
@@ -222,6 +247,19 @@ fn decide(kind: MatchKind, slots: &[Vec<u32>]) -> Option<(Vec<u32>, Attribution)
     }
 }
 
+/// The same decision from a rebuilt window: each slot's positions are the
+/// window indices whose triple its set holds. Padding is 0, in no set.
+fn decide_from_window(kind: MatchKind, window: &[u32], members: &[Members]) -> Option<(Vec<u32>, Attribution)> {
+    let slots: Vec<Vec<u32>> = members
+        .iter()
+        .map(|m| window.iter().enumerate().filter(|(_, &t)| t != 0 && forward::TripleSet::contains(m, t)).map(|(i, _)| i as u32).collect())
+        .collect();
+    if slots.iter().any(|s| s.is_empty()) {
+        return None;
+    }
+    decide(kind, &slots)
+}
+
 impl BoundaryIndex {
     /// `<parent of index_path>/boundary_index`, when it is there and readable.
     /// A directory that is there but broken is reported and treated as absent:
@@ -233,12 +271,7 @@ impl BoundaryIndex {
         }
         match Self::open(&dir) {
             Ok(b) => {
-                eprintln!(
-                    "[boundary] {} documents, corpus {} ({})",
-                    b.meta.documents,
-                    b.meta.corpus_version,
-                    dir.display()
-                );
+                eprintln!("[boundary] {} documents, corpus {} ({})", b.meta.documents, b.meta.corpus_version, dir.display());
                 Some(b)
             }
             Err(e) => {
@@ -318,31 +351,97 @@ impl BoundaryIndex {
         }
     }
 
-    /// Every straddling match of `sets` in reading order, mapped to pages.
-    /// `sets` are the query's slots as triple ids, exactly as for the main
-    /// index. Stops at `limits`; the second value says whether it did.
-    pub fn cross_hits(&self, kind: MatchKind, sets: &[Vec<u32>], filters: &SearchFilters, limits: ScanLimits) -> Result<(Vec<CrossHit>, bool)> {
+    /// The straddling matches of `sets` in reading order, as a stream fed by
+    /// its own thread: pull as far as needed, drop it to stop. `sets` are the
+    /// query's slots as triple ids, exactly as for the main index. `None`
+    /// when nothing can straddle (fewer than the slots a match needs, an
+    /// empty slot) or when a wide slot has no forward index to verify on.
+    pub fn scan(self: &Arc<Self>, kind: MatchKind, sets: Vec<Vec<u32>>, filters: &SearchFilters, sources: &ScanSources) -> Option<CrossStream> {
         if sets.is_empty() || sets.iter().any(|s| s.is_empty()) {
-            return Ok((Vec::new(), false));
+            return None;
         }
-        let searcher = self.reader.searcher();
+        let wide = sets.iter().any(|s| s.len() > sources.threshold);
+        let forward = match (wide, &sources.cache, &sources.triples) {
+            (false, _, _) => None,
+            (true, Some(c), Some(t)) => Some((c.clone(), t.clone())),
+            (true, _, _) => return None,
+        };
         let filter = self.filter_query(filters);
+        let (tx, rx) = sync_channel::<CrossHit>(STREAM_DEPTH);
+        let index = Arc::clone(self);
+        let threshold = sources.threshold;
+        std::thread::Builder::new()
+            .name("kashshaf-boundary".into())
+            .spawn(move || {
+                let searcher = index.reader.searcher();
+                let Ok(columns) = Columns::open(&searcher, 0, index.fields) else { return };
+                let result = match forward {
+                    None => index.scan_positional(&searcher, kind, &sets, filter.as_deref(), columns, tx),
+                    Some((cache, triples)) => index.scan_hybrid(&searcher, kind, &sets, threshold, filter.as_deref(), columns, cache, triples, tx),
+                };
+                if let Err(e) = result {
+                    eprintln!("[boundary] scan failed: {:#}", e);
+                }
+            })
+            .ok()?;
+        Some(CrossStream { rx })
+    }
+
+    /// Narrow slots: the positional intersection, one cursor per triple.
+    fn scan_positional(&self, searcher: &Searcher, kind: MatchKind, sets: &[Vec<u32>], filter: Option<&dyn Query>, columns: Columns, tx: SyncSender<CrossHit>) -> Result<()> {
         let attribution: RefCell<Option<Attribution>> = RefCell::new(None);
         let matcher = |slots: &[Vec<u32>], _want: bool| -> Option<Vec<u32>> {
             let (positions, attr) = decide(kind, slots)?;
             *attribution.borrow_mut() = Some(attr);
             Some(positions)
         };
-        let mut sink = Collect {
-            hits: Vec::new(),
-            attribution: &attribution,
-            columns: Columns::open(&searcher, 0, self.fields)?,
-            start: Instant::now(),
-            limits,
-            stopped: false,
+        let mut sink = ChannelSink { tx, attribution: &attribution, columns };
+        intersect_n_stream(searcher, self.fields.tokens, sets, &triple_term, &matcher, filter, &mut sink)?;
+        Ok(())
+    }
+
+    /// A wide slot: candidates from the bitset hybrid, verified on the forward
+    /// index by rebuilding each candidate's window from its two pages.
+    #[allow(clippy::too_many_arguments)]
+    fn scan_hybrid(
+        &self,
+        searcher: &Searcher,
+        kind: MatchKind,
+        sets: &[Vec<u32>],
+        threshold: usize,
+        filter: Option<&dyn Query>,
+        columns: Columns,
+        cache: Arc<TokenCache>,
+        triples: Arc<TripleMaps>,
+        tx: SyncSender<CrossHit>,
+    ) -> Result<()> {
+        let members: Vec<Members> = sets.iter().map(|s| Members::from_ids(s, threshold)).collect();
+        let mut on_chunk = |chunk: &[DocAddress]| -> tantivy::Result<bool> {
+            if chunk.is_empty() {
+                return Ok(true);
+            }
+            let mut keys: Vec<PageKey> = Vec::with_capacity(chunk.len() * 2);
+            for a in chunk {
+                keys.push(columns.left_key(a.doc_id));
+                keys.push(columns.right_key(a.doc_id));
+            }
+            let ids = cache.get_ids_batch(&keys).map_err(|e| tantivy::TantivyError::InternalError(e.to_string()))?;
+            for a in chunk {
+                let (lk, rk) = (columns.left_key(a.doc_id), columns.right_key(a.doc_id));
+                let (Some(left), Some(right)) = (ids.get(&lk), ids.get(&rk)) else { continue };
+                let left: Vec<u32> = left.iter().map(|&d| triples.triple_of_def(d)).collect();
+                let right: Vec<u32> = right.iter().map(|&d| triples.triple_of_def(d)).collect();
+                let (w, _) = window(&left, &right);
+                let Some((positions, attr)) = decide_from_window(kind, &w, &members) else { continue };
+                let hit = columns.cross_hit(a.doc_id, &positions, attr);
+                if tx.send(hit).is_err() {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
         };
-        intersect_n_stream(&searcher, self.fields.tokens, sets, &triple_term, &matcher, filter.as_deref(), &mut sink)?;
-        Ok((sink.hits, sink.stopped))
+        cooccurring_hybrid_stream(searcher, self.fields.tokens, sets, &triple_term, threshold, filter, HYBRID_CHUNK, &mut on_chunk)?;
+        Ok(())
     }
 
     /// The boundary documents touching a page: `(left neighbour, right neighbour)`
@@ -401,6 +500,24 @@ impl Columns {
     fn right_key(&self, doc: u32) -> PageKey {
         PageKey::new(self.text.first(doc).unwrap_or(0), self.part_r.first(doc).unwrap_or(0), self.page_r.first(doc).unwrap_or(0))
     }
+    /// A document's straddling match as a hit on its pages.
+    fn cross_hit(&self, doc: u32, positions: &[u32], attr: Attribution) -> CrossHit {
+        let page_len_l = self.page_len_l.first(doc).unwrap_or(SIDE as u64) as u32;
+        let (left_pos, right_pos) = split_positions(positions, page_len_l);
+        let left = self.left_key(doc);
+        let right = self.right_key(doc);
+        let death = self.death.as_ref().and_then(|x| x.first(doc)).unwrap_or(u64::MAX);
+        let (primary, primary_positions, secondary, secondary_positions) =
+            if attr.primary_is_left { (left, left_pos, right, right_pos) } else { (right, right_pos, left, left_pos) };
+        CrossHit {
+            order_key: (death, primary.id, primary.part_index, primary.page_id),
+            primary,
+            primary_positions,
+            secondary,
+            secondary_positions,
+            primary_is_left: attr.primary_is_left,
+        }
+    }
 }
 
 /// Map document positions to the two pages, split at the midpoint. A
@@ -423,106 +540,152 @@ pub fn split_positions(positions: &[u32], page_len_left: u32) -> (Vec<u32>, Vec<
     (left, right)
 }
 
-struct Collect<'a> {
-    hits: Vec<CrossHit>,
+/// The positional scan's sink: every straddling document goes down the
+/// channel; a closed channel (the consumer is done) stops the scan.
+struct ChannelSink<'a> {
+    tx: SyncSender<CrossHit>,
     attribution: &'a RefCell<Option<Attribution>>,
     columns: Columns,
-    start: Instant,
-    limits: ScanLimits,
-    stopped: bool,
 }
 
-impl StreamSink for Collect<'_> {
+impl StreamSink for ChannelSink<'_> {
     fn want_positions(&mut self, _hits_so_far: usize) -> bool {
         true
     }
 
     fn on_hit(&mut self, hit: PositionalHit) -> bool {
         let Some(attr) = self.attribution.borrow_mut().take() else { return true };
-        let d = hit.addr.doc_id;
-        let c = &self.columns;
-        let page_len_l = c.page_len_l.first(d).unwrap_or(SIDE as u64) as u32;
-        let (left_pos, right_pos) = split_positions(&hit.positions, page_len_l);
-        let left = c.left_key(d);
-        let right = c.right_key(d);
-        let death = c.death.as_ref().and_then(|x| x.first(d)).unwrap_or(u64::MAX);
-        let (primary, primary_positions, secondary, secondary_positions) = if attr.primary_is_left {
-            (left, left_pos, right, right_pos)
-        } else {
-            (right, right_pos, left, left_pos)
-        };
-        self.hits.push(CrossHit {
-            order_key: (death, primary.id, primary.part_index, primary.page_id),
-            primary,
-            primary_positions,
-            secondary,
-            secondary_positions,
-            primary_is_left: attr.primary_is_left,
-        });
-        if let Some(max) = self.limits.max_hits {
-            if self.hits.len() >= max {
-                self.stopped = true;
-                return false;
-            }
-        }
-        true
+        let cross = self.columns.cross_hit(hit.addr.doc_id, &hit.positions, attr);
+        self.tx.send(cross).is_ok()
     }
 
     fn tick(&mut self) -> bool {
-        if let Some(b) = self.limits.budget {
-            if self.start.elapsed() > b {
-                self.stopped = true;
-                return false;
+        true
+    }
+}
+
+/// Straddling matches in reading order, from a scanning thread. Dropping it
+/// ends the scan.
+pub struct CrossStream {
+    rx: Receiver<CrossHit>,
+}
+
+impl CrossStream {
+    /// A stream of known hits (tests).
+    pub fn from_vec(mut hits: Vec<CrossHit>) -> Self {
+        hits.sort_by(|a, b| a.order_key.cmp(&b.order_key));
+        let (tx, rx) = sync_channel(hits.len().max(1));
+        for h in hits {
+            let _ = tx.send(h);
+        }
+        Self { rx }
+    }
+
+    /// Several streams as one, merged by reading order, a match reported by
+    /// two of them (two variants of a phrase on the same span) once.
+    pub fn merged(mut streams: Vec<CrossStream>) -> Option<CrossStream> {
+        match streams.len() {
+            0 => None,
+            1 => streams.pop(),
+            _ => {
+                let (tx, rx) = sync_channel::<CrossHit>(STREAM_DEPTH);
+                std::thread::Builder::new()
+                    .name("kashshaf-boundary-merge".into())
+                    .spawn(move || {
+                        let mut heads: Vec<Option<CrossHit>> = streams.iter().map(|s| s.rx.recv().ok()).collect();
+                        let mut last: Option<CrossHit> = None;
+                        loop {
+                            let next = (0..heads.len())
+                                .filter(|&i| heads[i].is_some())
+                                .min_by(|&a, &b| heads[a].as_ref().unwrap().order_key.cmp(&heads[b].as_ref().unwrap().order_key));
+                            let Some(i) = next else { break };
+                            let hit = heads[i].take().unwrap();
+                            heads[i] = streams[i].rx.recv().ok();
+                            let same = last.as_ref().map_or(false, |l| {
+                                l.primary == hit.primary && l.secondary == hit.secondary && l.primary_positions == hit.primary_positions
+                            });
+                            if same {
+                                continue;
+                            }
+                            if tx.send(hit.clone()).is_err() {
+                                break;
+                            }
+                            last = Some(hit);
+                        }
+                    })
+                    .ok()?;
+                Some(CrossStream { rx })
             }
         }
-        true
+    }
+
+    /// Every remaining hit, in order.
+    pub fn drain(self) -> Vec<CrossHit> {
+        self.rx.iter().collect()
     }
 }
 
 /// Cross hits interleaved into a stream of main-index hits by reading-order
-/// key: the pages before a main hit go before it, the same page after it.
+/// key, pulled from the scan as far as the main hits go: the pages before a
+/// main hit go before it, the same page after it, the rest at the end.
 pub struct Interleave {
-    hits: Vec<CrossHit>,
-    next: usize,
+    rx: Option<Receiver<CrossHit>>,
+    head: Option<CrossHit>,
 }
 
 impl Interleave {
-    pub fn new(mut hits: Vec<CrossHit>) -> Self {
-        hits.sort_by(|a, b| a.order_key.cmp(&b.order_key));
-        Self { hits, next: 0 }
+    pub fn new(stream: Option<CrossStream>) -> Self {
+        let mut i = Self { rx: stream.map(|s| s.rx), head: None };
+        i.pull();
+        i
     }
 
+    fn pull(&mut self) {
+        self.head = self.rx.as_ref().and_then(|rx| rx.recv().ok());
+        if self.head.is_none() {
+            self.rx = None;
+        }
+    }
+
+    /// Nothing more will come.
     pub fn is_empty(&self) -> bool {
-        self.next >= self.hits.len()
+        self.head.is_none()
     }
 
     /// Cross hits ordered strictly before `key`.
-    pub fn before(&mut self, key: OrderKey) -> impl Iterator<Item = &CrossHit> + '_ {
-        let start = self.next;
-        while self.next < self.hits.len() && self.hits[self.next].order_key < key {
-            self.next += 1;
+    pub fn before(&mut self, key: OrderKey) -> Vec<CrossHit> {
+        let mut out = Vec::new();
+        while let Some(h) = &self.head {
+            if h.order_key >= key {
+                break;
+            }
+            out.push(self.head.take().unwrap());
+            self.pull();
         }
-        self.hits[start..self.next].iter()
+        out
     }
 
     /// Cross hits on the same page as `key`.
-    pub fn at(&mut self, key: OrderKey) -> impl Iterator<Item = &CrossHit> + '_ {
-        let start = self.next;
-        while self.next < self.hits.len() && self.hits[self.next].order_key == key {
-            self.next += 1;
+    pub fn at(&mut self, key: OrderKey) -> Vec<CrossHit> {
+        let mut out = Vec::new();
+        while let Some(h) = &self.head {
+            if h.order_key != key {
+                break;
+            }
+            out.push(self.head.take().unwrap());
+            self.pull();
         }
-        self.hits[start..self.next].iter()
+        out
     }
 
-    /// Everything left.
-    pub fn rest(&mut self) -> impl Iterator<Item = &CrossHit> + '_ {
-        let start = self.next;
-        self.next = self.hits.len();
-        self.hits[start..].iter()
-    }
-
-    pub fn remaining(&self) -> usize {
-        self.hits.len() - self.next
+    /// Everything left: the scan runs to its end.
+    pub fn rest(&mut self) -> Vec<CrossHit> {
+        let mut out = Vec::new();
+        while let Some(h) = self.head.take() {
+            out.push(h);
+            self.pull();
+        }
+        out
     }
 }
 
@@ -546,6 +709,7 @@ pub fn window(left: &[u32], right: &[u32]) -> (Vec<u32>, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     fn slots(pos: &[&[u32]]) -> Vec<Vec<u32>> {
         pos.iter().map(|p| p.to_vec()).collect()
@@ -621,7 +785,26 @@ mod tests {
     }
 
     #[test]
-    fn interleave_places_cross_hits_by_reading_order() {
+    fn a_wide_slot_is_decided_from_the_rebuilt_window() {
+        // Window: ... 7 8 | 9 ...; slot 0 = {8}, slot 1 = anything in {9, 10, 11} (a "glob").
+        let mut left = vec![1u32; 30];
+        left.extend([7, 8]);
+        let right = vec![9u32, 2, 3];
+        let (w, _) = window(&left, &right);
+        let m = vec![
+            Members::from_ids(&[8], 0),
+            Members::from_ids(&[9, 10, 11], 1), // over the threshold: a bitmap
+        ];
+        let (positions, attr) = decide_from_window(MatchKind::Phrase, &w, &m).unwrap();
+        assert_eq!(positions, vec![19, 20]);
+        assert!(attr.primary_is_left);
+        let none = vec![Members::from_ids(&[8], 0), Members::from_ids(&[5], 0)];
+        assert!(decide_from_window(MatchKind::Phrase, &w, &none).is_none());
+        let _ = HashSet::<u32>::new();
+    }
+
+    #[test]
+    fn interleave_places_cross_hits_by_reading_order_and_stops_when_dropped() {
         let hit = |key: OrderKey| CrossHit {
             order_key: key,
             primary: PageKey::new(key.1, key.2, key.3),
@@ -630,11 +813,18 @@ mod tests {
             secondary_positions: vec![0],
             primary_is_left: true,
         };
-        let mut i = Interleave::new(vec![hit((1, 1, 0, 7)), hit((1, 1, 0, 3)), hit((2, 5, 0, 1))]);
-        assert_eq!(i.before((1, 1, 0, 5)).map(|h| h.order_key).collect::<Vec<_>>(), vec![(1, 1, 0, 3)]);
-        assert_eq!(i.at((1, 1, 0, 7)).count(), 1);
-        assert_eq!(i.remaining(), 1);
-        assert_eq!(i.rest().count(), 1);
+        let mut i = Interleave::new(Some(CrossStream::from_vec(vec![hit((1, 1, 0, 7)), hit((1, 1, 0, 3)), hit((2, 5, 0, 1))])));
+        assert_eq!(i.before((1, 1, 0, 5)).iter().map(|h| h.order_key).collect::<Vec<_>>(), vec![(1, 1, 0, 3)]);
+        assert_eq!(i.at((1, 1, 0, 7)).len(), 1);
+        assert!(!i.is_empty());
+        assert_eq!(i.rest().len(), 1);
         assert!(i.is_empty());
+        // Two streams merge by order, with a repeated span once.
+        let a = CrossStream::from_vec(vec![hit((1, 1, 0, 2)), hit((1, 1, 0, 9))]);
+        let b = CrossStream::from_vec(vec![hit((1, 1, 0, 2)), hit((1, 1, 0, 5))]);
+        let merged = CrossStream::merged(vec![a, b]).unwrap().drain();
+        assert_eq!(merged.iter().map(|h| h.order_key.3).collect::<Vec<_>>(), vec![2, 5, 9]);
+        // No stream: nothing, at once.
+        assert!(Interleave::new(None).is_empty());
     }
 }

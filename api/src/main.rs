@@ -19,7 +19,7 @@ use axum::response::IntoResponse;
 use std::net::SocketAddr;
 use tower_governor::{governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorError, GovernorLayer};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -725,10 +725,16 @@ async fn main() -> anyhow::Result<()> {
     // Optional page-cache warm-up: read the index and corpus.db once so the
     // first queries do not pay for cold disk reads. Never blocks readiness.
     if warm_enabled {
-        let paths: Vec<PathBuf> = std::fs::read_dir(&index_path)
-            .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_file()).collect::<Vec<PathBuf>>())
-            .unwrap_or_default()
+        // The main index, the boundary index beside it (4.3.0; absent on an
+        // older corpus), and corpus.db: every file a query reads.
+        let files_in = |dir: &Path| -> Vec<PathBuf> {
+            std::fs::read_dir(dir)
+                .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_file()).collect::<Vec<PathBuf>>())
+                .unwrap_or_default()
+        };
+        let paths: Vec<PathBuf> = files_in(&index_path)
             .into_iter()
+            .chain(files_in(&data_dir.join(kashshaf_engine::boundary::DIR_NAME)))
             .chain(std::iter::once(db_path.clone()))
             .collect();
         let flag = warm_cache.clone();
