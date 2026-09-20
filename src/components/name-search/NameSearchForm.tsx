@@ -73,7 +73,7 @@ function SingleNameForm({
   };
 
   return (
-    <div className={`p-4 space-y-3 ${formIndex < 3 ? 'border-b border-app-border-light' : ''}`}>
+    <div className={`space-y-3 ${formIndex < 3 ? 'pb-4 border-b border-app-border-light' : ''}`}>
       {/* Input groups - flex with wrapping */}
       <div className="flex flex-wrap gap-4" dir="rtl">
         <KunyaGroup
@@ -117,7 +117,7 @@ function SingleNameForm({
           className="px-3 py-1.5 text-xs font-medium rounded bg-app-surface-variant
                    hover:bg-app-accent-light text-app-text-secondary transition-colors"
         >
-          Reset Form
+          Reset Search
         </button>
 
         {canDelete && (
@@ -152,7 +152,7 @@ function PatternPreview({
     <div className="border-t border-app-border-light">
       <button
         onClick={onToggle}
-        className="w-full px-4 py-2 flex items-center gap-2 text-xs text-app-text-secondary hover:bg-app-surface-variant transition-colors"
+        className="w-full px-2 py-2 flex items-center gap-2 text-xs text-app-text-secondary hover:bg-app-surface-variant transition-colors"
       >
         <svg
           className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
@@ -166,7 +166,7 @@ function PatternPreview({
       </button>
 
       {isExpanded && (
-        <div className="px-4 pb-3 max-h-40 overflow-y-auto">
+        <div className="pb-3 max-h-40 overflow-y-auto">
           <div className="bg-app-surface-variant rounded-lg p-3 space-y-1" dir="rtl">
             {allPatterns.map((pattern, index) => (
               <div key={index} className="text-sm font-arabic text-app-text-primary">
@@ -259,8 +259,9 @@ export function NameSearchForm({
         onToggle={() => setShowPatternPreview(!showPatternPreview)}
       />
 
-      {/* Search button: the same 12 px above it as the Terms forms, no rule. */}
-      <div className="px-4 pt-3 flex-shrink-0">
+      {/* Search button: the same 12 px above it as the Terms forms, no rule,
+          and the sidebar's own width, as theirs. */}
+      <div className="pt-3 flex-shrink-0">
         <button
           onClick={onSearch}
           disabled={loading || !isValid}

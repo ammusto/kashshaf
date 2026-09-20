@@ -9,41 +9,28 @@ function isArabic(char: string): boolean {
          (code >= 0x08A0 && code <= 0x08FF);   // Arabic Extended-A
 }
 
-// Parse content and wrap Arabic segments in styled spans
-function parseContent(content: string): React.ReactNode[] {
-  const result: React.ReactNode[] = [];
-  let currentText = '';
-  let isCurrentArabic = false;
-  let key = 0;
+/**
+ * An Arabic run: from one Arabic letter to the last, with the spaces and
+ * Arabic punctuation between. The spaces belong to the run: split word by
+ * word, each word is its own right-to-left box and the boxes are laid out
+ * left to right, so a phrase reads backwards.
+ */
+const ARABIC_RUN = /([\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF](?:[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\s]*[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF])?)/;
 
-  const flush = () => {
-    if (currentText) {
-      if (isCurrentArabic) {
-        result.push(
-          <span key={key++} className="font-arabic text-base" dir="rtl">
-            {currentText}
-          </span>
-        );
-      } else {
-        result.push(<span key={key++}>{currentText}</span>);
-      }
-      currentText = '';
-    }
-  };
-
-  for (const char of content) {
-    const charIsArabic = isArabic(char);
-
-    if (currentText && charIsArabic !== isCurrentArabic) {
-      flush();
-    }
-
-    isCurrentArabic = charIsArabic;
-    currentText += char;
-  }
-
-  flush();
-  return result;
+// Parse content and wrap Arabic phrases in right-to-left spans
+export function parseContent(content: string): React.ReactNode[] {
+  return content
+    .split(ARABIC_RUN)
+    .filter((part) => part.length > 0)
+    .map((part, key) =>
+      isArabic(part[0]) ? (
+        <span key={key} className="font-arabic text-base" dir="rtl">
+          {part}
+        </span>
+      ) : (
+        <span key={key}>{part}</span>
+      )
+    );
 }
 
 export interface TooltipRow {

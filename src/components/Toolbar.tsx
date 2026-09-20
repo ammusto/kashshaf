@@ -320,7 +320,7 @@ export function Toolbar({
                      bg-app-accent text-white hover:bg-app-accent-hover shadow-sm
                      flex items-center gap-1.5"
         >
-          <span className="text-base leading-none" aria-hidden="true">⌕</span>
+          <span className="text-base leading-none" aria-hidden="true">🕮</span>
           Select Texts
         </button>
         <span className="text-sm text-app-text-primary" data-testid="text-selection-status">
