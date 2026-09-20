@@ -30,7 +30,7 @@ function renderToolbar(selectedTextsCount: number) {
 describe('the top bar', () => {
   it('says the searches run over all texts when nothing is selected, and has no save button', () => {
     const { onSelectTexts } = renderToolbar(0);
-    expect(screen.getByTestId('text-selection-status')).toHaveTextContent('Searching All Texts');
+    expect(screen.getByTestId('text-selection-status')).toHaveTextContent('Searching: All Texts');
     expect(screen.queryByLabelText('Save as Collection')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Select Texts' }));
     expect(onSelectTexts).toHaveBeenCalledTimes(1);
@@ -38,7 +38,7 @@ describe('the top bar', () => {
 
   it('says how many texts once there is a selection, and offers to save it', () => {
     const { onSaveCollection } = renderToolbar(1234);
-    expect(screen.getByTestId('text-selection-status')).toHaveTextContent('Searching 1,234 Texts');
+    expect(screen.getByTestId('text-selection-status')).toHaveTextContent('Searching: 1,234 Texts');
     fireEvent.click(screen.getByLabelText('Save as Collection'));
     expect(onSaveCollection).toHaveBeenCalledTimes(1);
   });

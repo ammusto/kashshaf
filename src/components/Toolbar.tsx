@@ -317,7 +317,7 @@ export function Toolbar({
         <button
           onClick={onSelectTexts}
           className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                     bg-app-surface-variant text-app-text-primary hover:bg-app-accent-light
+                     bg-app-accent text-white hover:bg-app-accent-hover shadow-sm
                      flex items-center gap-1.5"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -325,11 +325,11 @@ export function Toolbar({
           </svg>
           Select Texts
         </button>
-        <span
-          className={`text-sm ${selectedTextsCount > 0 ? 'text-app-accent font-medium' : 'text-app-text-tertiary'}`}
-          data-testid="text-selection-status"
-        >
-          {selectedTextsCount > 0 ? `Searching ${selectedTextsCount.toLocaleString()} Texts` : 'Searching All Texts'}
+        <span className="text-sm text-app-text-primary" data-testid="text-selection-status">
+          Searching:{' '}
+          <span className="text-app-accent font-medium">
+            {selectedTextsCount > 0 ? `${selectedTextsCount.toLocaleString()} Texts` : 'All Texts'}
+          </span>
         </span>
         {selectedTextsCount > 0 && onSaveCollection && (
           <button
