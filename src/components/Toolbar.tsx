@@ -12,6 +12,12 @@ interface ToolbarProps {
   onCollections: () => void;
   onHelp: () => void;
   helpActive?: boolean;
+  /** Opens the text selection dialog. */
+  onSelectTexts: () => void;
+  /** How many texts the searches are confined to; 0 is all of them. */
+  selectedTextsCount: number;
+  /** Saves the selection as a collection; shown once there is a selection. */
+  onSaveCollection?: () => void;
   /** Whether the app is in online mode */
   isOnlineMode?: boolean;
   /** Callback when user wants to download corpus (from online mode button) */
@@ -29,6 +35,9 @@ export function Toolbar({
   onCollections,
   onHelp,
   helpActive,
+  onSelectTexts,
+  selectedTextsCount,
+  onSaveCollection,
   isOnlineMode,
   onDownloadCorpus,
   onDataDeleted,
@@ -301,6 +310,41 @@ export function Toolbar({
           </svg>
           Help
         </button>
+
+        <div className="w-px h-5 bg-app-border-medium mx-1" aria-hidden="true" />
+
+        {/* Text selection: which texts the searches run over. */}
+        <button
+          onClick={onSelectTexts}
+          className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
+                     bg-app-surface-variant text-app-text-primary hover:bg-app-accent-light
+                     flex items-center gap-1.5"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </svg>
+          Select Texts
+        </button>
+        <span
+          className={`text-sm ${selectedTextsCount > 0 ? 'text-app-accent font-medium' : 'text-app-text-tertiary'}`}
+          data-testid="text-selection-status"
+        >
+          {selectedTextsCount > 0 ? `Searching ${selectedTextsCount.toLocaleString()} Texts` : 'Searching All Texts'}
+        </span>
+        {selectedTextsCount > 0 && onSaveCollection && (
+          <button
+            onClick={onSaveCollection}
+            className="h-8 w-8 bg-green-600 hover:bg-green-700 text-white rounded-md
+                     flex items-center justify-center transition-colors"
+            title="Save as Collection"
+            aria-label="Save as Collection"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+            </svg>
+          </button>
+        )}
 
         {/* Spacer to push Online Mode button to the right */}
         <div className="flex-1" />

@@ -590,6 +590,12 @@ function App() {
           onCollections={handleOpenCollectionsModal}
           onHelp={() => setHelpOpen(!helpOpen)}
           helpActive={helpOpen}
+          onSelectTexts={() => {
+            setTextSelectionMode('select');
+            setTextSelectionModalOpen(true);
+          }}
+          selectedTextsCount={selectedBookIds.size}
+          onSaveCollection={selectedBookIds.size > 0 ? handleOpenSaveCollectionModal : undefined}
           isOnlineMode={mode === 'online'}
           onDownloadCorpus={isWebTarget() ? undefined : handleDownloadCorpus}
           isWebTarget={isWebTarget()}
@@ -611,14 +617,8 @@ function App() {
             sidebar.collapseForSearch();
             void handleNameSearch();
           }}
-          onOpenTextSelection={() => {
-            setTextSelectionMode('select');
-            setTextSelectionModalOpen(true);
-          }}
-          onSaveCollection={selectedBookIds.size > 0 ? handleOpenSaveCollectionModal : undefined}
           loading={activeTab?.loading ?? false}
           indexedPages={stats?.indexed_pages ?? 0}
-          selectedTextsCount={selectedBookIds.size}
           appSearchMode={appSearchMode}
           onAppSearchModeChange={setAppSearchMode}
           nameFormData={nameFormData}

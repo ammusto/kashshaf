@@ -6,7 +6,6 @@ import { NameSearchForm } from './name-search';
 import { Toast } from './ui';
 import { BooleanSearchPanel } from './sidebar/BooleanSearchPanel';
 import { ProximitySearchPanel } from './sidebar/ProximitySearchPanel';
-import { CorpusSelector } from './sidebar/CorpusSelector';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../constants/search';
 
 interface SidebarProps {
@@ -15,11 +14,8 @@ interface SidebarProps {
   onSearch: (combined: CombinedSearchQuery) => void;
   onProximitySearch: (query: ProximitySearchQuery) => void;
   onNameSearch: () => void;
-  onOpenTextSelection: () => void;
-  onSaveCollection?: () => void;
   loading: boolean;
   indexedPages: number;
-  selectedTextsCount: number;
   appSearchMode: AppSearchMode;
   onAppSearchModeChange: (mode: AppSearchMode) => void;
   nameFormData: NameFormData[];
@@ -36,11 +32,8 @@ export function Sidebar({
   onSearch,
   onProximitySearch,
   onNameSearch,
-  onOpenTextSelection,
-  onSaveCollection,
   loading,
   indexedPages: _indexedPages,
-  selectedTextsCount,
   appSearchMode,
   onAppSearchModeChange,
   nameFormData,
@@ -220,14 +213,6 @@ export function Sidebar({
           </div>
         )}
 
-        <div className="h-px bg-app-border-light flex-shrink-0" />
-
-        {/* Text Selection Section - stays at bottom */}
-        <CorpusSelector
-          selectedTextsCount={selectedTextsCount}
-          onOpenTextSelection={onOpenTextSelection}
-          onSaveCollection={onSaveCollection}
-        />
       </div>
 
       {/* Toast for validation errors */}
