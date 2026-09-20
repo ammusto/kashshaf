@@ -1,6 +1,7 @@
 import type { SearchInput, CombinedSearchQuery } from '../../types/search';
 import { useSearchForm } from '../../contexts/SearchFormContext';
 import { SearchInputRow } from './SearchInputRow';
+import { AddRowButton } from './AddRowButton';
 import { validateWildcard } from '../../utils/wildcardValidation';
 import { useOperatingMode } from '../../contexts/OperatingModeContext';
 
@@ -93,7 +94,7 @@ export function BooleanSearchPanel({
           onClick={handleClear}
           className="text-xs text-app-text-tertiary hover:text-red-500 transition-colors"
         >
-          Clear form
+          Reset Search
         </button>
       </div>
 
@@ -133,16 +134,7 @@ export function BooleanSearchPanel({
       </div>
 
       {/* Add Input Button */}
-      {currentInputs.length < 3 && (
-        <button
-          onClick={handleAddInput}
-          className="w-full h-9 border-2 border-dashed border-app-border-medium rounded-lg
-                   text-app-text-secondary text-sm font-medium
-                   hover:border-app-accent hover:text-app-accent transition-colors flex-shrink-0"
-        >
-          + Add search term
-        </button>
-      )}
+      {currentInputs.length < 3 && <AddRowButton label="+ Add search term" onClick={handleAddInput} />}
 
       {/* Search Button */}
       <button

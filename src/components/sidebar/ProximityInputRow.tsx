@@ -7,20 +7,21 @@ export interface ProximityInput {
 }
 
 interface ProximityInputRowProps {
-  label: string;
   input: ProximityInput;
   onChange: (updated: ProximityInput) => void;
   /** A row that can be taken away again (the third term, a page term). */
   onRemove?: () => void;
+  /** What the remove button says it removes, for assistive technology. */
+  removeLabel?: string;
   /** A page term is drawn in the colour its highlights take in the reader. */
   tone?: 'chain' | 'page';
 }
 
 export function ProximityInputRow({
-  label,
   input,
   onChange,
   onRemove,
+  removeLabel = 'Remove',
   tone = 'chain',
 }: ProximityInputRowProps) {
   return (
@@ -29,7 +30,6 @@ export function ProximityInputRow({
       data-testid={tone === 'page' ? 'page-term-row' : 'proximity-term-row'}
     >
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-app-text-secondary w-12">{label}</span>
         <input
           type="text"
           dir="rtl"
@@ -43,7 +43,7 @@ export function ProximityInputRow({
         {onRemove && (
           <button
             onClick={onRemove}
-            aria-label={`Remove ${label}`}
+            aria-label={removeLabel}
             title="Remove"
             className="w-7 h-7 rounded text-app-text-tertiary hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
           >

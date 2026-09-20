@@ -1,6 +1,7 @@
 import type { ProximitySearchQuery } from '../../types/search';
 import { PROXIMITY_MAX_PAGE_TERMS, PROXIMITY_MAX_TERMS } from '../../types/search';
 import { ProximityInputRow, type ProximityInput } from './ProximityInputRow';
+import { AddRowButton } from './AddRowButton';
 import { useSearchForm } from '../../contexts/SearchFormContext';
 import { clampDistance } from '../../utils/proximityQuery';
 
@@ -14,8 +15,8 @@ const emptyInput = (): ProximityInput => ({ term: '', field: 'surface' });
 
 /**
  * The proximity form: a chain of two or three terms with a distance on each
- * link, an ordering switch, and, set apart below, up to two terms that must
- * be somewhere on the page.
+ * link, an ordering switch, and, set apart below once there is one, up to
+ * two AND terms that must be somewhere on the page.
  */
 export function ProximitySearchPanel({ onSearch, onClearForm, loading }: ProximitySearchPanelProps) {
   // The form's state is the store's, so it survives the sidebar folding.
@@ -85,7 +86,7 @@ export function ProximitySearchPanel({ onSearch, onClearForm, loading }: Proximi
           onClick={handleClear}
           className="text-xs text-app-text-tertiary hover:text-red-500 transition-colors"
         >
-          Clear form
+          Reset Search
         </button>
       </div>
 
@@ -111,72 +112,55 @@ export function ProximitySearchPanel({ onSearch, onClearForm, loading }: Proximi
               </div>
             )}
             <ProximityInputRow
-              label={`Term ${i + 1}`}
               input={input}
               onChange={(v) => setTerm(i, v)}
               onRemove={i >= 2 ? () => removeTerm(i) : undefined}
+              removeLabel={`Remove proximity term ${i + 1}`}
             />
           </div>
         ))}
 
-        <div className="flex items-center justify-between px-1">
-          <label className="flex items-center gap-2 text-xs text-app-text-secondary cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={proximityOrdered}
-              onChange={(e) => setProximityOrdered(e.target.checked)}
-              className="w-3.5 h-3.5 rounded accent-app-accent cursor-pointer"
-            />
-            Ordered
-            <span className="text-app-text-tertiary" title="The terms must appear in the order written">
-              (as written)
-            </span>
-          </label>
-          {proximityTerms.length < PROXIMITY_MAX_TERMS && (
-            <button
-              onClick={addTerm}
-              className="text-xs font-medium text-app-accent hover:underline"
-              data-testid="add-proximity-term"
-            >
-              + Add term
-            </button>
-          )}
-        </div>
+        <label className="flex items-center gap-2 px-1 text-xs text-app-text-secondary cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={proximityOrdered}
+            onChange={(e) => setProximityOrdered(e.target.checked)}
+            className="w-3.5 h-3.5 rounded accent-app-accent cursor-pointer"
+          />
+          Ordered
+          <span className="text-app-text-tertiary" title="The terms must appear in the order written">
+            (as written)
+          </span>
+        </label>
 
-        {/* Page terms: not part of the chain, anywhere on the page. Set
-            apart so that the two kinds of term read as two kinds. */}
-        <div className="border-t border-dashed border-app-border-medium pt-3 space-y-2" data-testid="page-terms">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-semibold text-app-text-secondary uppercase tracking-wide">
+        {/* AND terms: not part of the chain, anywhere on the page. Set
+            apart so that the two kinds of term read as two kinds; nothing
+            of them shows until there is one. */}
+        {proximityPageTerms.length > 0 && (
+          <div className="border-t border-dashed border-app-border-medium pt-3 space-y-2" data-testid="page-terms">
+            <span className="px-1 text-xs font-semibold text-app-text-secondary uppercase tracking-wide">
               Also on the page
             </span>
-            {proximityPageTerms.length < PROXIMITY_MAX_PAGE_TERMS && (
-              <button
-                onClick={addPageTerm}
-                className="text-xs font-medium text-app-accent hover:underline"
-                data-testid="add-page-term"
-              >
-                + Add page term
-              </button>
-            )}
+            {proximityPageTerms.map((input, i) => (
+              <ProximityInputRow
+                key={i}
+                input={input}
+                onChange={(v) => setPageTerm(i, v)}
+                onRemove={() => removePageTerm(i)}
+                removeLabel={`Remove AND term ${i + 1}`}
+                tone="page"
+              />
+            ))}
           </div>
-          {proximityPageTerms.length === 0 && (
-            <p className="px-1 text-[11px] text-app-text-tertiary">
-              A term the page must contain anywhere, apart from the chain.
-            </p>
-          )}
-          {proximityPageTerms.map((input, i) => (
-            <ProximityInputRow
-              key={i}
-              label={`Page ${i + 1}`}
-              input={input}
-              onChange={(v) => setPageTerm(i, v)}
-              onRemove={() => removePageTerm(i)}
-              tone="page"
-            />
-          ))}
-        </div>
+        )}
       </div>
+
+      {proximityTerms.length < PROXIMITY_MAX_TERMS && (
+        <AddRowButton label="+ Add Proximity Term" onClick={addTerm} testId="add-proximity-term" />
+      )}
+      {proximityPageTerms.length < PROXIMITY_MAX_PAGE_TERMS && (
+        <AddRowButton label="+ Add AND Term" onClick={addPageTerm} testId="add-page-term" />
+      )}
 
       {/* Search Button */}
       <button

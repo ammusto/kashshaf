@@ -4,10 +4,11 @@ import { SearchFormProvider } from '../../contexts/SearchFormContext';
 import { ProximitySearchPanel } from './ProximitySearchPanel';
 
 /**
- * The proximity form: two rows and a distance as ever; "Add term" chains a
- * third with its own distance, and no fourth; "Ordered" is a switch; "Add
- * page term" adds up to two rows set apart from the chain. What Search
- * emits is the chain query, blank page terms left out.
+ * The proximity form: two unlabelled rows and a distance as ever; "+ Add
+ * Proximity Term" chains a third with its own distance, and no fourth;
+ * "Ordered" is a switch; "+ Add AND Term" adds up to two rows set apart
+ * under "Also on the page", a heading that is not there until the first.
+ * What Search emits is the chain query, blank AND terms left out.
  */
 
 function renderPanel() {
@@ -20,26 +21,29 @@ function renderPanel() {
   return { onSearch };
 }
 
-const typeInto = (label: string, text: string) => {
-  const row = screen.getByText(label).closest('[data-testid$="-term-row"]')!;
-  fireEvent.change(row.querySelector('input[type="text"]')!, { target: { value: text } });
+const rows = (kind: 'proximity' | 'page') => screen.queryAllByTestId(`${kind}-term-row`);
+const typeInto = (kind: 'proximity' | 'page', i: number, text: string) => {
+  fireEvent.change(rows(kind)[i].querySelector('input[type="text"]')!, { target: { value: text } });
 };
+const search = () => fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
 describe('ProximitySearchPanel', () => {
-  it('starts as two terms with one distance, no page terms', () => {
+  it('starts as two terms with one distance, no AND terms, and no labels on the rows', () => {
     renderPanel();
-    expect(screen.getAllByTestId('proximity-term-row')).toHaveLength(2);
+    expect(rows('proximity')).toHaveLength(2);
     expect(screen.getAllByLabelText(/^Distance/)).toHaveLength(1);
-    expect(screen.queryAllByTestId('page-term-row')).toHaveLength(0);
+    expect(rows('page')).toHaveLength(0);
+    expect(screen.queryByText(/^Term \d/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
+    expect(screen.getByText('Reset Search')).toBeInTheDocument();
   });
 
   it('emits the two-term query as a chain', () => {
     const { onSearch } = renderPanel();
-    typeInto('Term 1', 'قال');
-    typeInto('Term 2', 'الله');
+    typeInto('proximity', 0, 'قال');
+    typeInto('proximity', 1, 'الله');
     fireEvent.change(screen.getByLabelText('Distance 1'), { target: { value: '7' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    search();
     expect(onSearch).toHaveBeenCalledWith({
       terms: [
         { query: 'قال', mode: 'surface' },
@@ -53,16 +57,16 @@ describe('ProximitySearchPanel', () => {
 
   it('chains a third term with its own distance, and no fourth', () => {
     const { onSearch } = renderPanel();
-    fireEvent.click(screen.getByTestId('add-proximity-term'));
-    expect(screen.getAllByTestId('proximity-term-row')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: '+ Add Proximity Term' }));
+    expect(rows('proximity')).toHaveLength(3);
     expect(screen.getAllByLabelText(/^Distance/)).toHaveLength(2);
-    expect(screen.queryByTestId('add-proximity-term')).toBeNull();
-    typeInto('Term 1', 'قال');
-    typeInto('Term 2', 'الله');
-    typeInto('Term 3', 'رسول');
+    expect(screen.queryByRole('button', { name: '+ Add Proximity Term' })).toBeNull();
+    typeInto('proximity', 0, 'قال');
+    typeInto('proximity', 1, 'الله');
+    typeInto('proximity', 2, 'رسول');
     fireEvent.change(screen.getByLabelText('Distance 2'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('checkbox', { name: /Ordered/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    search();
     expect(onSearch).toHaveBeenCalledWith({
       terms: [
         { query: 'قال', mode: 'surface' },
@@ -74,23 +78,35 @@ describe('ProximitySearchPanel', () => {
       pageTerms: [],
     });
     // The third row can be taken away again, with its link.
-    fireEvent.click(screen.getByLabelText('Remove Term 3'));
-    expect(screen.getAllByTestId('proximity-term-row')).toHaveLength(2);
+    fireEvent.click(screen.getByLabelText('Remove proximity term 3'));
+    expect(rows('proximity')).toHaveLength(2);
     expect(screen.getAllByLabelText(/^Distance/)).toHaveLength(1);
   });
 
-  it('adds up to two page terms, set apart, and leaves a blank one out', () => {
+  it('shows nothing of the AND terms but the add button until one is added', () => {
+    renderPanel();
+    expect(screen.queryByTestId('page-terms')).toBeNull();
+    expect(screen.queryByText('Also on the page')).toBeNull();
+    expect(screen.getByRole('button', { name: '+ Add AND Term' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '+ Add AND Term' }));
+    expect(screen.getByTestId('page-terms')).toBeInTheDocument();
+    expect(screen.getByText('Also on the page')).toBeInTheDocument();
+    expect(screen.queryByText(/^Page \d/)).toBeNull();
+    fireEvent.click(screen.getByLabelText('Remove AND term 1'));
+    expect(screen.queryByTestId('page-terms')).toBeNull();
+  });
+
+  it('adds up to two AND terms, set apart, and leaves a blank one out', () => {
     const { onSearch } = renderPanel();
-    fireEvent.click(screen.getByTestId('add-page-term'));
-    fireEvent.click(screen.getByTestId('add-page-term'));
-    expect(screen.queryByTestId('add-page-term')).toBeNull();
-    const rows = screen.getAllByTestId('page-term-row');
-    expect(rows).toHaveLength(2);
-    expect(screen.getByTestId('page-terms')).toContainElement(rows[0]);
-    typeInto('Term 1', 'قال');
-    typeInto('Term 2', 'الله');
-    typeInto('Page 1', 'النبي');
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add AND Term' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add AND Term' }));
+    expect(screen.queryByRole('button', { name: '+ Add AND Term' })).toBeNull();
+    expect(rows('page')).toHaveLength(2);
+    expect(screen.getByTestId('page-terms')).toContainElement(rows('page')[0]);
+    typeInto('proximity', 0, 'قال');
+    typeInto('proximity', 1, 'الله');
+    typeInto('page', 0, 'النبي');
+    search();
     expect(onSearch).toHaveBeenCalledWith(
       expect.objectContaining({ pageTerms: [{ query: 'النبي', mode: 'surface' }] })
     );

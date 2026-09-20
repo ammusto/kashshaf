@@ -728,7 +728,7 @@ export function TextSelectionModal({
         {/* The bar at the foot: what is selected, and the way out either way. */}
         {mode === 'select' && (
           <div
-            className="px-8 py-4 border-t border-app-border-light flex items-center gap-3 bg-app-surface-variant flex-shrink-0"
+            className="px-8 py-4 border-t border-app-border-light flex items-center gap-3 flex-shrink-0 rounded-b-xl"
             data-testid="selection-bar"
           >
             <span className="text-sm font-medium text-app-text-primary tabular-nums" aria-live="polite">
@@ -737,7 +737,7 @@ export function TextSelectionModal({
             <div className="flex-1" />
             <button
               onClick={cancel}
-              className="px-4 py-2 text-sm font-medium text-app-text-secondary hover:bg-white rounded-lg transition-colors"
+              className="px-4 py-2 text-sm font-medium text-app-text-secondary hover:bg-app-surface-variant rounded-lg transition-colors"
             >
               Cancel
             </button>
