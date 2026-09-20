@@ -17,6 +17,7 @@ export interface HighlightRequest {
 export function highlightRequestOf(context: SearchContext | null): HighlightRequest | null {
   if (!context) return null;
   if (context.type === 'name') {
+    // The displayed patterns; the server expands them for the page.
     const patterns = context.namePatterns?.flat() ?? [];
     return patterns.length > 0 ? { key: `name|${patterns.join('|')}`, namePatterns: patterns } : null;
   }

@@ -89,7 +89,7 @@ describe('pageFetcherFor', () => {
     expect(api.wildcardSearch).toHaveBeenCalledWith('ابن ال*', filters, 250, 500);
 
     await pageFetcherFor(api, { type: 'name', namePatterns: [['ابو حامد']] }, filters)!(250, 0);
-    expect(api.nameSearch).toHaveBeenCalledWith([{ patterns: ['ابو حامد'] }], filters, 250, 0);
+    expect(api.nameSearch).toHaveBeenCalledWith([{ patterns: ['ابو حامد'], expand: true }], filters, 250, 0);
 
     const proximityQuery = { term1: 'الله', field1: 'surface', term2: 'قال', field2: 'lemma', distance: 10 } as never;
     await pageFetcherFor(api, { type: 'proximity', proximityQuery }, filters)!(250, 250);

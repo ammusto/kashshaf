@@ -90,6 +90,33 @@ export function expandWithProclitics(pattern: string): string[] {
 }
 
 /**
+ * What the server does with displayed patterns (`expand_name_patterns` in
+ * the engine): each `اب* …` as its three written forms, then every pattern
+ * with each proclitic on its first word, once each, in order. Used only on
+ * the fallback path against a server that predates it; the app itself
+ * sends the displayed patterns and lets the server expand.
+ */
+export function expandDisplayPatterns(display: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of display) {
+    const normalized = normalizeArabic(raw.trim());
+    if (!normalized) continue;
+    const m = normalized.match(/^اب\* (.+)$/);
+    const forms = m ? ['ابو', 'ابا', 'ابي'].map((k) => `${k} ${m[1]}`) : [normalized];
+    for (const f of forms) {
+      for (const p of expandWithProclitics(f)) {
+        if (!seen.has(p)) {
+          seen.add(p);
+          out.push(p);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Generate all search patterns for a single name form
  */
 export function generatePatterns(form: NameFormData): string[] {

@@ -108,6 +108,11 @@ struct NameSearchRequest {
 #[derive(Deserialize)]
 struct NameSearchForm {
     patterns: Vec<String>,
+    /// The patterns are the form's displayed ones (a kunya as `اب* …`, no
+    /// proclitics) and the server expands them (0.7.0). A client from
+    /// before sends the expanded list and leaves this off.
+    #[serde(default)]
+    expand: bool,
 }
 
 #[derive(Deserialize)]
@@ -174,6 +179,9 @@ struct NameMatchPositionsRequest {
     part_index: u64,
     page_id: u64,
     patterns: Vec<String>,
+    /// As for `/search/name`: displayed patterns, expanded here.
+    #[serde(default)]
+    expand: bool,
 }
 
 #[derive(Serialize)]
@@ -355,7 +363,11 @@ async fn name_search(
     Json(req): Json<NameSearchRequest>,
 ) -> Result<Json<SearchResults>, ApiError> {
     let filters = req.filters.unwrap_or_default();
-    let patterns_by_form: Vec<Vec<String>> = req.forms.into_iter().map(|f| f.patterns).collect();
+    let patterns_by_form: Vec<Vec<String>> = req
+        .forms
+        .into_iter()
+        .map(|f| if f.expand { kashshaf_engine::expand_name_patterns(&f.patterns) } else { f.patterns })
+        .collect();
     state
         .search_engine
         .name_search(&patterns_by_form, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
@@ -404,7 +416,11 @@ struct PageBundle {
 
 /// The reader's page parameters, read by hand because `q`, `mode` and
 /// `name` repeat: one `q`/`mode` pair per search term of a combined search,
-/// one `name` per pattern of a name search.
+/// one `name` per *displayed* pattern of a name search — the form's short
+/// list, which the server expands with the search's own rule
+/// (`expand_name_patterns`), so the request stays under 2 KB. A client
+/// that sends the expanded list instead gets a superset that matches the
+/// same tokens.
 struct PageParams {
     id: u64,
     part_index: u64,
@@ -461,6 +477,42 @@ async fn get_page(
     Query(pairs): Query<Vec<(String, String)>>,
 ) -> Result<axum::response::Response, ApiError> {
     let p = page_params(&pairs)?;
+    page_response(&state, p)
+}
+
+/// `POST /page` with the same parameters as a JSON body: the client's guard
+/// for a request that would not fit a URL (over 2 KB). With the displayed
+/// name patterns it never should; the route is there so that it cannot fail.
+#[derive(Deserialize)]
+struct PageBody {
+    id: u64,
+    #[serde(default)]
+    part_index: u64,
+    page_id: u64,
+    #[serde(default)]
+    include: Vec<String>,
+    #[serde(default)]
+    terms: Vec<SearchTerm>,
+    #[serde(default)]
+    names: Vec<String>,
+}
+
+async fn post_page(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PageBody>,
+) -> Result<axum::response::Response, ApiError> {
+    let p = PageParams {
+        id: body.id,
+        part_index: body.part_index,
+        page_id: body.page_id,
+        tokens: body.include.iter().any(|x| x == "tokens"),
+        terms: body.terms.into_iter().filter(|t| !t.query.trim().is_empty()).collect(),
+        names: body.names,
+    };
+    page_response(&state, p)
+}
+
+fn page_response(state: &AppState, p: PageParams) -> Result<axum::response::Response, ApiError> {
     let page = state.search_engine.get_page(p.id, p.part_index, p.page_id).map_err(internal)?;
     let bundled = p.tokens || !p.terms.is_empty() || !p.names.is_empty();
     if !bundled {
@@ -476,7 +528,8 @@ async fn get_page(
         None
     };
     let (matches, continues_prev, continues_next) = if !p.names.is_empty() {
-        (Some(state.search_engine.get_name_match_positions(p.id, p.part_index, p.page_id, &p.names).map_err(internal)?), false, false)
+        let names = kashshaf_engine::expand_name_patterns(&p.names);
+        (Some(state.search_engine.get_name_match_positions(p.id, p.part_index, p.page_id, &names).map_err(internal)?), false, false)
     } else if !p.terms.is_empty() {
         let m = state.search_engine.get_page_matches(p.id, p.part_index, p.page_id, &p.terms).map_err(internal)?;
         (Some(m.indices), m.continues_prev, m.continues_next)
@@ -552,9 +605,10 @@ async fn get_name_match_positions(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NameMatchPositionsRequest>,
 ) -> Result<Json<Vec<u32>>, ApiError> {
+    let patterns = if req.expand { kashshaf_engine::expand_name_patterns(&req.patterns) } else { req.patterns };
     state
         .search_engine
-        .get_name_match_positions(req.id, req.part_index, req.page_id, &req.patterns)
+        .get_name_match_positions(req.id, req.part_index, req.page_id, &patterns)
         .map(Json)
         .map_err(internal)
 }
@@ -779,7 +833,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/authors", get(get_all_authors))
         .route("/genres", get(get_all_genres));
     let reader = Router::new()
-        .route("/page", get(get_page))
+        .route("/page", get(get_page).post(post_page))
         .route("/page/by-label", get(get_page_by_label))
         .route("/page/tokens", get(get_page_tokens))
         .route("/page/matches", get(get_match_positions))

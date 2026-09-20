@@ -7,7 +7,7 @@ import { PAGE_SIZE, MAX_RESULTS, EXPORT_MAX_RESULTS } from '../constants/search'
 import { collectExportRows, pageFetcherFor, type ExportProgress } from '../utils/exportResults';
 import { addToHistory } from '../utils/storage';
 import { useSearchTabsContext } from '../contexts/SearchTabsContext';
-import { generateSearchPatterns, generateDisplayPatterns } from '../utils/namePatterns';
+import { generateDisplayPatterns } from '../utils/namePatterns';
 
 export interface UseSearchOptions {
   selectedBookIds: Set<number>;
@@ -276,7 +276,9 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
 
   // Name search handler - returns displayPatterns so caller can update state
   const handleNameSearch = useCallback(async (nameFormData: NameFormData[]): Promise<{ displayPatterns: string[][] }> => {
-    const searchPatterns = nameFormData.map(form => generateSearchPatterns(form));
+    // The displayed patterns are what is sent, everywhere: the server expands
+    // them (kunya forms, proclitics) with one rule for the search and for the
+    // highlights on a page, and a request for a page's highlights stays short.
     const displayPatterns = nameFormData.map(form => generateDisplayPatterns(form));
 
     const label = generateNameDisplayLabel(nameFormData);
@@ -284,14 +286,14 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
 
     const searchContext: SearchContext = {
       type: 'name',
-      namePatterns: searchPatterns,
+      namePatterns: displayPatterns,
       displayPatterns: displayPatterns,
     };
 
     const tabId = createTab(label, fullQuery, 'names', searchContext);
 
     try {
-      const forms: NameSearchFormAPI[] = searchPatterns.map(patterns => ({ patterns }));
+      const forms: NameSearchFormAPI[] = displayPatterns.map(patterns => ({ patterns, expand: true }));
       const filters = getFilters();
       const results = await api.nameSearch(forms, filters, PAGE_SIZE, 0);
       updateTab(tabId, { searchResults: results, loading: false });
@@ -331,7 +333,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       let moreResults: SearchResults;
 
       if (searchContext.type === 'name' && searchContext.namePatterns) {
-        const forms: NameSearchFormAPI[] = searchContext.namePatterns.map(patterns => ({ patterns }));
+        const forms: NameSearchFormAPI[] = searchContext.namePatterns.map(patterns => ({ patterns, expand: true }));
         moreResults = await api.nameSearch(forms, filters, PAGE_SIZE, currentCount);
       } else if (searchContext.type === 'proximity' && searchContext.proximityQuery) {
         const query = searchContext.proximityQuery;

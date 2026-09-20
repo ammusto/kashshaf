@@ -71,7 +71,7 @@ export async function getPageBundle(
   const [tokens, matches] = await Promise.all([
     request.tokens ? getPageTokens(id, partIndex, pageId) : Promise.resolve([] as Token[]),
     request.namePatterns && request.namePatterns.length > 0
-      ? getNameMatchPositions(id, partIndex, pageId, request.namePatterns).then((indices) => ({ indices, continues_prev: false, continues_next: false }))
+      ? getNameMatchPositions(id, partIndex, pageId, request.namePatterns, true).then((indices) => ({ indices, continues_prev: false, continues_next: false }))
       : request.terms && request.terms.length > 0
         ? getPageMatches(id, partIndex, pageId, request.terms)
         : Promise.resolve(null),
@@ -306,7 +306,10 @@ export async function combinedSearch(
  * Name search - search for Arabic personal names using pattern matching
  */
 export interface NameSearchForm {
-  patterns: string[];  // All generated patterns for this name (after proclitic expansion)
+  /** The form's patterns: the displayed ones when `expand` is set, else the expanded list. */
+  patterns: string[];
+  /** Expand on the server (kunya forms, proclitics) with the search's own rule. */
+  expand?: boolean;
 }
 
 export async function nameSearch(
@@ -326,9 +329,10 @@ export async function getNameMatchPositions(
   id: number,
   partIndex: number,
   pageId: number,
-  patterns: string[]
+  patterns: string[],
+  expand = false
 ): Promise<number[]> {
-  return invoke('get_name_match_positions', { id, partIndex, pageId, patterns });
+  return invoke('get_name_match_positions', { id, partIndex, pageId, patterns, expand });
 }
 
 /**

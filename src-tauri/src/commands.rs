@@ -785,6 +785,9 @@ pub async fn combined_search(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NameSearchForm {
     pub patterns: Vec<String>,
+    /// The form's displayed patterns, expanded here with the search's rule.
+    #[serde(default)]
+    pub expand: bool,
 }
 
 #[tauri::command]
@@ -800,8 +803,12 @@ pub async fn name_search(
     let limit = limit.unwrap_or(50);
     let offset = offset.unwrap_or(0);
 
-    // Convert forms to the format expected by the search engine
-    let patterns_by_form: Vec<Vec<String>> = forms.into_iter().map(|f| f.patterns).collect();
+    // Convert forms to the format expected by the search engine, expanding
+    // displayed patterns the same way the API does.
+    let patterns_by_form: Vec<Vec<String>> = forms
+        .into_iter()
+        .map(|f| if f.expand { kashshaf_engine::expand_name_patterns(&f.patterns) } else { f.patterns })
+        .collect();
 
     let search_engine = app_state.search_engine.clone();
 
@@ -821,8 +828,10 @@ pub fn get_name_match_positions(
     part_index: u64,
     page_id: u64,
     patterns: Vec<String>,
+    expand: Option<bool>,
 ) -> Result<Vec<u32>, KashshafError> {
     let app_state = require_state(&state)?;
+    let patterns = if expand.unwrap_or(false) { kashshaf_engine::expand_name_patterns(&patterns) } else { patterns };
     app_state
         .search_engine
         .get_name_match_positions(id, part_index, page_id, &patterns)

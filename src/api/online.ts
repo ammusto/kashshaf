@@ -22,6 +22,7 @@ import type {
 import { stripPunctuation } from '@kashshaf/shared';
 import { getApiBaseUrl } from '../utils/platform';
 import { noteRateLimited, retryAfterMs, waitIfThrottled } from './rateLimit';
+import { expandDisplayPatterns } from '../utils/namePatterns';
 import type { PageBundle, PageBundleRequest } from './index';
 
 // VITE_API_URL at build time points a web build at another server, as the
@@ -49,6 +50,15 @@ function expandWithClitics(query: string): string[] {
 
 /** How many times a rate-limited request is sent again before giving up. */
 const RATE_LIMIT_RETRIES = 3;
+/**
+ * The longest `/page` request sent as a URL; past it the same goes as a
+ * body. Arabic is six bytes a letter once percent-encoded, so a name form's
+ * displayed patterns run to about 150 bytes each: nineteen of them are
+ * ~2.9 KB, well under nginx's 8 KB request line, and this guard sits at
+ * half of that. It is not expected to trigger; it is there so a URL limit
+ * can never lose a page.
+ */
+export const PAGE_URL_MAX = 4096;
 
 /**
  * One API request.
@@ -324,7 +334,23 @@ export class OnlineAPI implements SearchAPI {
 
     let raw: unknown;
     try {
-      raw = await fetchAPI<unknown>(`/page?${params}`);
+      const query = `/page?${params}`;
+      // The displayed name patterns keep a request well under 2 KB; anything
+      // longer goes as a body, so that a URL limit can never lose a page.
+      raw =
+        query.length <= PAGE_URL_MAX
+          ? await fetchAPI<unknown>(query)
+          : await fetchAPI<unknown>('/page', {
+              method: 'POST',
+              body: JSON.stringify({
+                id,
+                part_index: partIndex,
+                page_id: pageId,
+                include: request.tokens ? ['tokens'] : [],
+                terms: request.terms ?? [],
+                names: request.namePatterns ?? [],
+              }),
+            });
     } catch {
       return null;
     }
@@ -339,12 +365,13 @@ export class OnlineAPI implements SearchAPI {
         continues_next: asBundle.continues_next ?? false,
       };
     }
-    // A bare page: the server predates the bundle.
+    // A bare page: the server predates the bundle, and the expansion of
+    // name patterns, which is done here for it.
     const page = raw as SearchResult;
     const [tokens, matches] = await Promise.all([
       request.tokens ? this.getPageTokens(id, partIndex, pageId) : Promise.resolve([] as Token[]),
       request.namePatterns && request.namePatterns.length > 0
-        ? this.getNameMatchPositions(id, partIndex, pageId, request.namePatterns)
+        ? this.getNameMatchPositions(id, partIndex, pageId, expandDisplayPatterns(request.namePatterns))
         : request.terms && request.terms.length > 0
           ? this.getMatchPositionsCombined(id, partIndex, pageId, request.terms)
           : Promise.resolve(null),
@@ -439,27 +466,22 @@ export class OnlineAPI implements SearchAPI {
     return Array.from(allPositions).sort((a, b) => a - b);
   }
 
+  /**
+   * One request, `/page/matches/name`, with `expand` for displayed
+   * patterns — not one `/page/matches` per pattern, which for an expanded
+   * name search was hundreds.
+   */
   async getNameMatchPositions(
     id: number,
     partIndex: number,
     pageId: number,
-    patterns: string[]
+    patterns: string[],
+    expand = false
   ): Promise<number[]> {
-    // For online mode, search for each pattern and combine positions
-    const allPositions = new Set<number>();
-
-    for (const pattern of patterns) {
-      const positions = await this.getMatchPositions(
-        id,
-        partIndex,
-        pageId,
-        pattern,
-        'surface'
-      );
-      positions.forEach(p => allPositions.add(p));
-    }
-
-    return Array.from(allPositions).sort((a, b) => a - b);
+    return fetchAPI<number[]>('/page/matches/name', {
+      method: 'POST',
+      body: JSON.stringify({ id, part_index: partIndex, page_id: pageId, patterns, expand }),
+    });
   }
 
   async getAllBooks(): Promise<BookMetadata[]> {

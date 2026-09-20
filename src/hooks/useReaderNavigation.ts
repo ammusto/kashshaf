@@ -95,7 +95,8 @@ export function useReaderNavigation(options: UseReaderNavigationOptions): UseRea
           result.id,
           result.part_index,
           result.page_id,
-          tab.searchContext.namePatterns.flat()
+          tab.searchContext.namePatterns.flat(),
+          true
         );
       } else {
         const terms = getSearchTermsFromContext(tab.searchContext);

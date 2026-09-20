@@ -15,6 +15,7 @@ pub mod corpus_db;
 pub mod forward;
 pub mod glob;
 pub mod memory;
+pub mod names;
 pub mod normalize;
 pub mod positional;
 pub mod search;
@@ -36,6 +37,7 @@ pub use corpus_db::{
     MAX_SUPPORTED_DB_SCHEMA, MIN_SUPPORTED_DB_SCHEMA,
 };
 pub use normalize::{normalize_arabic, normalize_root_query};
+pub use names::{expand_forms as expand_name_forms, expand_patterns as expand_name_patterns};
 pub use cache::BatchStats;
 pub use glob::GlobPattern;
 pub use search::{

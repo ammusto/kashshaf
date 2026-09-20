@@ -59,7 +59,7 @@ export async function collectExportRows(fetchPage: PageFetcher, opts: CollectOpt
 /** The fetcher for whatever search the tab ran, with the same filters. */
 export function pageFetcherFor(api: SearchAPI, ctx: SearchContext, filters: SearchFilters): PageFetcher | null {
   if (ctx.type === 'name' && ctx.namePatterns) {
-    const forms: NameSearchForm[] = ctx.namePatterns.map((patterns) => ({ patterns }));
+    const forms: NameSearchForm[] = ctx.namePatterns.map((patterns) => ({ patterns, expand: true }));
     return (limit, offset) => api.nameSearch(forms, filters, limit, offset);
   }
   if (ctx.type === 'proximity' && ctx.proximityQuery) {

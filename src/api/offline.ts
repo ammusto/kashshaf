@@ -163,13 +163,8 @@ export class OfflineAPI implements SearchAPI {
     return tauri.getMatchPositionsCombined(id, partIndex, pageId, terms);
   }
 
-  async getNameMatchPositions(
-    id: number,
-    partIndex: number,
-    pageId: number,
-    patterns: string[]
-  ): Promise<number[]> {
-    return tauri.getNameMatchPositions(id, partIndex, pageId, patterns);
+  async getNameMatchPositions(id: number, partIndex: number, pageId: number, patterns: string[], expand = false): Promise<number[]> {
+    return tauri.getNameMatchPositions(id, partIndex, pageId, patterns, expand);
   }
 
   async getAllBooks(): Promise<BookMetadata[]> {

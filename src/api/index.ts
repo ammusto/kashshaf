@@ -32,7 +32,11 @@ export interface PageBundleRequest {
   tokens: boolean;
   /** The running search's terms, for the highlights; none when no search runs. */
   terms?: SearchTerm[];
-  /** A name search's patterns instead of terms. */
+  /**
+   * A name search's *displayed* patterns instead of terms (`اب* منصور`, no
+   * proclitics): the server expands them with the search's own rule, so the
+   * request stays short and the highlights are the search's.
+   */
   namePatterns?: string[];
 }
 
@@ -211,11 +215,16 @@ export interface SearchAPI {
     terms: SearchTerm[]
   ): Promise<number[]>;
 
+  /**
+   * `expand`: the patterns are the displayed ones and the server expands
+   * them (the app's case); off, they are sent as they are.
+   */
   getNameMatchPositions(
     id: number,
     partIndex: number,
     pageId: number,
-    patterns: string[]
+    patterns: string[],
+    expand?: boolean
   ): Promise<number[]>;
 
   /** Wildcard grammar, exact-counts state and walk cap of the engine behind this API. */
