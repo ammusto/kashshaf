@@ -226,7 +226,7 @@ export function Toolbar({
   return (
     <div className="flex flex-col flex-shrink-0">
       {/* Main Toolbar */}
-      <div className="h-10 flex items-center gap-2 px-3 bg-white border-b border-app-border-light">
+      <div className="flex items-center gap-2 px-3 py-2 bg-white border-b border-app-border-light">
         {/* Menu Button - only show on desktop */}
         {!isWebTarget && (
           <button
