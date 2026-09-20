@@ -63,24 +63,30 @@ fn key_of(r: &kashshaf_engine::SearchResult) -> PageKey {
 }
 
 /// All pages of a wildcard query through the engine (exact mode).
+/// The page hits of a wildcard search: `(total without the cross hits, keys)`.
+/// A match across a page break (the boundary index, corpus 4.3.0) is a
+/// result the brute force over single pages cannot know; it is counted and
+/// left out of the comparison.
 fn all_wildcard_pages(engine: &SearchEngine, query: &str) -> (usize, Vec<PageKey>) {
     let filters = SearchFilters::default();
     let mut keys = Vec::new();
     let mut offset = 0;
     let mut total;
+    let mut cross = 0usize;
     loop {
         let r = engine.wildcard_search(query, &filters, 250, offset).expect("wildcard");
         total = r.total_hits;
         if r.results.is_empty() {
             break;
         }
-        keys.extend(r.results.iter().map(key_of));
+        cross += r.results.iter().filter(|h| h.crosses_page).count();
+        keys.extend(r.results.iter().filter(|h| !h.crosses_page).map(key_of));
         offset += r.results.len();
         if offset >= total {
             break;
         }
     }
-    (total, keys)
+    (total - cross, keys)
 }
 
 /// Brute-force wildcard matching over every page: membership of each

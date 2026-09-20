@@ -58,17 +58,37 @@ pub fn default_max_concurrent_walks() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).saturating_sub(2).max(1)
 }
 
-/// One verified page with its highlight positions.
+/// One verified page with its highlight positions. A hit from the boundary
+/// index — a match across a page break — carries `cross`: `addr` and
+/// `positions` are then the primary page's, and `cross` names the other.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalkHit {
     pub addr: DocAddress,
     pub positions: Vec<u32>,
+    pub cross: Option<CrossRef>,
+}
+
+/// The other page of a match across a page break.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossRef {
+    pub primary: crate::tokens::PageKey,
+    /// The primary page's share of the match (also the hit's `positions`).
+    pub primary_positions: Vec<u32>,
+    pub secondary: crate::tokens::PageKey,
+    pub secondary_positions: Vec<u32>,
+    pub primary_is_left: bool,
 }
 
 impl WalkHit {
+    pub fn page(addr: DocAddress, positions: Vec<u32>) -> Self {
+        Self { addr, positions, cross: None }
+    }
+
     /// Approximate heap + inline size, for the cache's byte bound.
     fn approx_bytes(&self) -> usize {
-        std::mem::size_of::<WalkHit>() + self.positions.len() * std::mem::size_of::<u32>()
+        std::mem::size_of::<WalkHit>()
+            + self.positions.len() * std::mem::size_of::<u32>()
+            + self.cross.as_ref().map_or(0, |c| std::mem::size_of::<CrossRef>() + c.secondary_positions.len() * 4)
     }
 }
 
@@ -630,7 +650,7 @@ mod tests {
     use super::*;
 
     fn hit(d: u32) -> WalkHit {
-        WalkHit { addr: DocAddress::new(0, d), positions: vec![d, d + 1] }
+        WalkHit::page(DocAddress::new(0, d), vec![d, d + 1])
     }
 
     fn counting_walker(n: u32) -> Walker {

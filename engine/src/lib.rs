@@ -8,6 +8,7 @@ pub mod bench_cases;
 #[cfg(feature = "remote")]
 pub mod bench_remote;
 pub mod blob;
+pub mod boundary;
 pub mod cache;
 pub mod collectors;
 pub mod corpus_db;
@@ -29,6 +30,7 @@ pub use triples_image::{Image as TripleImage, ImageParts as TripleImageParts, SI
 
 pub use blob::{decode_blob, BlobCodec, ENCODING_RANK_VARINT_ZSTD, ENCODING_RAW_U32};
 pub use cache::TokenCache;
+pub use boundary::{BoundaryIndex, BoundaryMeta, CrossHit, MAX_SPAN as BOUNDARY_MAX_SPAN};
 pub use corpus_db::{
     check_corpus_schema_supported, ensure_corpus_indexes, read_db_info, verify_corpus_versions_match, DbInfo,
     MAX_SUPPORTED_DB_SCHEMA, MIN_SUPPORTED_DB_SCHEMA,
@@ -37,13 +39,14 @@ pub use normalize::{normalize_arabic, normalize_root_query};
 pub use cache::BatchStats;
 pub use glob::GlobPattern;
 pub use search::{
-    parse_wildcard_query, validate_wildcard_query, EngineCapabilities, EngineConfig, IndexKind, PageEntry, PageWithMatches,
-    ProximityImpl, ProximityStats, SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm,
+    parse_wildcard_query, validate_wildcard_query, EngineCapabilities, EngineConfig, IndexKind, PageEntry, PageMatches,
+    PageWithMatches, ProximityImpl, ProximityStats, SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults,
+    SearchTerm, SecondarySpan,
     WildcardGrammar, WildcardQueryInfo, WildcardType, PROXIMITY_MAX_VERIFY, WILDCARD_EXPANSION_THRESHOLD,
 };
 pub use memory::{process_memory, ProcessMemory};
 pub use walk::{
-    default_max_concurrent_walks, WalkCache, WalkHit, WalkLimits, WalkStats, WalkStatus, MAX_VERIFIED_HITS,
+    default_max_concurrent_walks, CrossRef, WalkCache, WalkHit, WalkLimits, WalkStats, WalkStatus, MAX_VERIFIED_HITS,
     PREFIX_CACHE_BYTES, PREFIX_CACHE_ENTRIES, WALK_BUDGET_MS, WALK_INLINE_MS, WALK_QUEUE_MS,
 };
 pub use tokens::{PageKey, Token, TokenClitic, TokenField};

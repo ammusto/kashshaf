@@ -16,6 +16,7 @@
 
 use crate::cache::TokenCache;
 use crate::collectors::{AllDocsCollector, ReadingOrderCollector};
+use crate::boundary::{BoundaryIndex, CrossHit, Interleave, MatchKind, OrderKey as CrossOrderKey, ScanLimits};
 use crate::forward;
 use crate::forward::Members;
 use crate::glob::GlobPattern;
@@ -24,7 +25,7 @@ use crate::positional::{PositionalHit, StreamSink};
 use crate::tokens::PageKey;
 use crate::triples::{triple_term, TripleMaps};
 use crate::walk::{
-    default_max_concurrent_walks, Sink, WalkCache, WalkHit, WalkLimits, WalkStats, WalkStatus, WalkWindow, Walker,
+    default_max_concurrent_walks, CrossRef, Sink, WalkCache, WalkHit, WalkLimits, WalkStats, WalkStatus, WalkWindow, Walker,
     MAX_VERIFIED_HITS, PREFIX_CACHE_BYTES, PREFIX_CACHE_ENTRIES, WALK_BUDGET_MS,
 };
 use anyhow::{anyhow, Context, Result};
@@ -211,6 +212,33 @@ pub struct SearchResult {
     pub body: String,
     pub score: f32,
     pub matched_token_indices: Vec<u32>,
+    /// The match runs on from this page onto the next, or in from the one
+    /// before: `matched_token_indices` is this page's share and `secondary`
+    /// the other page's (corpus 4.3.0's boundary index).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub crosses_page: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary: Option<SecondarySpan>,
+}
+
+/// The other page of a match across a page break, and its share of it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecondarySpan {
+    pub part_index: u64,
+    pub page_id: u64,
+    pub part_label: String,
+    pub page_number: String,
+    pub matched_token_indices: Vec<u32>,
+}
+
+/// A page's highlights for a query, with whether a match runs off either edge.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PageMatches {
+    pub indices: Vec<u32>,
+    /// A match begins on the page before and ends on this one.
+    pub continues_prev: bool,
+    /// A match begins on this page and ends on the next.
+    pub continues_next: bool,
 }
 
 /// One page of a book's spine: where it sits in reading order and what the
@@ -341,6 +369,9 @@ pub struct EngineCapabilities {
     pub exact_counts: bool,
     pub max_verified_hits: usize,
     pub walk_budget_ms: u64,
+    /// Matches across page breaks are found (corpus 4.3.0's boundary index is open).
+    #[serde(default)]
+    pub boundary_index: bool,
 }
 
 impl Default for EngineConfig {
@@ -519,6 +550,8 @@ pub struct SearchEngine {
     reading_order: bool,
     triples: Option<Arc<TripleMaps>>,
     cache: Option<Arc<TokenCache>>,
+    /// Matches across page breaks; `None` for a corpus without `boundary_index/`.
+    boundary: Option<Arc<BoundaryIndex>>,
 }
 
 /// Reading-order key: (death_ah or MAX, text_id, part_index, page_id).
@@ -690,6 +723,20 @@ impl SearchEngine {
             if fields.root.is_some() && kind == IndexKind::Compound { " (+ root_text hedge)" } else { "" }
         );
 
+        // Matches across page breaks need the compound schema (the same
+        // triple sets on both indexes) and a main index in reading order
+        // (the two are merged by reading-order key).
+        let boundary = match (kind, reading_order) {
+            (IndexKind::Compound, true) => BoundaryIndex::open_beside(index_path).map(Arc::new),
+            (IndexKind::Compound, false) => {
+                if index_path.parent().map_or(false, |p| p.join(crate::boundary::DIR_NAME).is_dir()) {
+                    eprintln!("[boundary] present but unused: the main index is not in reading order");
+                }
+                None
+            }
+            (IndexKind::ThreeField, _) => None,
+        };
+
         Ok(Self {
             index,
             reader,
@@ -703,7 +750,232 @@ impl SearchEngine {
             reading_order,
             triples,
             cache: None,
+            boundary,
         })
+    }
+
+    /// The boundary index, when this corpus ships one.
+    pub fn boundary_index(&self) -> Option<&BoundaryIndex> {
+        self.boundary.as_deref()
+    }
+
+    pub fn has_boundary_index(&self) -> bool {
+        self.boundary.is_some()
+    }
+
+    /// How far a boundary scan goes: as far as the walk it joins.
+    fn scan_limits(&self) -> ScanLimits {
+        let l = self.walk_limits();
+        ScanLimits { max_hits: l.max_hits, budget: l.budget }
+    }
+
+    /// Straddling matches of one phrase (a term of several words). Empty for
+    /// a single word, which cannot straddle, and without the index.
+    fn cross_hits_phrase(&self, sets: &[Vec<u32>], filters: &SearchFilters, limits: ScanLimits) -> Result<(Vec<CrossHit>, bool)> {
+        let Some(b) = &self.boundary else { return Ok((Vec::new(), false)) };
+        if sets.len() < 2 {
+            return Ok((Vec::new(), false));
+        }
+        b.cross_hits(MatchKind::Phrase, sets, filters, limits)
+    }
+
+    /// Straddling matches for a boolean query: one phrase, or phrases joined
+    /// by OR (the clitic expansion of a surface phrase is one). A query that
+    /// needs two different terms on one page has no boundary reading.
+    fn cross_hits_for_terms(&self, and_terms: &[SearchTerm], or_terms: &[SearchTerm], filters: &SearchFilters, limits: ScanLimits) -> Result<(Vec<CrossHit>, bool)> {
+        if self.boundary.is_none() {
+            return Ok((Vec::new(), false));
+        }
+        let terms: &[SearchTerm] = if and_terms.len() == 1 && or_terms.is_empty() {
+            and_terms
+        } else if and_terms.is_empty() {
+            or_terms
+        } else {
+            return Ok((Vec::new(), false));
+        };
+        let mut all: Vec<CrossHit> = Vec::new();
+        let mut capped = false;
+        for t in terms {
+            let sets = self.term_sets(t);
+            let (hits, c) = self.cross_hits_phrase(&sets, filters, limits)?;
+            capped |= c;
+            all.extend(hits);
+        }
+        if terms.len() > 1 {
+            // Two variants can match the same span; count it once.
+            all.sort_by(|a, b| a.order_key.cmp(&b.order_key).then_with(|| a.primary_positions.cmp(&b.primary_positions)));
+            all.dedup_by(|a, b| a.primary == b.primary && a.secondary == b.secondary && a.primary_positions == b.primary_positions);
+        }
+        Ok((all, capped))
+    }
+
+    /// The window `[offset, offset + limit)` of the query's matches with the
+    /// cross hits interleaved by reading order, and the exact total of both.
+    /// The main matches are walked in doc order, which is reading order.
+    fn paged_with_cross(&self, searcher: &Searcher, query: &dyn Query, cross: Vec<CrossHit>, limit: usize, offset: usize) -> Result<(usize, Vec<(DocAddress, Option<CrossRef>)>)> {
+        if cross.is_empty() || !self.reading_order {
+            let (total, addrs) = self.paged(searcher, query, limit, offset)?;
+            return Ok((total, addrs.into_iter().map(|a| (a, None)).collect()));
+        }
+        let mut inter = Interleave::new(cross);
+        let end = offset.saturating_add(limit);
+        let mut seen = 0usize;
+        let mut out: Vec<(DocAddress, Option<CrossRef>)> = Vec::new();
+        let mut take = |item: (DocAddress, Option<CrossRef>), seen: &mut usize| {
+            if *seen >= offset && *seen < end {
+                out.push(item);
+            }
+            *seen += 1;
+        };
+        let weight = query.weight(EnableScoring::disabled_from_searcher(searcher))?;
+        for (seg_ord, seg) in searcher.segment_readers().iter().enumerate() {
+            let cols = self.columns(searcher, seg_ord as u32);
+            let mut scorer = weight.scorer(seg, 1.0)?;
+            let alive = seg.alive_bitset();
+            let mut doc = scorer.doc();
+            while doc != TERMINATED {
+                if alive.map_or(true, |b| b.is_alive(doc)) {
+                    let addr = DocAddress::new(seg_ord as u32, doc);
+                    let key = cols.order_key(doc);
+                    let before: Vec<CrossHit> = inter.before(key).cloned().collect();
+                    for c in before {
+                        if let Some(item) = self.cross_item(searcher, &c)? {
+                            take(item, &mut seen);
+                        }
+                    }
+                    take((addr, None), &mut seen);
+                    let at: Vec<CrossHit> = inter.at(key).cloned().collect();
+                    for c in at {
+                        if let Some(item) = self.cross_item(searcher, &c)? {
+                            take(item, &mut seen);
+                        }
+                    }
+                }
+                doc = scorer.advance();
+            }
+        }
+        let rest: Vec<CrossHit> = inter.rest().cloned().collect();
+        for c in rest {
+            if let Some(item) = self.cross_item(searcher, &c)? {
+                take(item, &mut seen);
+            }
+        }
+        Ok((seen, out))
+    }
+
+    /// A cross hit as a main-index address (its primary page) plus the other page.
+    fn cross_item(&self, searcher: &Searcher, c: &CrossHit) -> Result<Option<(DocAddress, Option<CrossRef>)>> {
+        let Some(addr) = self.find_page(searcher, c.primary.id, c.primary.part_index, c.primary.page_id)? else {
+            return Ok(None);
+        };
+        Ok(Some((addr, Some(CrossRef {
+            primary: c.primary,
+            primary_positions: c.primary_positions.clone(),
+            secondary: c.secondary,
+            secondary_positions: c.secondary_positions.clone(),
+            primary_is_left: c.primary_is_left,
+        }))))
+    }
+
+    /// Results for `(address, cross)` items: the page, its highlights (the
+    /// cross hit's primary share), and the other page of a cross hit.
+    fn results_with_cross(&self, searcher: &Searcher, items: &[(DocAddress, Option<CrossRef>)], positions: Option<&[Vec<u32>]>) -> Result<Vec<SearchResult>> {
+        let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
+        let mut results = self.results_from(searcher, &addrs)?;
+        for (i, (r, (_, cross))) in results.iter_mut().zip(items.iter()).enumerate() {
+            if let Some(p) = positions {
+                r.matched_token_indices = p[i].clone();
+            }
+            if let Some(c) = cross {
+                self.attach_cross(searcher, r, c)?;
+            }
+        }
+        Ok(results)
+    }
+
+    /// On the paged paths a cross hit's own highlights are the primary share
+    /// recorded when the item was built; `results_with_cross` keeps them in
+    /// `primary_positions` of the `CrossRef`'s companion, found by page here.
+    fn cross_positions_of(&self, items: &[(DocAddress, Option<CrossRef>)], r: &SearchResult) -> Option<Vec<u32>> {
+        let key = PageKey::new(r.id, r.part_index, r.page_id);
+        items.iter().find_map(|(_, c)| c.as_ref().filter(|c| c.primary == key).map(|c| c.primary_positions.clone()))
+    }
+
+    fn attach_cross(&self, searcher: &Searcher, r: &mut SearchResult, c: &CrossRef) -> Result<()> {
+        let (part_label, page_number) = match self.find_page(searcher, c.secondary.id, c.secondary.part_index, c.secondary.page_id)? {
+            Some(addr) => {
+                let doc: TantivyDocument = searcher.doc(addr)?;
+                (str_of(&doc, self.fields.part_label), str_of(&doc, self.fields.page_number))
+            }
+            None => (String::new(), String::new()),
+        };
+        r.crosses_page = true;
+        r.secondary = Some(SecondarySpan {
+            part_index: c.secondary.part_index,
+            page_id: c.secondary.page_id,
+            part_label,
+            page_number,
+            matched_token_indices: c.secondary_positions.clone(),
+        });
+        Ok(())
+    }
+
+    /// A page's highlights for the running search, and whether a match runs
+    /// off either edge of the page: the two boundary documents touching it
+    /// are rebuilt from the forward index (the same 20 + 20 tokens the index
+    /// holds) and searched for a straddling phrase.
+    pub fn get_page_matches(&self, id: u64, part_index: u64, page_id: u64, terms: &[SearchTerm]) -> Result<PageMatches> {
+        let mut out = PageMatches { indices: self.get_match_positions_combined(id, part_index, page_id, terms)?, ..Default::default() };
+        let (Some(b), Some(cache), Some(triples)) = (&self.boundary, &self.cache, &self.triples) else {
+            return Ok(out);
+        };
+        let phrases: Vec<Vec<HashSet<u32>>> = terms
+            .iter()
+            .map(|t| Self::hash_sets(&self.term_sets(t)))
+            .filter(|s| s.len() > 1 && s.iter().all(|x| !x.is_empty()))
+            .collect();
+        if phrases.is_empty() {
+            return Ok(out);
+        }
+        let key = PageKey::new(id, part_index, page_id);
+        let (before, after) = b.neighbours(key)?;
+        let mut keys = vec![key];
+        keys.extend(before.iter().map(|(k, _)| *k));
+        keys.extend(after.iter().map(|(k, _)| *k));
+        let pages = page_triples_with(cache, triples, &keys)?;
+        let Some(this) = pages.get(&key) else { return Ok(out) };
+        let side = crate::boundary::SIDE;
+        if let Some((k, _)) = before {
+            if let Some(left) = pages.get(&k) {
+                let (w, _len_left) = crate::boundary::window(left, this);
+                for sets in &phrases {
+                    let n = sets.len() as u32;
+                    for s in forward::phrase_starts(&w, sets) {
+                        if crate::boundary::straddles(s, s + n - 1) {
+                            out.continues_prev = true;
+                            out.indices.extend((s..s + n).filter(|&p| p >= side).map(|p| p - side));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((k, _)) = after {
+            if let Some(right) = pages.get(&k) {
+                let (w, _) = crate::boundary::window(this, right);
+                for sets in &phrases {
+                    let n = sets.len() as u32;
+                    for s in forward::phrase_starts(&w, sets) {
+                        if crate::boundary::straddles(s, s + n - 1) {
+                            out.continues_next = true;
+                            out.indices.extend((s..s + n).filter(|&p| p < side).map(|p| p + this.len() as u32 - side));
+                        }
+                    }
+                }
+            }
+        }
+        out.indices.sort_unstable();
+        out.indices.dedup();
+        Ok(out)
     }
 
     /// Exact counts on/off at runtime (desktop toggle). Cached walks are
@@ -730,6 +1002,7 @@ impl SearchEngine {
             exact_counts: self.exact_counts(),
             max_verified_hits: self.config.max_verified_hits,
             walk_budget_ms: self.config.walk_budget_ms,
+            boundary_index: self.boundary.is_some(),
         }
     }
 
@@ -810,6 +1083,9 @@ impl SearchEngine {
         let mut results = self.results_from(searcher, &addrs)?;
         for (r, h) in results.iter_mut().zip(w.hits.iter()) {
             r.matched_token_indices = h.positions.clone();
+            if let Some(c) = &h.cross {
+                self.attach_cross(searcher, r, c)?;
+            }
         }
         if !self.reading_order {
             sort_results_by_reading_order(&mut results);
@@ -825,6 +1101,7 @@ impl SearchEngine {
         searcher: &Searcher,
         query: Box<dyn Query>,
         verify: Arc<dyn Fn(&[u32]) -> Option<Vec<u32>> + Send + Sync>,
+        cross: (Vec<CrossHit>, bool),
     ) -> Result<Walker> {
         let Some(cache) = self.cache.clone() else {
             anyhow::bail!("forward-index verification requires an attached TokenCache");
@@ -832,15 +1109,16 @@ impl SearchEngine {
         let triples = self.triples.clone().expect("compound index has triple maps");
         let searcher = searcher.clone();
         let reading_order = self.reading_order;
+        let mut merge = CrossMerge::new(&searcher, self.fields, cross);
         Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
-            let process_chunk = |chunk: &[DocAddress], sink: &mut Sink| -> Result<bool> {
+            let mut process_chunk = |chunk: &[DocAddress], sink: &mut Sink| -> Result<bool> {
                 let keys = page_keys(&searcher, chunk);
                 let pages = page_triples_with(&cache, &triples, &keys)?;
                 sink.add_candidates(chunk.len());
                 for (addr, key) in chunk.iter().zip(keys.iter()) {
                     let Some(ids) = pages.get(key) else { continue };
                     if let Some(positions) = verify(ids) {
-                        if !sink.push(WalkHit { addr: *addr, positions }) {
+                        if !merge.push_main(sink, *addr, positions)? {
                             return Ok(false);
                         }
                     }
@@ -881,6 +1159,7 @@ impl SearchEngine {
                     }
                 }
             }
+            merge.finish(sink)?;
             Ok(())
         }))
     }
@@ -894,9 +1173,10 @@ impl SearchEngine {
         limit: usize,
         offset: usize,
         verify: Arc<dyn Fn(&[u32]) -> Option<Vec<u32>> + Send + Sync>,
+        cross: (Vec<CrossHit>, bool),
     ) -> Result<WalkWindow> {
         self.walks
-            .window(key, offset, limit, self.walk_limits(), || self.verified_walker(searcher, query, verify))
+            .window(key, offset, limit, self.walk_limits(), || self.verified_walker(searcher, query, verify, cross))
     }
 
     /// Attach the token cache used for forward-index highlighting and
@@ -1266,6 +1546,8 @@ impl SearchEngine {
             body: str_of(doc, f.body),
             score,
             matched_token_indices: matched,
+            crosses_page: false,
+            secondary: None,
         }
     }
 
@@ -1621,6 +1903,12 @@ impl SearchEngine {
                 }
             }
         }
+        // Phrases across page breaks, for the paths below (compound only).
+        let cross = if self.kind == IndexKind::Compound {
+            self.cross_hits_for_terms(and_terms, or_terms, filters, self.scan_limits())?
+        } else {
+            (Vec::new(), false)
+        };
 
         let mut and_plans = Vec::with_capacity(and_terms.len());
         for t in and_terms {
@@ -1684,7 +1972,7 @@ impl SearchEngine {
                 Some(positions)
             });
             let key = self.walk_key("combined", &(and_terms, or_terms), filters);
-            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify)?;
+            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross)?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
             let complete = w.done;
             let join = |ts: &[SearchTerm], sep: &str| ts.iter().map(|t| t.query.as_str()).collect::<Vec<_>>().join(sep);
@@ -1706,11 +1994,15 @@ impl SearchEngine {
                 complete: Some(complete),
             });
         }
-        let (total_hits, addrs) = self
-            .paged(&searcher, &*final_query, limit, offset)
+        // The paged path is exact, so the boundary scan for it ran to the
+        // end too: a capped scan here can only mean the walk limits, which
+        // this path does not use.
+        let (total_hits, items) = self
+            .paged_with_cross(&searcher, &*final_query, cross.0, limit, offset)
             .map_err(|e| map_expansion_error(e, "the phrase"))?;
+        let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
         let was_capped = false;
-        let mut results = self.results_from(&searcher, &addrs)?;
+        let mut results = self.results_with_cross(&searcher, &items, None)?;
 
         let all_terms: Vec<&SearchTerm> = and_terms.iter().chain(or_terms.iter()).collect();
         match self.kind {
@@ -1719,6 +2011,15 @@ impl SearchEngine {
                 let sets: Vec<Sets> = all_terms.iter().map(|t| self.highlight_sets(t)).collect();
                 let map = self.forward_highlights(&keys, &sets, self.config.combined_result_cap.unwrap_or(cap.max(50)))?;
                 self.attach_highlights(&mut results, &map);
+                // A cross hit's highlights are its own share of the span,
+                // not the page's every occurrence of the words.
+                for (r, (_, c)) in results.iter_mut().zip(items.iter()) {
+                    if c.is_some() {
+                        if let Some(h) = self.cross_positions_of(&items, r) {
+                            r.matched_token_indices = h;
+                        }
+                    }
+                }
             }
             IndexKind::ThreeField => {
                 for (r, addr) in results.iter_mut().zip(addrs.iter()) {
@@ -1783,11 +2084,26 @@ impl SearchEngine {
                 let mut sets2 = self.highlight_sets(term2);
                 let single_words = sets1.len() == 1 && sets2.len() == 1;
                 let key = self.walk_key("prox", &(term1, term2, max_distance), filters);
+                // The pair across a page break, from the boundary index: the
+                // positional path there whatever the sides are.
+                let cross = match &self.boundary {
+                    Some(b) if !sets1.is_empty() && !sets2.is_empty() => {
+                        let mut slots: Vec<Vec<u32>> = sets1.clone();
+                        slots.extend(sets2.iter().cloned());
+                        b.cross_hits(
+                            MatchKind::Proximity { len1: sets1.len(), len2: sets2.len(), max_distance: max_distance as u32 },
+                            &slots,
+                            filters,
+                            self.scan_limits(),
+                        )?
+                    }
+                    _ => (Vec::new(), false),
+                };
                 if self.config.proximity_impl == ProximityImpl::Positional && single_words {
                     let (s1, s2) = (sets1.pop().unwrap(), sets2.pop().unwrap());
-                    self.proximity_positional(&searcher, key, s1, s2, filters, max_distance, limit, offset)?
+                    self.proximity_positional(&searcher, key, s1, s2, filters, max_distance, limit, offset, cross)?
                 } else {
-                    self.proximity_forward(&searcher, key, final_query, sets1, sets2, max_distance, limit, offset)?
+                    self.proximity_forward(&searcher, key, final_query, sets1, sets2, max_distance, limit, offset, cross)?
                 }
             }
             IndexKind::ThreeField => {
@@ -1862,7 +2178,8 @@ impl SearchEngine {
     /// index.
     #[allow(clippy::too_many_arguments)]
     fn phrase_positional(&self, searcher: &Searcher, term: &SearchTerm, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, start: std::time::Instant) -> Result<SearchResults> {
-        let w = self.phrase_positional_core(searcher, key, sets, filters, limit, offset)?;
+        let cross = self.cross_hits_phrase(&sets, filters, self.scan_limits())?;
+        let w = self.phrase_positional_core(searcher, key, sets, filters, limit, offset, cross)?;
         Ok(SearchResults {
             query: term.query.clone(),
             mode: term.mode,
@@ -1877,7 +2194,8 @@ impl SearchEngine {
 
     /// (total hits, result window, was_capped) for a compound phrase given
     /// its per-slot triple sets, through the walk cache.
-    fn phrase_positional_core(&self, searcher: &Searcher, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize) -> Result<Walked> {
+    #[allow(clippy::too_many_arguments)]
+    fn phrase_positional_core(&self, searcher: &Searcher, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, cross: (Vec<CrossHit>, bool)) -> Result<Walked> {
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
         let threshold = self.config.wildcard_expansion_threshold;
@@ -1885,12 +2203,14 @@ impl SearchEngine {
         let pos_cap = self.config.result_highlight_cap.max(50);
         let wide = sets.iter().any(|s| s.len() > threshold);
         let sizes: Vec<usize> = sets.iter().map(|s| s.len()).collect();
+        let fields = self.fields;
         let w = self.walks.window(key, offset, limit, self.walk_limits(), || -> Result<Walker> {
             let searcher = searcher.clone();
+            let merge = CrossMerge::new(&searcher, fields, cross);
             if !wide {
                 Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                     let matcher = crate::positional::phrase_matcher();
-                    let mut adapter = WalkStreamSink { sink, positions_cap: pos_cap };
+                    let mut adapter = WalkStreamSink { sink, positions_cap: pos_cap, merge, failed: None };
                     let ps = crate::positional::intersect_n_stream(
                         &searcher,
                         tokens,
@@ -1900,6 +2220,7 @@ impl SearchEngine {
                         filter_query.as_deref(),
                         &mut adapter,
                     )?;
+                    adapter.finish()?;
                     sink.add_candidates(ps.co_occurring);
                     if prox_debug() {
                         eprintln!(
@@ -1916,6 +2237,7 @@ impl SearchEngine {
                 let triples = self.triples.clone().expect("compound index has triple maps");
                 let members: Vec<Members> = sets.iter().map(|s| Members::from_ids(s, threshold)).collect();
                 let n = sets.len() as u32;
+                let mut merge = merge;
                 Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                     let t0 = std::time::Instant::now();
                     let mut verify_us = 0u64;
@@ -1937,7 +2259,10 @@ impl SearchEngine {
                                 continue;
                             }
                             let positions = phrase_positions_from_starts(&starts, n, pos_cap);
-                            if !sink.push(WalkHit { addr: *addr, positions }) {
+                            let pushed = merge
+                                .push_main(sink, *addr, positions)
+                                .map_err(|e| tantivy::TantivyError::InternalError(e.to_string()))?;
+                            if !pushed {
                                 verify_us += tv.elapsed().as_micros() as u64;
                                 return Ok(false);
                             }
@@ -1955,6 +2280,7 @@ impl SearchEngine {
                         FORWARD_BATCH,
                         &mut on_chunk,
                     )?;
+                    merge.finish(sink)?;
                     if prox_debug() {
                         eprintln!(
                             "[phrase] hybrid walk slots={} wide={:?} sizes={:?} cursors={:?} doc_freqs={:?} co_occurring={} checked={} hits={} | open={}ms intersect={}ms positions={}ms verify={}ms total={}ms",
@@ -1973,19 +2299,22 @@ impl SearchEngine {
     /// Compound proximity, single-word sides: positional intersection on the
     /// `tokens` postings as a cached, capped walk.
     #[allow(clippy::too_many_arguments)]
-    fn proximity_positional(&self, searcher: &Searcher, key: String, set1: Vec<u32>, set2: Vec<u32>, filters: &SearchFilters, max_distance: usize, limit: usize, offset: usize) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+    #[allow(clippy::too_many_arguments)]
+    fn proximity_positional(&self, searcher: &Searcher, key: String, set1: Vec<u32>, set2: Vec<u32>, filters: &SearchFilters, max_distance: usize, limit: usize, offset: usize, cross: (Vec<CrossHit>, bool)) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
         let mut stats = ProximityStats { path: "positional-walk", set1_size: set1.len(), set2_size: set2.len(), ..Default::default() };
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
         let filter_query = self.filter_query(filters);
         let pos_cap = self.config.page_highlight_cap;
+        let fields = self.fields;
         let t0 = std::time::Instant::now();
         let w = self.walks.window(key, offset, limit, self.walk_limits(), || -> Result<Walker> {
             let searcher = searcher.clone();
+            let merge = CrossMerge::new(&searcher, fields, cross);
             Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                 let matcher = crate::positional::proximity_matcher(max_distance as u32);
                 let sets = [set1, set2];
-                let mut adapter = WalkStreamSink { sink, positions_cap: pos_cap };
+                let mut adapter = WalkStreamSink { sink, positions_cap: pos_cap, merge, failed: None };
                 let ps = crate::positional::intersect_n_stream(
                     &searcher,
                     tokens,
@@ -1995,6 +2324,7 @@ impl SearchEngine {
                     filter_query.as_deref(),
                     &mut adapter,
                 )?;
+                adapter.finish()?;
                 sink.add_candidates(ps.co_occurring);
                 if prox_debug() {
                     eprintln!(
@@ -2088,7 +2418,7 @@ impl SearchEngine {
     /// in reading order and measure the distance on the forward index, as a
     /// cached, capped walk.
     #[allow(clippy::too_many_arguments)]
-    fn proximity_forward(&self, searcher: &Searcher, key: String, query: Box<dyn Query>, sets1: Sets, sets2: Sets, max_distance: usize, limit: usize, offset: usize) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+    fn proximity_forward(&self, searcher: &Searcher, key: String, query: Box<dyn Query>, sets1: Sets, sets2: Sets, max_distance: usize, limit: usize, offset: usize, cross: (Vec<CrossHit>, bool)) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
         let mut stats = ProximityStats { path: "forward-walk", ..Default::default() };
         let sets1 = Self::hash_sets(&sets1);
         let sets2 = Self::hash_sets(&sets2);
@@ -2109,7 +2439,7 @@ impl SearchEngine {
         });
         let t0 = std::time::Instant::now();
         let key_for_memo = key.clone();
-        let w = self.verified_window(searcher, key, query, limit, offset, verify)?;
+        let w = self.verified_window(searcher, key, query, limit, offset, verify, cross)?;
         stats.tantivy_us = t0.elapsed().as_micros() as u64;
         stats.candidates_total = w.candidates;
         stats.candidates_scanned = w.candidates;
@@ -2212,7 +2542,7 @@ impl SearchEngine {
                 Some(positions)
             });
             let key = self.walk_key("name", &patterns_by_form, filters);
-            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify)?;
+            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, (Vec::new(), false))?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
             return Ok(SearchResults {
                 query: query_display,
@@ -2423,15 +2753,24 @@ impl SearchEngine {
         // exceed the budget skips the (sort-heavy) trie count.
         let ids_total: usize = sizes.iter().sum();
         let states: usize = if sets.len() > 1 && ids_total <= REGEX_STATE_BUDGET { sets.iter().map(|s| trie_nodes(s)).sum() } else { ids_total };
+        let cross = self.cross_hits_phrase(&sets, filters, self.scan_limits())?;
         if sets.len() == 1 || states <= REGEX_STATE_BUDGET {
             let plan = self.compound_plan(&sets)?;
             debug_assert!(plan.verify.is_none());
             let final_query = self.with_filters(plan.query, filters);
-            let (total, addrs) = self.paged(searcher, &*final_query, limit, offset)?;
-            let mut results = self.results_from(searcher, &addrs)?;
+            let (total, items) = self.paged_with_cross(searcher, &*final_query, cross.0, limit, offset)?;
+            let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
+            let mut results = self.results_with_cross(searcher, &items, None)?;
             let keys = self.keys_of(searcher, &addrs);
             let map = self.wildcard_highlights(&keys, &sets, self.config.page_highlight_cap)?;
             self.attach_highlights(&mut results, &map);
+            for (r, (_, c)) in results.iter_mut().zip(items.iter()) {
+                if c.is_some() {
+                    if let Some(h) = self.cross_positions_of(&items, r) {
+                        r.matched_token_indices = h;
+                    }
+                }
+            }
             if prox_debug() {
                 eprintln!(
                     "[wildcard] path={} sizes={:?} trie_nodes={} total={}",
@@ -2447,7 +2786,7 @@ impl SearchEngine {
             eprintln!("[wildcard] path=walk sizes={:?} trie_nodes={} threshold={}", sizes, states, self.config.wildcard_expansion_threshold);
         }
         let key = self.walk_key("wildcard", &normalized, filters);
-        self.phrase_positional_core(searcher, key, sets, filters, limit, offset)
+        self.phrase_positional_core(searcher, key, sets, filters, limit, offset, cross)
     }
 
     /// Exact highlight positions for a wildcard query on one page.
@@ -2719,6 +3058,20 @@ fn candidates_sorted(searcher: &Searcher, query: &dyn Query) -> Result<(usize, V
 struct WalkStreamSink<'a> {
     sink: &'a mut Sink,
     positions_cap: usize,
+    /// The cross hits to interleave, by reading order.
+    merge: CrossMerge,
+    /// An error from the merge, surfaced after the stream returns.
+    failed: Option<anyhow::Error>,
+}
+
+impl WalkStreamSink<'_> {
+    /// The cross hits after the last main hit, once the stream is done.
+    fn finish(&mut self) -> Result<()> {
+        if let Some(e) = self.failed.take() {
+            return Err(e);
+        }
+        self.merge.finish(self.sink)
+    }
 }
 
 impl StreamSink for WalkStreamSink<'_> {
@@ -2729,11 +3082,121 @@ impl StreamSink for WalkStreamSink<'_> {
     fn on_hit(&mut self, hit: PositionalHit) -> bool {
         let mut positions = hit.positions;
         positions.truncate(self.positions_cap);
-        self.sink.push(WalkHit { addr: hit.addr, positions })
+        match self.merge.push_main(self.sink, hit.addr, positions) {
+            Ok(more) => more,
+            Err(e) => {
+                self.failed = Some(e);
+                false
+            }
+        }
     }
 
     fn tick(&mut self) -> bool {
         self.sink.tick()
+    }
+}
+
+/// Cross hits (matches across page breaks) fed into a walk's sink in
+/// reading order among the main hits: those on earlier pages before a main
+/// hit, those on its own page after it, the rest at the end. A cross hit is
+/// pushed as its primary page's document, with the other page in `cross`.
+struct CrossMerge {
+    inter: Interleave,
+    searcher: Searcher,
+    fields: Fields,
+    columns: HashMap<u32, SegmentColumns>,
+    /// The boundary scan stopped early: the walk's count is a lower bound.
+    capped: bool,
+    stopped: bool,
+}
+
+impl CrossMerge {
+    fn new(searcher: &Searcher, fields: Fields, cross: (Vec<CrossHit>, bool)) -> Self {
+        Self { inter: Interleave::new(cross.0), searcher: searcher.clone(), fields, columns: HashMap::new(), capped: cross.1, stopped: false }
+    }
+
+    fn key_of(&mut self, addr: DocAddress) -> CrossOrderKey {
+        let searcher = &self.searcher;
+        let cols = self.columns.entry(addr.segment_ord).or_insert_with(|| segment_columns(searcher, addr.segment_ord));
+        cols.order_key(addr.doc_id)
+    }
+
+    fn find_page(&self, key: PageKey) -> Result<Option<DocAddress>> {
+        let f = self.fields;
+        let q = BooleanQuery::new(vec![
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(f.text_id, key.id), IndexRecordOption::Basic)) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(f.part_index, key.part_index), IndexRecordOption::Basic))),
+            (Occur::Must, Box::new(TermQuery::new(Term::from_field_u64(f.page_id, key.page_id), IndexRecordOption::Basic))),
+        ]);
+        let top = self.searcher.search(&q, &TopDocs::with_limit(1))?;
+        Ok(top.into_iter().next().map(|(_, a)| a))
+    }
+
+    fn push_cross(&mut self, sink: &mut Sink, c: &CrossHit) -> Result<bool> {
+        let Some(addr) = self.find_page(c.primary)? else { return Ok(true) };
+        let hit = WalkHit {
+            addr,
+            positions: c.primary_positions.clone(),
+            cross: Some(CrossRef {
+                primary: c.primary,
+                primary_positions: c.primary_positions.clone(),
+                secondary: c.secondary,
+                secondary_positions: c.secondary_positions.clone(),
+                primary_is_left: c.primary_is_left,
+            }),
+        };
+        if !sink.push(hit) {
+            self.stopped = true;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// A main hit, with the cross hits due before and on its page.
+    fn push_main(&mut self, sink: &mut Sink, addr: DocAddress, positions: Vec<u32>) -> Result<bool> {
+        if !self.inter.is_empty() {
+            let key = self.key_of(addr);
+            let before: Vec<CrossHit> = self.inter.before(key).cloned().collect();
+            for c in &before {
+                if !self.push_cross(sink, c)? {
+                    return Ok(false);
+                }
+            }
+            if !sink.push(WalkHit::page(addr, positions)) {
+                self.stopped = true;
+                return Ok(false);
+            }
+            let at: Vec<CrossHit> = self.inter.at(key).cloned().collect();
+            for c in &at {
+                if !self.push_cross(sink, c)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        if !sink.push(WalkHit::page(addr, positions)) {
+            self.stopped = true;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// The cross hits after the last main hit. Nothing more once the sink
+    /// has stopped: the walk is capped and would only overrun.
+    fn finish(&mut self, sink: &mut Sink) -> Result<()> {
+        if self.capped {
+            sink.mark_capped();
+        }
+        if self.stopped {
+            return Ok(());
+        }
+        let rest: Vec<CrossHit> = self.inter.rest().cloned().collect();
+        for c in &rest {
+            if !self.push_cross(sink, c)? {
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 }
 
