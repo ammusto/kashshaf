@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.7.1] — 2026-09-20
+
+**Fixed.** Clicking a name-search result in the web app failed for names with many forms. Name patterns are now expanded on the server.
+
 ## [0.7.0] — unreleased
 
 **Search across page breaks.** A phrase or proximity match split by a page turn is now found and highlighted across both pages. Needs corpus 4.3.0.
