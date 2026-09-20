@@ -188,7 +188,7 @@ export function NameSearchForm({
   generatedPatterns: _generatedPatterns, // eslint-disable-line @typescript-eslint/no-unused-vars
 }: NameSearchFormProps) {
   const [showPatternPreview, setShowPatternPreview] = useState(false);
-  const [nextFormId, setNextFormId] = useState(1);
+  // const [nextFormId, setNextFormId] = useState(1); // with handleAddForm
 
   const handleFormChange = (index: number, updated: NameFormData) => {
     const newForms = [...forms];
@@ -196,13 +196,14 @@ export function NameSearchForm({
     onFormsChange(newForms);
   };
 
-  const handleAddForm = () => {
-    if (forms.length < 4) {
-      const newForm = createEmptyNameForm(`form-${nextFormId}`);
-      setNextFormId(nextFormId + 1);
-      onFormsChange([...forms, newForm]);
-    }
-  };
+  // Off with the Add Name button; back when it is.
+  // const handleAddForm = () => {
+  //   if (forms.length < 4) {
+  //     const newForm = createEmptyNameForm(`form-${nextFormId}`);
+  //     setNextFormId(nextFormId + 1);
+  //     onFormsChange([...forms, newForm]);
+  //   }
+  // };
 
   const handleDeleteForm = (index: number) => {
     if (forms.length > 1) {
@@ -237,8 +238,8 @@ export function NameSearchForm({
         ))}
       </div>
 
-      {/* Add Name button */}
-      {forms.length < 4 && (
+      {/* Add Name button: off for now; one form per search. */}
+      {/* {forms.length < 4 && (
         <div className="px-4 py-2 border-t border-app-border-light flex-shrink-0">
           <button
             onClick={handleAddForm}
@@ -249,7 +250,7 @@ export function NameSearchForm({
             + Add Name
           </button>
         </div>
-      )}
+      )} */}
 
       {/* Pattern preview */}
       <PatternPreview
@@ -258,8 +259,8 @@ export function NameSearchForm({
         onToggle={() => setShowPatternPreview(!showPatternPreview)}
       />
 
-      {/* Search button */}
-      <div className="px-4 py-3 border-t border-app-border-light flex-shrink-0">
+      {/* Search button: the same 12 px above it as the Terms forms, no rule. */}
+      <div className="px-4 pt-3 flex-shrink-0">
         <button
           onClick={onSearch}
           disabled={loading || !isValid}
