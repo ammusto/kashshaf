@@ -73,10 +73,27 @@ export interface SearchInput {
   cliticToggle: boolean;
 }
 
+export type ProximityTermMode = 'surface' | 'lemma' | 'root';
+
+export interface ProximityTerm {
+  query: string;
+  mode: ProximityTermMode;
+}
+
+/** A chain of up to three terms may be searched for, and up to two page terms asked of every hit. */
+export const PROXIMITY_MAX_TERMS = 3;
+export const PROXIMITY_MAX_PAGE_TERMS = 2;
+
+/**
+ * A proximity search: a chain of two or three terms, each within
+ * `distances[i]` tokens of the next, in the written order when `ordered`,
+ * on a page that also carries every one of `pageTerms`, anywhere.
+ * Stored queries from before 0.7.0 are the two-term form; see
+ * `normalizeProximityQuery`.
+ */
 export interface ProximitySearchQuery {
-  term1: string;
-  field1: 'surface' | 'lemma' | 'root';
-  term2: string;
-  field2: 'surface' | 'lemma' | 'root';
-  distance: number;
+  terms: ProximityTerm[];
+  distances: number[];
+  ordered: boolean;
+  pageTerms: ProximityTerm[];
 }

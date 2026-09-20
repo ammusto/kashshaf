@@ -178,6 +178,16 @@ export function ReaderPanel({
     [stack.spine, stack.pages, highlight, clickedMatches]
   );
 
+  /** A proximity search's page-level terms on a page, for the second colour. */
+  const pageTermsFor = useCallback(
+    (index: number): readonly number[] => {
+      const loaded = stack.pages.get(index);
+      if (!loaded || loaded.highlightKey !== (highlight?.key ?? null)) return [];
+      return loaded.pageTermMatches ?? [];
+    },
+    [stack.pages, highlight]
+  );
+
   /** Where a highlighted match runs off the card, for the marks at its edges. */
   const continuesFor = useCallback(
     (index: number): { prev: boolean; next: boolean } => {
@@ -341,6 +351,7 @@ export function ReaderPanel({
           ref={readerRef}
           stack={stack}
           matchesFor={matchesForIndex}
+          pageTermsFor={pageTermsFor}
           continuesFor={continuesFor}
           onWordClick={handleWordClick}
           onActivePage={handleActivePage}

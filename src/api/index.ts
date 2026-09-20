@@ -18,6 +18,7 @@ import type {
   TocNode,
 } from '../types';
 import type { NameSearchForm } from './tauri';
+import type { ProximitySearchQuery } from '../types/search';
 
 /**
  * Operating mode for the application
@@ -38,6 +39,8 @@ export interface PageBundleRequest {
    * request stays short and the highlights are the search's.
    */
   namePatterns?: string[];
+  /** A proximity search's page-level terms, highlighted apart from the chain. */
+  pageTerms?: SearchTerm[];
 }
 
 export interface PageBundle {
@@ -48,6 +51,8 @@ export interface PageBundle {
   /** A match runs in from the page before / out onto the page after (corpus 4.3.0). */
   continues_prev: boolean;
   continues_next: boolean;
+  /** The page-level terms' positions, when `pageTerms` were asked for. */
+  and_matches?: number[] | null;
 }
 
 export interface SearchTerm {
@@ -116,11 +121,7 @@ export interface SearchAPI {
   ): Promise<VariantsResponse>;
 
   proximitySearch(
-    term1: string,
-    field1: SearchMode,
-    term2: string,
-    field2: SearchMode,
-    distance: number,
+    query: ProximitySearchQuery,
     filters: SearchFilters,
     limit: number,
     offset: number

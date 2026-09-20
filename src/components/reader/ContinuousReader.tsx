@@ -48,6 +48,8 @@ interface ContinuousReaderProps {
   stack: PageStack;
   /** Highlights for a page, by its spine index. */
   matchesFor: (index: number) => readonly number[];
+  /** A proximity search's page-level terms on a page, drawn in a second colour. */
+  pageTermsFor?: (index: number) => readonly number[];
   /** Whether a highlighted match runs off the top or the bottom of a page. */
   continuesFor?: (index: number) => { prev: boolean; next: boolean };
   onWordClick: (e: React.MouseEvent, token: Token) => void;
@@ -90,6 +92,7 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   {
     stack,
     matchesFor,
+    pageTermsFor,
     continuesFor,
     onWordClick,
     onActivePage,
@@ -421,6 +424,7 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
         body={loaded.body}
         tokens={loaded.tokens}
         matched={matchesFor(i)}
+        pageTerms={pageTermsFor?.(i)}
         continues={continuesFor?.(i)}
         label={pageLabel(entry, multiPart)}
         startsPart={startsPart}

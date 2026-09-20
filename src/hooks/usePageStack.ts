@@ -25,6 +25,8 @@ export interface LoadedPage {
   /** A match runs in from the page before / out onto the page after. */
   continuesPrev: boolean;
   continuesNext: boolean;
+  /** A proximity search's page-level terms on this page; null when none were asked for. */
+  pageTermMatches: number[] | null;
 }
 
 export interface PageAnchor {
@@ -229,6 +231,7 @@ export function usePageStack({ api, bookId, anchor, highlight = null }: UsePageS
           tokens: true,
           terms: highlight?.terms,
           namePatterns: highlight?.namePatterns,
+          pageTerms: highlight?.pageTerms,
         })
         .then((bundle) => {
           if (gen !== generation.current) return;
@@ -247,6 +250,7 @@ export function usePageStack({ api, bookId, anchor, highlight = null }: UsePageS
               highlightKey: key,
               continuesPrev: bundle.continues_prev ?? false,
               continuesNext: bundle.continues_next ?? false,
+              pageTermMatches: bundle.and_matches ?? null,
             });
             return next;
           });

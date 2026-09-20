@@ -10,6 +10,8 @@ import { useBooks } from '../../contexts/BooksContext';
 
 interface ResultsPanelProps {
   results: SearchResults | null;
+  /** What the search was, stated in the header (a proximity chain, its ordering, its page terms). */
+  description?: string;
   onResultClick: (result: SearchResult) => void;
   onLoadMore: () => void;
   /** Collects the rows to export (paged); reports progress as it goes. */
@@ -27,6 +29,7 @@ interface ResultsPanelProps {
 
 export function ResultsPanel({
   results,
+  description,
   onResultClick,
   onLoadMore,
   onExport,
@@ -123,6 +126,15 @@ export function ResultsPanel({
         <span className="text-xs font-semibold text-app-text-secondary uppercase tracking-wide">
           {viewMode === 'variants' ? 'Variants' : 'Results'}
         </span>
+        {description && viewMode === 'results' && (
+          <span
+            className="ml-3 text-xs text-app-text-tertiary truncate min-w-0 max-w-[50%]"
+            title={description}
+            data-testid="results-description"
+          >
+            {description}
+          </span>
+        )}
 
         {/* View toggle: Variants ↔ Results. Only shown when the active search
             qualifies (onLoadVariants present) and we have search results.

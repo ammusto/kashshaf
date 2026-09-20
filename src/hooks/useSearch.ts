@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import type { SearchFilters, SearchResults, SearchResult } from '../types';
 import type { SearchContext, AppSearchMode, CombinedSearchQuery, ProximitySearchQuery } from '../types/search';
+import { describeProximityQuery, proximityChainLabel } from '../utils/proximityQuery';
 import type { NameFormData } from '../utils/namePatterns';
 import type { SearchAPI, NameSearchForm as NameSearchFormAPI } from '../api';
 import { PAGE_SIZE, MAX_RESULTS, EXPORT_MAX_RESULTS } from '../constants/search';
@@ -60,10 +61,6 @@ function generateBooleanDisplayLabel(query: CombinedSearchQuery): string {
     return orTerms[0];
   }
   return 'Search';
-}
-
-function generateProximityDisplayLabel(query: ProximitySearchQuery): string {
-  return `${query.term1} ~${query.distance} ${query.term2}`;
 }
 
 function generateNameDisplayLabel(forms: NameFormData[]): string {
@@ -230,8 +227,8 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
 
   // Proximity search handler
   const handleProximitySearch = useCallback(async (query: ProximitySearchQuery) => {
-    const label = `${query.term1} ~ ${query.term2}`;
-    const fullQuery = `${query.term1} NEAR/${query.distance} ${query.term2}`;
+    const label = proximityChainLabel(query);
+    const fullQuery = describeProximityQuery(query);
     const searchContext: SearchContext = {
       type: 'proximity',
       proximityQuery: query,
@@ -241,16 +238,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
 
     try {
       const filters = getFilters();
-      const results = await api.proximitySearch(
-        query.term1,
-        query.field1,
-        query.term2,
-        query.field2,
-        query.distance,
-        filters,
-        PAGE_SIZE,
-        0
-      );
+      const results = await api.proximitySearch(query, filters, PAGE_SIZE, 0);
 
       updateTab(tabId, { searchResults: results, loading: false });
       scheduleStatusPolls(tabId, results);
@@ -259,15 +247,13 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
         loadResultIntoTab(tabId, results.results[0]);
       }
 
-      const displayLabel = generateProximityDisplayLabel(query);
       addSearchToHistory('proximity', {
         type: 'proximity',
-        term1: query.term1,
-        field1: query.field1,
-        term2: query.term2,
-        field2: query.field2,
-        distance: query.distance
-      }, displayLabel);
+        terms: query.terms,
+        distances: query.distances,
+        ordered: query.ordered,
+        pageTerms: query.pageTerms,
+      }, fullQuery);
     } catch (err) {
       updateTab(tabId, { errorMessage: `Proximity search failed: ${err}`, loading: false });
       console.error('Proximity search failed:', err);
@@ -336,11 +322,7 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
         const forms: NameSearchFormAPI[] = searchContext.namePatterns.map(patterns => ({ patterns, expand: true }));
         moreResults = await api.nameSearch(forms, filters, PAGE_SIZE, currentCount);
       } else if (searchContext.type === 'proximity' && searchContext.proximityQuery) {
-        const query = searchContext.proximityQuery;
-        moreResults = await api.proximitySearch(
-          query.term1, query.field1, query.term2, query.field2, query.distance,
-          filters, PAGE_SIZE, currentCount
-        );
+        moreResults = await api.proximitySearch(searchContext.proximityQuery, filters, PAGE_SIZE, currentCount);
       } else if (searchContext.type === 'combined' && searchContext.combinedQuery) {
         moreResults = await api.combinedSearch(
           searchContext.combinedQuery, filters, PAGE_SIZE, currentCount

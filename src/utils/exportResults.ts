@@ -64,7 +64,7 @@ export function pageFetcherFor(api: SearchAPI, ctx: SearchContext, filters: Sear
   }
   if (ctx.type === 'proximity' && ctx.proximityQuery) {
     const q = ctx.proximityQuery;
-    return (limit, offset) => api.proximitySearch(q.term1, q.field1, q.term2, q.field2, q.distance, filters, limit, offset);
+    return (limit, offset) => api.proximitySearch(q, filters, limit, offset);
   }
   if (ctx.type === 'combined' && ctx.combinedQuery) {
     const q = ctx.combinedQuery;

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement, PageEntry } from './types';
 import type { CombinedSearchQuery, ProximitySearchQuery } from './types/search';
+import { describeProximityQuery, normalizeProximityQuery } from './utils/proximityQuery';
 import type { Collection } from './types/collections';
 import { MAX_RESULTS } from './constants/search';
 import { useSearchTabsContext } from './contexts/SearchTabsContext';
@@ -449,15 +450,12 @@ function App() {
         setAppSearchMode('terms');
         handleSearch(combined);
       } else if (search.search_type === 'proximity' && queryData.type === 'proximity') {
-        const query: ProximitySearchQuery = {
-          term1: queryData.term1,
-          field1: queryData.field1,
-          term2: queryData.term2,
-          field2: queryData.field2,
-          distance: queryData.distance,
-        };
-        setAppSearchMode('terms');
-        handleProximitySearch(query);
+        // Stored as a chain since 0.7.0, as a pair before: both read.
+        const query: ProximitySearchQuery | null = normalizeProximityQuery(queryData);
+        if (query) {
+          setAppSearchMode('terms');
+          handleProximitySearch(query);
+        }
       } else if (search.search_type === 'name' && queryData.type === 'name') {
         if (queryData.forms && Array.isArray(queryData.forms)) {
           setNameFormData(queryData.forms);
@@ -666,6 +664,11 @@ function App() {
               <div style={{ flex: 1 - splitterRatio }} className="overflow-hidden rounded-xl shadow-app-md">
                 <ResultsPanel
                   results={activeTab?.searchResults ?? null}
+                  description={
+                    activeTab?.searchContext.type === 'proximity' && activeTab.searchContext.proximityQuery
+                      ? describeProximityQuery(activeTab.searchContext.proximityQuery)
+                      : undefined
+                  }
                   onResultClick={handleResultClick}
                   onLoadMore={handleLoadMore}
                   onExport={handleExportResults}

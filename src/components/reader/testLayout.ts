@@ -13,17 +13,20 @@ export function withPageBundle<T extends object>(api: T): T & SearchAPI {
     a.getPageBundle = vi.fn(async (id: number, part: number, page: number, request: PageBundleRequest) => {
       const p = await a.getPage(id, part, page);
       if (!p) return null;
-      const [tokens, matches] = await Promise.all([
+      const [tokens, matches, and_matches] = await Promise.all([
         request.tokens ? a.getPageTokens(id, part, page) : Promise.resolve([]),
         request.namePatterns && request.namePatterns.length > 0
           ? a.getNameMatchPositions(id, part, page, request.namePatterns)
           : request.terms && request.terms.length > 0
             ? a.getMatchPositionsCombined(id, part, page, request.terms)
             : Promise.resolve(null),
+        request.pageTerms && request.pageTerms.length > 0
+          ? a.getMatchPositionsCombined(id, part, page, request.pageTerms)
+          : Promise.resolve(null),
       ]);
       // A mock may say where a match runs off the page (`continuesFor`).
       const continues = (a as { continuesFor?: (part: number, page: number) => { prev: boolean; next: boolean } }).continuesFor?.(part, page);
-      return { page: p, tokens, matches, continues_prev: continues?.prev ?? false, continues_next: continues?.next ?? false };
+      return { page: p, tokens, matches, and_matches, continues_prev: continues?.prev ?? false, continues_next: continues?.next ?? false };
     });
   }
   return a as T & SearchAPI;

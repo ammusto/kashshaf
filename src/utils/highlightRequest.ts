@@ -1,6 +1,6 @@
 import type { SearchTerm } from '../api';
 import type { SearchContext } from '../types/search';
-import { getSearchTermsFromContext } from '../hooks/useReaderNavigation';
+import { getSearchTermsFromContext, pageTermsOf } from '../hooks/useReaderNavigation';
 
 /**
  * What the reader asks the page request to highlight: the terms of the
@@ -12,6 +12,8 @@ export interface HighlightRequest {
   key: string;
   terms?: SearchTerm[];
   namePatterns?: string[];
+  /** A proximity search's page-level terms, shown in a second colour. */
+  pageTerms?: SearchTerm[];
 }
 
 export function highlightRequestOf(context: SearchContext | null): HighlightRequest | null {
@@ -23,5 +25,10 @@ export function highlightRequestOf(context: SearchContext | null): HighlightRequ
   }
   const terms = getSearchTermsFromContext(context);
   if (!terms || terms.length === 0) return null;
-  return { key: `${context.type}|${terms.map((t) => `${t.mode}:${t.query}`).join('|')}`, terms };
+  const show = (ts: SearchTerm[]) => ts.map((t) => `${t.mode}:${t.query}`).join('|');
+  const pageTerms = pageTermsOf(context);
+  if (pageTerms.length > 0) {
+    return { key: `${context.type}|${show(terms)}|page:${show(pageTerms)}`, terms, pageTerms };
+  }
+  return { key: `${context.type}|${show(terms)}`, terms };
 }

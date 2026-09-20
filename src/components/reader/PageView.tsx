@@ -18,6 +18,8 @@ interface PageViewProps {
   tokens: Token[];
   /** Token indices to highlight on this page, for the search that is running. */
   matched: readonly number[];
+  /** A proximity search's page-level terms: highlighted too, in a second colour. */
+  pageTerms?: readonly number[];
   /** A highlighted match runs in from the page before / out onto the next: a mark at that edge. */
   continues?: { prev: boolean; next: boolean };
   /** `part_label:page_number`, or the page number alone in a single-part book. */
@@ -35,25 +37,31 @@ interface PageViewProps {
 interface Run {
   text: string;
   token: number | null;
+  /** Part of the match. */
   highlighted: boolean;
+  /** A page-level term of a proximity search (and not part of the match). */
+  secondary: boolean;
 }
 
 /** Split the display text into runs of constant token index and highlight state. */
 export function toRuns(
   plain: string,
   charToToken: (number | null)[],
-  highlighted: Set<number>
+  highlighted: Set<number>,
+  secondary: Set<number> = new Set()
 ): Run[] {
   const runs: Run[] = [];
   if (plain.length === 0) return runs;
+  const state = (i: number) => (highlighted.has(i) ? 1 : secondary.has(i) ? 2 : 0);
   let start = 0;
   for (let i = 1; i <= plain.length; i++) {
     const boundary =
       i === plain.length ||
       charToToken[i] !== charToToken[i - 1] ||
-      highlighted.has(i) !== highlighted.has(i - 1);
+      state(i) !== state(i - 1);
     if (boundary) {
-      runs.push({ text: plain.slice(start, i), token: charToToken[start], highlighted: highlighted.has(start) });
+      const s = state(start);
+      runs.push({ text: plain.slice(start, i), token: charToToken[start], highlighted: s === 1, secondary: s === 2 });
       start = i;
     }
   }
@@ -65,6 +73,7 @@ export function PageView({
   body,
   tokens,
   matched,
+  pageTerms,
   continues,
   label,
   startsPart,
@@ -83,10 +92,16 @@ export function PageView({
     for (const range of getHighlightRanges(charToToken, matchedSet)) {
       for (let i = range.start; i < range.end; i++) highlighted.add(i);
     }
+    const secondary = new Set<number>();
+    if (pageTerms && pageTerms.length > 0) {
+      for (const range of getHighlightRanges(charToToken, new Set(pageTerms))) {
+        for (let i = range.start; i < range.end; i++) secondary.add(i);
+      }
+    }
     const byIdx = new Map<number, Token>();
     for (const t of tokens) byIdx.set(t.idx, t);
-    return { runs: toRuns(plain, charToToken, highlighted), tokenByIdx: byIdx };
-  }, [body, tokens, matched]);
+    return { runs: toRuns(plain, charToToken, highlighted, secondary), tokenByIdx: byIdx };
+  }, [body, tokens, matched, pageTerms]);
 
   // Measure after layout, and again when the text or the window width change
   // the wrapping. The spacer that replaces this page uses the last height
@@ -148,7 +163,7 @@ export function PageView({
                 <span
                   key={i}
                   data-token={run.token}
-                  data-highlight={run.highlighted ? 'true' : undefined}
+                  data-highlight={run.highlighted ? 'true' : run.secondary ? 'page' : undefined}
                   onClick={token ? (e) => onWordClick(e, token) : undefined}
                   // A highlight changes colour only. A weight or a border
                   // would reflow the line and change the page's height after
@@ -156,7 +171,9 @@ export function PageView({
                   className={`cursor-pointer rounded px-0.5 transition-colors duration-100
                     ${run.highlighted
                       ? 'bg-red-100 text-red-700'
-                      : 'hover:bg-app-accent-light'
+                      : run.secondary
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'hover:bg-app-accent-light'
                     }`}
                 >
                   {run.text}

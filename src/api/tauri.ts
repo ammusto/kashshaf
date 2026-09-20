@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { PageBundle, PageBundleRequest, SearchTerm } from './index';
+import type { ProximitySearchQuery, ProximityTerm } from '../types/search';
 import type {
   SearchMode,
   SearchFilters,
@@ -7,7 +8,6 @@ import type {
   BookMetadata,
   SearchResult,
   Token,
-  TokenField,
   AppStats,
   PageWithMatches,
   SearchHistoryEntry,
@@ -68,13 +68,16 @@ export async function getPageBundle(
 ): Promise<PageBundle | null> {
   const page = await getPage(id, partIndex, pageId);
   if (!page) return null;
-  const [tokens, matches] = await Promise.all([
+  const [tokens, matches, andMatches] = await Promise.all([
     request.tokens ? getPageTokens(id, partIndex, pageId) : Promise.resolve([] as Token[]),
     request.namePatterns && request.namePatterns.length > 0
       ? getNameMatchPositions(id, partIndex, pageId, request.namePatterns, true).then((indices) => ({ indices, continues_prev: false, continues_next: false }))
       : request.terms && request.terms.length > 0
         ? getPageMatches(id, partIndex, pageId, request.terms)
         : Promise.resolve(null),
+    request.pageTerms && request.pageTerms.length > 0
+      ? getMatchPositionsCombined(id, partIndex, pageId, request.pageTerms)
+      : Promise.resolve(null),
   ]);
   return {
     page,
@@ -82,6 +85,7 @@ export async function getPageBundle(
     matches: matches?.indices ?? null,
     continues_prev: matches?.continues_prev ?? false,
     continues_next: matches?.continues_next ?? false,
+    and_matches: andMatches,
   };
 }
 
@@ -163,18 +167,21 @@ export async function getStats(): Promise<AppStats> {
 }
 
 export async function proximitySearch(
-  term1: string,
-  field1: TokenField,
-  term2: string,
-  field2: TokenField,
-  distance: number,
+  query: ProximitySearchQuery,
   filters?: SearchFilters,
   limit?: number,
   offset?: number
 ): Promise<SearchResults> {
-  const sanitizedTerm1 = stripPunctuation(term1);
-  const sanitizedTerm2 = stripPunctuation(term2);
-  return invoke('proximity_search', { term1: sanitizedTerm1, field1, term2: sanitizedTerm2, field2, distance, filters, limit, offset });
+  const clean = (t: ProximityTerm) => ({ query: stripPunctuation(t.query), mode: t.mode });
+  return invoke('proximity_search', {
+    terms: query.terms.map(clean),
+    distances: query.distances,
+    ordered: query.ordered,
+    andTerms: query.pageTerms.map(clean),
+    filters,
+    limit,
+    offset,
+  });
 }
 
 export async function getPageTokens(

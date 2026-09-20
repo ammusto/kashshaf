@@ -10,15 +10,24 @@ interface ProximityInputRowProps {
   label: string;
   input: ProximityInput;
   onChange: (updated: ProximityInput) => void;
+  /** A row that can be taken away again (the third term, a page term). */
+  onRemove?: () => void;
+  /** A page term is drawn in the colour its highlights take in the reader. */
+  tone?: 'chain' | 'page';
 }
 
 export function ProximityInputRow({
   label,
   input,
   onChange,
+  onRemove,
+  tone = 'chain',
 }: ProximityInputRowProps) {
   return (
-    <div className="space-y-2 p-3 bg-app-surface-variant rounded-lg">
+    <div
+      className={`space-y-2 p-3 rounded-lg ${tone === 'page' ? 'bg-amber-50 border border-amber-200' : 'bg-app-surface-variant'}`}
+      data-testid={tone === 'page' ? 'page-term-row' : 'proximity-term-row'}
+    >
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium text-app-text-secondary w-12">{label}</span>
         <input
@@ -31,6 +40,16 @@ export function ProximityInputRow({
                    focus:outline-none focus:border-app-accent focus:ring-2 focus:ring-app-accent-light
                    text-right font-arabic bg-white text-lg"
         />
+        {onRemove && (
+          <button
+            onClick={onRemove}
+            aria-label={`Remove ${label}`}
+            title="Remove"
+            className="w-7 h-7 rounded text-app-text-tertiary hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {phraseExceedsCrossPageSpan(input.term) && (

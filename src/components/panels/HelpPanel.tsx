@@ -103,13 +103,15 @@ function TermSearchTab() {
 
       <Section title="Proximity Search">
         <p className="text-app-text-secondary leading-relaxed mb-2">
-          Find two terms that appear near each other within a specified distance:
+          Find two or three terms that appear near each other, each within a distance of the next:
         </p>
         <ul className="list-disc list-inside text-app-text-secondary space-y-2">
-          <li>Enter two terms and the maximum token distance between them</li>
+          <li>Enter two terms and the maximum token distance between them; "Add term" chains a third, with its own distance</li>
           <li>Distance is measured in tokens (words), not characters</li>
+          <li>"Ordered" requires the terms in the order written; otherwise any order counts</li>
+          <li>"Add page term" names a term (up to two) the page must also contain, anywhere; the reader shows it in a second colour</li>
           <li>Each term can use a different search mode (surface, lemma, root)</li>
-          <li>Useful for finding phrases or related concepts</li>
+          <li>A chain split across a page break is found, and attributed to the page holding more of it</li>
         </ul>
       </Section>
 

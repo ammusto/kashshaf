@@ -6,6 +6,7 @@
  */
 
 import type { SearchAPI, CombinedSearchQuery, SearchTerm, NameSearchForm } from './index';
+import type { ProximitySearchQuery, ProximityTerm } from '../types/search';
 import type {
   SearchMode,
   SearchFilters,
@@ -198,23 +199,19 @@ export class OnlineAPI implements SearchAPI {
   }
 
   async proximitySearch(
-    term1: string,
-    field1: SearchMode,
-    term2: string,
-    field2: SearchMode,
-    distance: number,
+    query: ProximitySearchQuery,
     filters: SearchFilters,
     limit: number,
     offset: number
   ): Promise<SearchResults> {
-    const sanitizedTerm1 = stripPunctuation(term1);
-    const sanitizedTerm2 = stripPunctuation(term2);
+    const clean = (t: ProximityTerm) => ({ query: stripPunctuation(t.query), mode: t.mode });
     return fetchAPI<SearchResults>('/search/proximity', {
       method: 'POST',
       body: JSON.stringify({
-        term1: { query: sanitizedTerm1, mode: field1 },
-        term2: { query: sanitizedTerm2, mode: field2 },
-        distance,
+        terms: query.terms.map(clean),
+        distances: query.distances,
+        ordered: query.ordered,
+        and_terms: query.pageTerms.map(clean),
         filters: {
           book_ids: filters.book_ids || [],
         },
@@ -330,6 +327,10 @@ export class OnlineAPI implements SearchAPI {
       params.append('q', t.query);
       params.append('mode', t.mode);
     }
+    for (const t of request.pageTerms ?? []) {
+      params.append('and_q', t.query);
+      params.append('and_mode', t.mode);
+    }
     for (const n of request.namePatterns ?? []) params.append('name', n);
 
     let raw: unknown;
@@ -348,6 +349,7 @@ export class OnlineAPI implements SearchAPI {
                 page_id: pageId,
                 include: request.tokens ? ['tokens'] : [],
                 terms: request.terms ?? [],
+                and_terms: request.pageTerms ?? [],
                 names: request.namePatterns ?? [],
               }),
             });
@@ -363,6 +365,7 @@ export class OnlineAPI implements SearchAPI {
         matches: asBundle.matches ?? null,
         continues_prev: asBundle.continues_prev ?? false,
         continues_next: asBundle.continues_next ?? false,
+        and_matches: asBundle.and_matches ?? null,
       };
     }
     // A bare page: the server predates the bundle, and the expansion of
@@ -376,7 +379,7 @@ export class OnlineAPI implements SearchAPI {
           ? this.getMatchPositionsCombined(id, partIndex, pageId, request.terms)
           : Promise.resolve(null),
     ]);
-    return { page, tokens, matches, continues_prev: false, continues_next: false };
+    return { page, tokens, matches, continues_prev: false, continues_next: false, and_matches: null };
   }
 
   /**

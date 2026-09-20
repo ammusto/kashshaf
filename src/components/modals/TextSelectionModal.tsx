@@ -120,6 +120,25 @@ export function TextSelectionModal({
 
   const [updating, setUpdating] = useState(false);
 
+  // The selection as it was when the modal opened. Picking a text applies
+  // at once (the count in the sidebar follows), so Confirm has nothing left
+  // to do but close; Cancel, the × and Escape put the opening selection
+  // back and close.
+  const [snapshot] = useState(() => new Set(selectedBookIds));
+  const cancel = useCallback(() => {
+    onSelectionChange(new Set(snapshot));
+    onClose();
+  }, [snapshot, onSelectionChange, onClose]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      cancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cancel]);
+
   // Selected Texts tab search
   const [selectedSearch, setSelectedSearch] = useState('');
 
@@ -341,7 +360,8 @@ export function TextSelectionModal({
   return (
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
-      onClick={onClose}
+      onClick={cancel}
+      data-testid="text-selection-backdrop"
     >
       <div
         className="bg-white rounded-xl shadow-app-lg w-[1000px] h-[85vh] flex flex-col"
@@ -352,7 +372,8 @@ export function TextSelectionModal({
           <h2 className="text-xl font-semibold text-app-text-primary">{headerTitle}</h2>
           <div className="flex-1" />
           <button
-            onClick={onClose}
+            onClick={cancel}
+            aria-label="Close"
             className="w-9 h-9 bg-app-surface-variant rounded-lg hover:bg-red-50 hover:text-red-600
                      flex items-center justify-center text-app-text-secondary text-lg transition-colors"
           >
@@ -704,11 +725,36 @@ export function TextSelectionModal({
           </div>
         )}
 
+        {/* The bar at the foot: what is selected, and the way out either way. */}
+        {mode === 'select' && (
+          <div
+            className="px-8 py-4 border-t border-app-border-light flex items-center gap-3 bg-app-surface-variant flex-shrink-0"
+            data-testid="selection-bar"
+          >
+            <span className="text-sm font-medium text-app-text-primary tabular-nums" aria-live="polite">
+              {selectedBookIds.size === 1 ? '1 text selected' : `${selectedBookIds.size.toLocaleString()} texts selected`}
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={cancel}
+              className="px-4 py-2 text-sm font-medium text-app-text-secondary hover:bg-white rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium bg-app-accent text-white rounded-lg hover:bg-app-accent-dark transition-colors"
+            >
+              Confirm
+            </button>
+          </div>
+        )}
+
         {/* Footer for collection modes */}
         {(mode === 'create-collection' || mode === 'edit-collection') && (
           <div className="px-8 py-4 border-t border-app-border-light flex items-center justify-end gap-3 bg-app-surface-variant">
             <button
-              onClick={onClose}
+              onClick={cancel}
               className="px-4 py-2 text-sm font-medium text-app-text-secondary hover:bg-white rounded-lg transition-colors"
             >
               Cancel

@@ -91,9 +91,14 @@ describe('pageFetcherFor', () => {
     await pageFetcherFor(api, { type: 'name', namePatterns: [['ابو حامد']] }, filters)!(250, 0);
     expect(api.nameSearch).toHaveBeenCalledWith([{ patterns: ['ابو حامد'], expand: true }], filters, 250, 0);
 
-    const proximityQuery = { term1: 'الله', field1: 'surface', term2: 'قال', field2: 'lemma', distance: 10 } as never;
+    const proximityQuery = {
+      terms: [{ query: 'الله', mode: 'surface' }, { query: 'قال', mode: 'lemma' }],
+      distances: [10],
+      ordered: false,
+      pageTerms: [],
+    } as never;
     await pageFetcherFor(api, { type: 'proximity', proximityQuery }, filters)!(250, 250);
-    expect(api.proximitySearch).toHaveBeenCalledWith('الله', 'surface', 'قال', 'lemma', 10, filters, 250, 250);
+    expect(api.proximitySearch).toHaveBeenCalledWith(proximityQuery, filters, 250, 250);
 
     const combinedQuery = { andInputs: [], orInputs: [] } as never;
     await pageFetcherFor(api, { type: 'combined', combinedQuery }, filters)!(250, 750);

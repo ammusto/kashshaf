@@ -18,6 +18,12 @@ export interface UseReaderNavigationReturn {
 /**
  * Extract search terms from a search context for fetching match positions
  */
+/** A proximity search's page-level terms, or none. */
+export function pageTermsOf(context: SearchContext): SearchTerm[] {
+  if (context.type !== 'proximity' || !context.proximityQuery) return [];
+  return context.proximityQuery.pageTerms.map((t) => ({ query: t.query, mode: t.mode as SearchMode }));
+}
+
 export function getSearchTermsFromContext(context: SearchContext): SearchTerm[] | null {
   if (context.type === 'combined' && context.combinedQuery) {
     const terms: SearchTerm[] = [];
@@ -35,10 +41,8 @@ export function getSearchTermsFromContext(context: SearchContext): SearchTerm[] 
   }
 
   if (context.type === 'proximity' && context.proximityQuery) {
-    return [
-      { query: context.proximityQuery.term1, mode: context.proximityQuery.field1 as SearchMode },
-      { query: context.proximityQuery.term2, mode: context.proximityQuery.field2 as SearchMode },
-    ];
+    // The chain's terms; the page terms are highlighted apart (`pageTermsOf`).
+    return context.proximityQuery.terms.map((t) => ({ query: t.query, mode: t.mode as SearchMode }));
   }
 
   if (context.type === 'wildcard' && context.wildcardQuery) {

@@ -32,13 +32,16 @@ export interface SearchFormState {
   /** A fresh id for a new input row. */
   nextInputId: () => number;
 
-  // proximity
-  proximityInput1: ProximityInput;
-  setProximityInput1: (v: ProximityInput) => void;
-  proximityInput2: ProximityInput;
-  setProximityInput2: (v: ProximityInput) => void;
-  proximityDistance: number;
-  setProximityDistance: (n: number) => void;
+  // proximity: a chain of two or three terms, a distance per link, the
+  // ordering switch, and up to two terms the page must also carry.
+  proximityTerms: ProximityInput[];
+  setProximityTerms: (v: ProximityInput[]) => void;
+  proximityDistances: number[];
+  setProximityDistances: (v: number[]) => void;
+  proximityOrdered: boolean;
+  setProximityOrdered: (v: boolean) => void;
+  proximityPageTerms: ProximityInput[];
+  setProximityPageTerms: (v: ProximityInput[]) => void;
 
   // names
   nameFormData: NameFormData[];
@@ -60,9 +63,10 @@ export function SearchFormProvider({ children }: { children: ReactNode }) {
   const [orInputs, setOrInputs] = useState<SearchInput[]>([emptyInput(1)]);
   const nextId = useRef(2);
   const nextInputId = useCallback(() => nextId.current++, []);
-  const [proximityInput1, setProximityInput1] = useState<ProximityInput>(emptyProximity());
-  const [proximityInput2, setProximityInput2] = useState<ProximityInput>(emptyProximity());
-  const [proximityDistance, setProximityDistance] = useState(10);
+  const [proximityTerms, setProximityTerms] = useState<ProximityInput[]>([emptyProximity(), emptyProximity()]);
+  const [proximityDistances, setProximityDistances] = useState<number[]>([10]);
+  const [proximityOrdered, setProximityOrdered] = useState(false);
+  const [proximityPageTerms, setProximityPageTerms] = useState<ProximityInput[]>([]);
   const [nameFormData, setNameFormData] = useState<NameFormData[]>([createEmptyNameForm('form-0')]);
   const [generatedPatterns, setGeneratedPatterns] = useState<string[][]>([]);
 
@@ -79,12 +83,14 @@ export function SearchFormProvider({ children }: { children: ReactNode }) {
       orInputs,
       setOrInputs,
       nextInputId,
-      proximityInput1,
-      setProximityInput1,
-      proximityInput2,
-      setProximityInput2,
-      proximityDistance,
-      setProximityDistance,
+      proximityTerms,
+      setProximityTerms,
+      proximityDistances,
+      setProximityDistances,
+      proximityOrdered,
+      setProximityOrdered,
+      proximityPageTerms,
+      setProximityPageTerms,
       nameFormData,
       setNameFormData,
       generatedPatterns,
@@ -97,9 +103,10 @@ export function SearchFormProvider({ children }: { children: ReactNode }) {
       andInputs,
       orInputs,
       nextInputId,
-      proximityInput1,
-      proximityInput2,
-      proximityDistance,
+      proximityTerms,
+      proximityDistances,
+      proximityOrdered,
+      proximityPageTerms,
       nameFormData,
       generatedPatterns,
     ]

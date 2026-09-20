@@ -5,6 +5,7 @@
  */
 
 import type { SearchAPI, CombinedSearchQuery, SearchTerm, NameSearchForm, PageBundle, PageBundleRequest } from './index';
+import type { ProximitySearchQuery } from '../types/search';
 import type {
   SearchMode,
   SearchFilters,
@@ -52,28 +53,12 @@ export class OfflineAPI implements SearchAPI {
   }
 
   async proximitySearch(
-    term1: string,
-    field1: SearchMode,
-    term2: string,
-    field2: SearchMode,
-    distance: number,
+    query: ProximitySearchQuery,
     filters: SearchFilters,
     limit: number,
     offset: number
   ): Promise<SearchResults> {
-    // Convert SearchMode to TokenField for tauri API
-    const tokenField1 = field1 as 'surface' | 'lemma' | 'root';
-    const tokenField2 = field2 as 'surface' | 'lemma' | 'root';
-    return tauri.proximitySearch(
-      term1,
-      tokenField1,
-      term2,
-      tokenField2,
-      distance,
-      filters,
-      limit,
-      offset
-    );
+    return tauri.proximitySearch(query, filters, limit, offset);
   }
 
   async nameSearch(
