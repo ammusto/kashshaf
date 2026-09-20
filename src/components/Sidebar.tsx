@@ -93,10 +93,11 @@ export function Sidebar({
 
   if (!isOpen) {
     return (
-      <div className="w-14 bg-white border-r border-app-border-light flex flex-col items-center py-4 shadow-sm">
+      <div className="w-14 bg-white border-r border-app-border-light flex flex-col items-stretch p-2 shadow-sm">
+        {/* The whole strip opens the sidebar: one tall button. */}
         <button
           onClick={onToggle}
-          className="p-2.5 bg-app-surface-variant rounded-lg hover:bg-app-accent-light transition-colors"
+          className="flex-1 bg-app-surface-variant rounded-lg hover:bg-app-accent-light transition-colors flex items-center justify-center"
           title="Open sidebar (Ctrl+B)"
         >
           <svg className="w-5 h-5 text-app-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
