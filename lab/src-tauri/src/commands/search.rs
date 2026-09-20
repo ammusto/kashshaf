@@ -34,6 +34,23 @@ pub struct Hit {
     pub score: f32,
     /// Token indices the query matched, for the reader's highlight.
     pub matched: Vec<u32>,
+    /// The match runs on from this page onto the next, or in from the one
+    /// before: `matched` is this page's share, `secondary` the other's
+    /// (corpus 4.3.0's boundary index).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub crosses_page: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary: Option<HitSecondary>,
+}
+
+/// The other page of a hit across a page break, and its share of the match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HitSecondary {
+    pub part_index: u32,
+    pub page_id: u64,
+    pub part_label: String,
+    pub page_number: String,
+    pub matched: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

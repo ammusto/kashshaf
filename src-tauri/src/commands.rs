@@ -724,6 +724,23 @@ pub fn get_match_positions_combined(
         .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
 }
 
+/// A page's highlights for the running search, with whether a match runs in
+/// from the page before or out onto the next (corpus 4.3.0's boundary index).
+#[tauri::command]
+pub fn get_page_matches(
+    state: State<'_, ManagedAppState>,
+    id: u64,
+    part_index: u64,
+    page_id: u64,
+    terms: Vec<SearchTerm>,
+) -> Result<kashshaf_engine::PageMatches, KashshafError> {
+    let app_state = require_state(&state)?;
+    app_state
+        .search_engine
+        .get_page_matches(id, part_index, page_id, &terms)
+        .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
+}
+
 #[tauri::command]
 pub fn get_page_with_matches(
     state: State<'_, ManagedAppState>,

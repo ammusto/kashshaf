@@ -402,6 +402,21 @@ impl BookSource for ApiSource {
             score: f32,
             #[serde(default)]
             matched_token_indices: Vec<u32>,
+            #[serde(default)]
+            crosses_page: bool,
+            #[serde(default)]
+            secondary: Option<RespSecondary>,
+        }
+        #[derive(Deserialize)]
+        struct RespSecondary {
+            part_index: u64,
+            page_id: u64,
+            #[serde(default)]
+            part_label: String,
+            #[serde(default)]
+            page_number: String,
+            #[serde(default)]
+            matched_token_indices: Vec<u32>,
         }
         #[derive(Deserialize)]
         struct Resp {
@@ -432,6 +447,14 @@ impl BookSource for ApiSource {
                     body: h.body,
                     score: h.score,
                     matched: h.matched_token_indices,
+                    crosses_page: h.crosses_page,
+                    secondary: h.secondary.map(|s| crate::commands::search::HitSecondary {
+                        part_index: s.part_index as u32,
+                        page_id: s.page_id,
+                        part_label: s.part_label,
+                        page_number: s.page_number,
+                        matched: s.matched_token_indices,
+                    }),
                 })
                 .collect(),
             total: r.total_hits,

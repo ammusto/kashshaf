@@ -63,6 +63,7 @@ fn main() {
             commands::clear_token_cache,
             commands::get_match_positions,
             commands::get_match_positions_combined,
+            commands::get_page_matches,
             commands::get_page_with_matches,
             commands::get_name_match_positions,
             commands::wildcard_search,

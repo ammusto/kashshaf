@@ -11,7 +11,7 @@ use axum::{
 };
 use kashshaf_engine::{
     check_corpus_schema_supported, compute_variants, ensure_corpus_indexes, EngineConfig, PageKey, PageWithMatches,
-    SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, Token, TokenCache,
+    PageMatches, SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, Token, TokenCache,
     VariantsResponse, WalkStatus, WildcardGrammar, MAX_SUPPORTED_DB_SCHEMA,
 };
 use kashshaf_engine::memory::process_memory;
@@ -207,6 +207,8 @@ struct HealthResponse {
     bulk_tokens: bool,
     /// This server has `toc.db`, so `GET /book/{id}/toc` answers (Lab spec 1.5 B2).
     toc: bool,
+    /// Matches across page breaks are found: the corpus ships `boundary_index/` (4.3.0).
+    boundary_index: bool,
     /// Process memory, MiB (working set includes mmapped index pages).
     rss_mb: f64,
     peak_rss_mb: f64,
@@ -276,6 +278,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         .to_string(),
         bulk_tokens: true,
         toc: state.toc.is_some(),
+        boundary_index: state.search_engine.has_boundary_index(),
         rss_mb: mem.rss_mb(),
         peak_rss_mb: mem.peak_rss_mb(),
         private_mb: mem.private_mb(),
@@ -393,6 +396,10 @@ struct PageBundle {
     /// Present when `q`/`mode` pairs or `name` patterns were given: the
     /// token indices to highlight, or none of them.
     matches: Option<Vec<u32>>,
+    /// A match runs in from the page before / out onto the page after
+    /// (corpus 4.3.0's boundary index; false without it).
+    continues_prev: bool,
+    continues_next: bool,
 }
 
 /// The reader's page parameters, read by hand because `q`, `mode` and
@@ -468,14 +475,15 @@ async fn get_page(
     } else {
         None
     };
-    let matches = if !p.names.is_empty() {
-        Some(state.search_engine.get_name_match_positions(p.id, p.part_index, p.page_id, &p.names).map_err(internal)?)
+    let (matches, continues_prev, continues_next) = if !p.names.is_empty() {
+        (Some(state.search_engine.get_name_match_positions(p.id, p.part_index, p.page_id, &p.names).map_err(internal)?), false, false)
     } else if !p.terms.is_empty() {
-        Some(state.search_engine.get_match_positions_combined(p.id, p.part_index, p.page_id, &p.terms).map_err(internal)?)
+        let m = state.search_engine.get_page_matches(p.id, p.part_index, p.page_id, &p.terms).map_err(internal)?;
+        (Some(m.indices), m.continues_prev, m.continues_next)
     } else {
-        None
+        (None, false, false)
     };
-    Ok(Json(Some(PageBundle { page, tokens, matches })).into_response())
+    Ok(Json(Some(PageBundle { page, tokens, matches, continues_prev, continues_next })).into_response())
 }
 
 async fn get_page_by_label(
@@ -501,14 +509,18 @@ async fn get_page_tokens(
         .map_err(internal)
 }
 
+/// Since 0.7.0 the answer is `{ indices, continues_prev, continues_next }`
+/// rather than a bare array: a phrase can run off either edge of the page
+/// (corpus 4.3.0's boundary index), and the reader marks the edge.
 async fn get_match_positions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MatchPositionsQuery>,
-) -> Result<Json<Vec<u32>>, ApiError> {
+) -> Result<Json<PageMatches>, ApiError> {
     let mode = params.mode.unwrap_or(SearchMode::Lemma);
+    let term = SearchTerm { query: params.q.clone(), mode };
     state
         .search_engine
-        .get_match_positions(params.id, params.part_index, params.page_id, &params.q, mode)
+        .get_page_matches(params.id, params.part_index, params.page_id, std::slice::from_ref(&term))
         .map(Json)
         .map_err(internal)
 }
@@ -528,10 +540,10 @@ async fn get_page_with_matches(
 async fn get_match_positions_combined(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MatchPositionsCombinedRequest>,
-) -> Result<Json<Vec<u32>>, ApiError> {
+) -> Result<Json<PageMatches>, ApiError> {
     state
         .search_engine
-        .get_match_positions_combined(req.id, req.part_index, req.page_id, &req.terms)
+        .get_page_matches(req.id, req.part_index, req.page_id, &req.terms)
         .map(Json)
         .map_err(internal)
 }

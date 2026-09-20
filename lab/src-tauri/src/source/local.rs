@@ -450,10 +450,15 @@ impl BookSource for LocalSource {
             .results
             .into_iter()
             .map(|h| {
-                let matched = self
-                    .engine
-                    .get_match_positions_combined(h.id, h.part_index, h.page_id, &terms)
-                    .unwrap_or_default();
+                // A hit across a page break carries its own share of the
+                // match; a page hit is highlighted by the page's positions.
+                let matched = if h.crosses_page {
+                    h.matched_token_indices.clone()
+                } else {
+                    self.engine
+                        .get_match_positions_combined(h.id, h.part_index, h.page_id, &terms)
+                        .unwrap_or_default()
+                };
                 crate::commands::search::Hit {
                     part_index: h.part_index as u32,
                     page_id: h.page_id,
@@ -462,6 +467,14 @@ impl BookSource for LocalSource {
                     body: h.body,
                     score: h.score,
                     matched,
+                    crosses_page: h.crosses_page,
+                    secondary: h.secondary.map(|s| crate::commands::search::HitSecondary {
+                        part_index: s.part_index as u32,
+                        page_id: s.page_id,
+                        part_label: s.part_label,
+                        page_number: s.page_number,
+                        matched: s.matched_token_indices,
+                    }),
                 }
             })
             .collect();
