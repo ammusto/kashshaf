@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Profiler } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { PageEntry, SearchResult, Token } from '../../types';
 import type { SearchAPI } from '../../api';
 import { ReaderPanel } from '../panels/ReaderPanel';
 import { BooksProvider } from '../../contexts/BooksContext';
-import { installLayout, installResizeObserver, type FakeLayout, withPageBundle } from './testLayout';
+import { installLayout, installResizeObserver, type FakeLayout, type FakeResizeObserver, withPageBundle } from './testLayout';
 
 /**
  * Reader navigation as a matrix: every way the view can be asked to move,
@@ -60,10 +61,18 @@ function labelOf(index: number): string {
 interface World {
   api: SearchAPI;
   heights: Map<number, number>;
+  /**
+   * A page whose reported height changes on every measurement, by a few
+   * pixels either way: the layout jitter of a real browser (subpixel
+   * rounding, a selection changing the wrap) that the pinning corrects on
+   * every render.
+   */
+  jitter: { index: number; flip: boolean } | null;
 }
 
 function makeWorld(): World {
   const heights = new Map<number, number>();
+  const jitter = null;
   const api = withPageBundle({
     listBookPages: vi.fn(async () => spine()),
     getPage: vi.fn(async (id: number, part: number, page: number) => {
@@ -88,13 +97,32 @@ function makeWorld(): World {
     getAuthors: vi.fn(async () => [[1, 'مؤلف']]),
     getGenres: vi.fn(async () => []),
   } as unknown as SearchAPI);
-  return { api, heights };
+  return { api, heights, jitter };
 }
 
 let layout: FakeLayout;
+let resizer: FakeResizeObserver;
 let world: World;
+/** Commits of the reader tree, for the settle assertions. */
+let commits = 0;
 
 const pageHeight = (i: number) => world.heights.get(i) ?? PAGE;
+
+/**
+ * The geometry the reader measures boxes from. With `world.jitter` set, one
+ * page's box is a pixel taller on every other render — consistent within a
+ * render, different between renders (the profiler below flips it once per
+ * commit) — while the height the ResizeObserver reports for it stays put:
+ * a real browser's subpixel rounding, which the pin corrects every render.
+ */
+const boxHeight = (i: number) => {
+  const j = world.jitter;
+  if (j && j.index === i) return pageHeight(i) + (j.flip ? 1 : 0);
+  return pageHeight(i);
+};
+
+/** A reader that keeps committing is a loop; past this it is failed rather than waited for. */
+const COMMIT_CAP = 2000;
 
 function anchorOf(index: number) {
   const e = spine()[index];
@@ -105,15 +133,24 @@ function anchorOf(index: number) {
 function mountReader(index: number) {
   const onActivePage = vi.fn();
   const tree = (at: number, matches: boolean) => (
-    <BooksProvider api={world.api}>
-      <ReaderPanel
-        api={world.api}
-        bookId={7}
-        anchor={anchorOf(at)}
-        clickedMatches={matches ? { ...anchorOf(at), indices: [0, 1] } : null}
-        onActivePage={onActivePage}
-      />
-    </BooksProvider>
+    <Profiler
+      id="reader"
+      onRender={() => {
+        commits++;
+        if (world.jitter) world.jitter.flip = !world.jitter.flip;
+        if (commits > COMMIT_CAP) throw new Error(`the reader committed ${commits} times: a render loop`);
+      }}
+    >
+      <BooksProvider api={world.api}>
+        <ReaderPanel
+          api={world.api}
+          bookId={7}
+          anchor={anchorOf(at)}
+          clickedMatches={matches ? { ...anchorOf(at), indices: [0, 1] } : null}
+          onActivePage={onActivePage}
+        />
+      </BooksProvider>
+    </Profiler>
   );
   const view = render(tree(index, false));
   return {
@@ -256,8 +293,9 @@ async function runCell(entry: Entry, target: Target) {
 
 beforeEach(() => {
   world = makeWorld();
-  installResizeObserver(pageHeight);
-  layout = installLayout({ viewportHeight: VIEWPORT, pageHeight });
+  commits = 0;
+  resizer = installResizeObserver(pageHeight);
+  layout = installLayout({ viewportHeight: VIEWPORT, pageHeight: boxHeight });
   vi.stubGlobal('IntersectionObserver', class {
     observe() {}
     unobserve() {}
@@ -286,5 +324,98 @@ describe.each(ENTRIES)('%s', (entry) => {
     if (after.windowChanged) failures.push('mounted window changed on its own afterwards');
     if (after.pageChanged) failures.push('page in view changed on its own afterwards');
     expect(failures, `${entry} → ${target}: ${failures.join('; ')}`).toEqual([]);
+  }, 20000);
+});
+
+// ---------------------------------------------------------------- resize
+//
+// Not a navigation: the pane changes width under mounted pages — the sidebar
+// folds or opens, the window is resized — and every card reports a new
+// height. The reader must settle: the same page in view, and after the quiet
+// period no more commits. A state update from a layout effect on every render
+// once looped here ("Maximum update depth exceeded") when the sidebar
+// reopened over a selection that spanned two cards.
+
+/** A real DOM selection from a word on one card to a word on the next. */
+function selectAcross(a: number, b: number) {
+  const first = document.querySelector(`[data-page-index="${a}"] [data-token]`);
+  const tokens = document.querySelectorAll(`[data-page-index="${b}"] [data-token]`);
+  const last = tokens[tokens.length - 1];
+  if (!first || !last) throw new Error(`cards ${a} and ${b} are not both loaded`);
+  const range = document.createRange();
+  range.setStartBefore(first);
+  range.setEndAfter(last);
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.dispatchEvent(new Event('selectionchange'));
+}
+
+/** The cards re-wrap: every mounted page gets a new height. */
+function rewrap(factor: number) {
+  for (const i of layout.mounted()) world.heights.set(i, Math.round(pageHeight(i) * factor));
+}
+
+type Resize = 'sidebarOpens' | 'sidebarCloses' | 'windowWidth' | 'selectionAcrossCards' | 'jitterAbove';
+const RESIZES: Resize[] = ['sidebarOpens', 'sidebarCloses', 'windowWidth', 'selectionAcrossCards', 'jitterAbove'];
+
+async function applyResize(kind: Resize) {
+  switch (kind) {
+    case 'sidebarOpens':
+      // The pane narrows and the text re-wraps taller.
+      rewrap(1.25);
+      resizer.fire(500);
+      break;
+    case 'sidebarCloses':
+      rewrap(0.8);
+      resizer.fire(1100);
+      break;
+    case 'windowWidth':
+      rewrap(1.1);
+      window.dispatchEvent(new Event('resize'));
+      resizer.fire(700);
+      break;
+    case 'jitterAbove':
+      // The page above the pinned one sits a pixel differently on every
+      // other render, so the pin nudges scrollTop on every render: the
+      // reader must not read a direction of travel off those nudges.
+      world.jitter = { index: 49, flip: false };
+      rewrap(1.25);
+      resizer.fire(500);
+      break;
+    case 'selectionAcrossCards': {
+      // Select from the page in view into the next, then reopen the sidebar.
+      const at = observedIndex()!;
+      await waitFor(() => expect(document.querySelector(`[data-page-index="${at + 1}"] [data-token]`)).toBeTruthy());
+      selectAcross(at, at + 1);
+      rewrap(1.25);
+      resizer.fire(500);
+      break;
+    }
+  }
+}
+
+describe('resize', () => {
+  it.each(RESIZES)('%s: the reader settles within the quiet period', async (kind) => {
+    await openAt(50);
+    const before = observedIndex();
+    expect(before).toBe(50);
+
+    await applyResize(kind);
+    await settled();
+
+    // Settled: the page in view is the one it was, and nothing moves on its own.
+    const after = await quiet();
+    const failures: string[] = [];
+    if (observedIndex() !== before) failures.push(`observed page is ${observedIndex()}, not ${before}`);
+    if (after.scrollMoved) failures.push('scroll moved on its own afterwards');
+    if (after.windowChanged) failures.push('mounted window changed on its own afterwards');
+    if (after.pageChanged) failures.push('page in view changed on its own afterwards');
+    // And quiet: no commits at all once settled.
+    const at = commits;
+    for (let i = 0; i < 3; i++) await layout.settle();
+    await new Promise((r) => setTimeout(r, 100));
+    if (commits !== at) failures.push(`${commits - at} commit(s) after settling`);
+    expect(failures, `${kind}: ${failures.join('; ')}`).toEqual([]);
   }, 20000);
 });

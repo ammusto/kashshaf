@@ -19,3 +19,5 @@ export { TocTree, ancestorsOf, prune, flattenToc, entryForPage } from './compone
 export type { TocEntry, TocRowLike, TocTreeProps } from './components/TocTree';
 export { CROSS_PAGE_MAX_SPAN, LONG_PHRASE_NOTE, phraseExceedsCrossPageSpan, pageLabelC1, continuationLabel, secondaryIsAfter } from './utils/crossPage';
 export type { SecondarySpan } from './utils/crossPage';
+export { ErrorBoundary } from './components/ErrorBoundary';
+export type { ErrorBoundaryProps } from './components/ErrorBoundary';

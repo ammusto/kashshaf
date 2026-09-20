@@ -10,6 +10,7 @@ import { useSearch } from './hooks/useSearch';
 import { useReaderNavigation } from './hooks/useReaderNavigation';
 import { highlightRequestOf } from './utils/highlightRequest';
 import { RateLimitIndicator } from './components/shared/RateLimitIndicator';
+import { ErrorBoundary } from '@kashshaf/shared';
 import { useSidebarForSearch } from './hooks/useSidebarForSearch';
 import { useSearchForm } from './contexts/SearchFormContext';
 import { Sidebar } from './components/Sidebar';
@@ -644,17 +645,20 @@ function App() {
                 onTabClose={closeTab}
               />
 
-              <div style={{ flex: splitterRatio }} className="overflow-hidden shadow-app-md bg-white mb-3 rounded-b-xl">
-                <ReaderPanel
-                  api={api}
-                  bookId={activeTab?.currentBookId ?? null}
-                  anchor={readerAnchor}
-                  clickedMatches={activeTab?.clickedMatches ?? null}
-                  highlight={highlight}
-                  onActivePage={handleActivePage}
-                  onNavigateToLabel={handleNavigateToLabel}
-                  remote={mode === 'online' || isWebTarget()}
-                />
+              <div style={{ flex: splitterRatio }} className="overflow-hidden shadow-app-md bg-white mb-3 rounded-b-xl flex flex-col">
+                {/* A fault in the reader shows a message here, not a white app. */}
+                <ErrorBoundary what="The reader" onError={(e) => console.error('reader failed', e)}>
+                  <ReaderPanel
+                    api={api}
+                    bookId={activeTab?.currentBookId ?? null}
+                    anchor={readerAnchor}
+                    clickedMatches={activeTab?.clickedMatches ?? null}
+                    highlight={highlight}
+                    onActivePage={handleActivePage}
+                    onNavigateToLabel={handleNavigateToLabel}
+                    remote={mode === 'online' || isWebTarget()}
+                  />
+                </ErrorBoundary>
               </div>
 
               <DraggableSplitter ratio={splitterRatio} onDrag={setSplitterRatio} />

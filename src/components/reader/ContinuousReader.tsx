@@ -114,6 +114,10 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   const selfTop = useRef<number | null>(null);
   /** The scroll position last reported, for the direction of travel. */
   const lastTop = useRef(0);
+  /** What was last reported in view, so the same report is not made twice. */
+  const lastReported = useRef<{ indices: number[]; direction: ScrollDirection } | null>(null);
+  /** Which way the user last scrolled; forward until they have. */
+  const lastDirection = useRef<ScrollDirection>(1);
 
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
   const isSelfScroll = (top: number) =>
@@ -170,8 +174,22 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       if (r.bottom > top && r.top < bottom) seen.push(index);
     }
     seen.sort((a, b) => a - b);
-    const direction: ScrollDirection = c.scrollTop < lastTop.current ? -1 : 1;
-    lastTop.current = c.scrollTop;
+    // The direction is the user's last scroll, recorded by the scroll
+    // handler, never read off `scrollTop` here: this runs after every
+    // render, and `repin` nudges `scrollTop` in the same effect, so a
+    // direction derived here flipped between renders, every report differed
+    // from the last, and the state update repeated until React gave up
+    // ("Maximum update depth exceeded", when the sidebar reopened over a
+    // selection that spanned two cards).
+    const direction = lastDirection.current;
+    // And the same pages in the same direction are not reported twice. The
+    // last report is kept here, not in state, so the comparison cannot
+    // itself cause a render.
+    const last = lastReported.current;
+    if (last && last.direction === direction && last.indices.length === seen.length && last.indices.every((v, i) => v === seen[i])) {
+      return;
+    }
+    lastReported.current = { indices: seen, direction };
     setVisible(seen, direction);
   }, [setVisible]);
 
@@ -228,6 +246,9 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       // only scrolls are the reader's own.
       if (placingRef.current || gliding.current) return;
       if (isSelfScroll(c.scrollTop)) return;
+      // A scroll of the user's: the one place the direction of travel is read.
+      if (c.scrollTop !== lastTop.current) lastDirection.current = c.scrollTop < lastTop.current ? -1 : 1;
+      lastTop.current = c.scrollTop;
       // Geometry first; the estimated offsets only answer for a fling that
       // has outrun the mounted window, where there is nothing to measure.
       const index = pageAtTop() ?? indexAtOffset(offsets, c.scrollTop + CARD_GAP + 1);
@@ -342,6 +363,12 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
       });
     }
   }, [placing, pages, heights, mounted, topOf, holdFrame, pin]);
+
+  // A new spine (another book) starts the stack's view over; so does the
+  // record of what was last reported.
+  useEffect(() => {
+    lastReported.current = null;
+  }, [spine]);
 
   // --- hold the visible content still across every re-render, and say
   //     what is in view now that it is

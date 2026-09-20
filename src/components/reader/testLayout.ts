@@ -196,21 +196,51 @@ export function installLayout(options: LayoutOptions = {}): FakeLayout {
   };
 }
 
-/** A ResizeObserver that reports the simulated height once, on observe. */
-export function installResizeObserver(pageHeight: (index: number) => number) {
+export interface FakeResizeObserver {
+  /**
+   * Every observed element reports again, as after a layout change: pages
+   * their current simulated height, anything else (the reader panel's root)
+   * the given width. Called inside `act`.
+   */
+  fire: (width?: number) => void;
+}
+
+/**
+ * A ResizeObserver that reports the simulated height once, on observe, and
+ * again on `fire` — a sidebar opening, a window resized.
+ */
+export function installResizeObserver(pageHeight: (index: number) => number): FakeResizeObserver {
+  const observed = new Map<Element, ResizeObserverCallback>();
+  // Wide enough for the reader and the contents pane side by side; a test
+  // narrows it through `fire`.
+  let rootWidth = 1400;
+  const report = (el: Element, cb: ResizeObserverCallback, ro: ResizeObserver) => {
+    const index = Number((el as HTMLElement).dataset?.pageIndex);
+    const contentRect = Number.isFinite(index) ? { height: pageHeight(index), width: rootWidth } : { height: 600, width: rootWidth };
+    cb([{ target: el, contentRect } as unknown as ResizeObserverEntry], ro);
+  };
   class RO {
     constructor(private cb: ResizeObserverCallback) {}
     observe(el: Element) {
-      const index = Number((el as HTMLElement).dataset?.pageIndex);
-      if (!Number.isFinite(index)) return;
-      const height = pageHeight(index);
-      this.cb(
-        [{ target: el, contentRect: { height, width: 800 } } as unknown as ResizeObserverEntry],
-        this as unknown as ResizeObserver
-      );
+      observed.set(el, this.cb);
+      report(el, this.cb, this as unknown as ResizeObserver);
     }
-    unobserve() {}
-    disconnect() {}
+    unobserve(el: Element) {
+      observed.delete(el);
+    }
+    disconnect() {
+      for (const [el, cb] of [...observed]) if (cb === this.cb) observed.delete(el);
+    }
   }
   vi.stubGlobal('ResizeObserver', RO);
+  return {
+    fire(width?: number) {
+      if (width !== undefined) rootWidth = width;
+      act(() => {
+        for (const [el, cb] of [...observed]) {
+          if (el.isConnected) report(el, cb, {} as ResizeObserver);
+        }
+      });
+    },
+  };
 }

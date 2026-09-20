@@ -19,6 +19,7 @@ import { searchApi, toTerms, type Hit, type SearchInput, type SearchResults } fr
 import { selectedText, tokenRangeOfSelection } from '../../api/selection';
 import { Reader, type Mark } from '../Reader';
 import { TocPane } from './TocPane';
+import { ErrorBoundary } from '@kashshaf/shared';
 import { SearchForm } from './SearchForm';
 import { ResultRow } from './ResultRow';
 import { Splitter, useDragWidth } from '../ui/Splitter';
@@ -623,6 +624,7 @@ export function ReadPanel({
   );
 
   const reader = (
+    <ErrorBoundary what="The reader" onError={(e) => console.error('reader failed', e)}>
     <Reader
       page={page}
       pages={pages.entries.map((e) => ({ book_id: e.book_id, part_index: e.part_index, page_id: e.page_id }))}
@@ -643,6 +645,7 @@ export function ReadPanel({
       loading={loading}
       error={null}
     />
+    </ErrorBoundary>
   );
 
   return (
