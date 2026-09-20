@@ -178,7 +178,7 @@ pub fn parse_wildcard_query(query: &str) -> WildcardQueryInfo {
     result
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchTerm {
     pub query: String,
     pub mode: SearchMode,

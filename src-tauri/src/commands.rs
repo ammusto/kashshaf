@@ -603,26 +603,45 @@ fn token_field_to_search_mode(field: TokenField) -> SearchMode {
 }
 
 #[tauri::command]
+/// A proximity chain (0.7.0): `terms` (two or three), `distances` (one per
+/// link), `ordered`, `and_terms` (up to two page-level terms). The old
+/// two-term arguments are still read when `terms` is absent.
+#[allow(clippy::too_many_arguments)]
 pub async fn proximity_search(
     state: State<'_, ManagedAppState>,
-    term1: String,
-    field1: TokenField,
-    term2: String,
-    field2: TokenField,
-    distance: usize,
+    terms: Option<Vec<SearchTerm>>,
+    distances: Option<Vec<usize>>,
+    ordered: Option<bool>,
+    and_terms: Option<Vec<SearchTerm>>,
+    term1: Option<String>,
+    field1: Option<TokenField>,
+    term2: Option<String>,
+    field2: Option<TokenField>,
+    distance: Option<usize>,
     filters: Option<SearchFilters>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<SearchResults, KashshafError> {
     let app_state = require_state(&state)?;
-    let search_term1 = SearchTerm {
-        query: term1,
-        mode: token_field_to_search_mode(field1),
+    let query = match terms {
+        Some(terms) if !terms.is_empty() => kashshaf_engine::ProximityQuery {
+            terms,
+            distances: distances.unwrap_or_default(),
+            ordered: ordered.unwrap_or(false),
+            and_terms: and_terms.unwrap_or_default(),
+        },
+        _ => {
+            let (Some(term1), Some(term2), Some(distance)) = (term1, term2, distance) else {
+                return Err(KashshafError::Search("a proximity search needs terms and distances".to_string()));
+            };
+            kashshaf_engine::ProximityQuery::pair(
+                &SearchTerm { query: term1, mode: token_field_to_search_mode(field1.unwrap_or(TokenField::Surface)) },
+                &SearchTerm { query: term2, mode: token_field_to_search_mode(field2.unwrap_or(TokenField::Surface)) },
+                distance,
+            )
+        }
     };
-    let search_term2 = SearchTerm {
-        query: term2,
-        mode: token_field_to_search_mode(field2),
-    };
+    query.validate().map_err(|e| KashshafError::Search(e.to_string()))?;
 
     let filters = filters.unwrap_or_default();
     let limit = limit.unwrap_or(50);
@@ -632,14 +651,7 @@ pub async fn proximity_search(
 
     tokio::task::spawn_blocking(move || {
         search_engine
-            .proximity_search(
-                &search_term1,
-                &search_term2,
-                distance,
-                &filters,
-                limit,
-                offset,
-            )
+            .proximity_chain_search(&query, &filters, limit, offset)
             .map_err(|e: anyhow::Error| KashshafError::Search(e.to_string()))
     })
     .await

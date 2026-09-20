@@ -11,7 +11,7 @@ use axum::{
 };
 use kashshaf_engine::{
     check_corpus_schema_supported, compute_variants, ensure_corpus_indexes, EngineConfig, PageKey, PageWithMatches,
-    SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, Token, TokenCache,
+    ProximityQuery, SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults, SearchTerm, Token, TokenCache,
     VariantsResponse, WalkStatus, WildcardGrammar, MAX_SUPPORTED_DB_SCHEMA,
 };
 use kashshaf_engine::memory::process_memory;
@@ -88,13 +88,40 @@ struct CombinedSearchRequest {
 }
 
 #[derive(Deserialize)]
+/// Since 0.7.0 a chain: `terms` (two or three), `distances` (one per
+/// link), `ordered`, and `and_terms` (up to two, each with its mode) that
+/// must be on the page. The two-term form `term1`/`term2`/`distance` is
+/// still read, as the pair it always was.
 struct ProximitySearchRequest {
-    term1: SearchTerm,
-    term2: SearchTerm,
-    distance: usize,
+    #[serde(default)]
+    terms: Vec<SearchTerm>,
+    #[serde(default)]
+    distances: Vec<usize>,
+    #[serde(default)]
+    ordered: bool,
+    #[serde(default)]
+    and_terms: Vec<SearchTerm>,
+    term1: Option<SearchTerm>,
+    term2: Option<SearchTerm>,
+    distance: Option<usize>,
     filters: Option<SearchFilters>,
     limit: Option<usize>,
     offset: Option<usize>,
+}
+
+impl ProximitySearchRequest {
+    fn query(self) -> Result<(ProximityQuery, Option<SearchFilters>, Option<usize>, Option<usize>), ApiError> {
+        let q = if !self.terms.is_empty() {
+            ProximityQuery { terms: self.terms, distances: self.distances, ordered: self.ordered, and_terms: self.and_terms }
+        } else {
+            match (self.term1, self.term2, self.distance) {
+                (Some(a), Some(b), Some(d)) => ProximityQuery::pair(&a, &b, d),
+                _ => return Err(bad_request("a proximity search needs terms and distances, or term1, term2 and distance")),
+            }
+        };
+        q.validate().map_err(bad_request)?;
+        Ok((q, self.filters, self.limit, self.offset))
+    }
 }
 
 #[derive(Deserialize)]
@@ -250,7 +277,7 @@ struct BookMetadata {
     citation_json: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
 }
@@ -350,10 +377,11 @@ async fn proximity_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ProximitySearchRequest>,
 ) -> Result<Json<SearchResults>, ApiError> {
-    let filters = req.filters.unwrap_or_default();
+    let (q, filters, limit, offset) = req.query()?;
+    let filters = filters.unwrap_or_default();
     state
         .search_engine
-        .proximity_search(&req.term1, &req.term2, req.distance, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
+        .proximity_chain_search(&q, &filters, clamp_limit(limit), offset.unwrap_or(0))
         .map(Json)
         .map_err(internal)
 }
@@ -412,6 +440,10 @@ struct PageBundle {
     /// (corpus 4.3.0's boundary index; false without it).
     continues_prev: bool,
     continues_next: bool,
+    /// Present when `and_q`/`and_mode` pairs were given (a proximity
+    /// search's page-level terms): their positions, for a second colour.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    and_matches: Option<Vec<u32>>,
 }
 
 /// The reader's page parameters, read by hand because `q`, `mode` and
@@ -427,6 +459,8 @@ struct PageParams {
     page_id: u64,
     tokens: bool,
     terms: Vec<SearchTerm>,
+    /// A proximity search's page-level terms, highlighted apart.
+    and_terms: Vec<SearchTerm>,
     names: Vec<String>,
 }
 
@@ -437,8 +471,18 @@ fn page_params(pairs: &[(String, String)]) -> Result<PageParams, ApiError> {
     let mut tokens = false;
     let mut queries: Vec<String> = Vec::new();
     let mut modes: Vec<SearchMode> = Vec::new();
+    let mut and_queries: Vec<String> = Vec::new();
+    let mut and_modes: Vec<SearchMode> = Vec::new();
     let mut names: Vec<String> = Vec::new();
     let bad = |what: &str, v: &str| bad_request(format!("{what}: {v:?}"));
+    let mode_of = |v: &str| -> Result<SearchMode, ApiError> {
+        Ok(match v {
+            "surface" => SearchMode::Surface,
+            "lemma" => SearchMode::Lemma,
+            "root" => SearchMode::Root,
+            _ => return Err(bad("mode", v)),
+        })
+    };
     for (k, v) in pairs {
         match k.as_str() {
             "id" => id = Some(v.parse::<u64>().map_err(|_| bad("id", v))?),
@@ -446,28 +490,29 @@ fn page_params(pairs: &[(String, String)]) -> Result<PageParams, ApiError> {
             "page_id" => page_id = Some(v.parse::<u64>().map_err(|_| bad("page_id", v))?),
             "include" => tokens |= v.split(',').any(|x| x.trim() == "tokens"),
             "q" => queries.push(v.clone()),
-            "mode" => modes.push(match v.as_str() {
-                "surface" => SearchMode::Surface,
-                "lemma" => SearchMode::Lemma,
-                "root" => SearchMode::Root,
-                _ => return Err(bad("mode", v)),
-            }),
+            "mode" => modes.push(mode_of(v)?),
+            "and_q" => and_queries.push(v.clone()),
+            "and_mode" => and_modes.push(mode_of(v)?),
             "name" => names.push(v.clone()),
             _ => {}
         }
     }
-    let terms = queries
-        .into_iter()
-        .enumerate()
-        .filter(|(_, q)| !q.trim().is_empty())
-        .map(|(i, query)| SearchTerm { query, mode: modes.get(i).copied().unwrap_or(SearchMode::Lemma) })
-        .collect();
+    let pair_up = |qs: Vec<String>, ms: &[SearchMode]| -> Vec<SearchTerm> {
+        qs.into_iter()
+            .enumerate()
+            .filter(|(_, q)| !q.trim().is_empty())
+            .map(|(i, query)| SearchTerm { query, mode: ms.get(i).copied().unwrap_or(SearchMode::Lemma) })
+            .collect()
+    };
+    let terms = pair_up(queries, &modes);
+    let and_terms = pair_up(and_queries, &and_modes);
     Ok(PageParams {
         id: id.ok_or_else(|| bad_request("id is required"))?,
         part_index,
         page_id: page_id.ok_or_else(|| bad_request("page_id is required"))?,
         tokens,
         terms,
+        and_terms,
         names,
     })
 }
@@ -494,6 +539,8 @@ struct PageBody {
     #[serde(default)]
     terms: Vec<SearchTerm>,
     #[serde(default)]
+    and_terms: Vec<SearchTerm>,
+    #[serde(default)]
     names: Vec<String>,
 }
 
@@ -507,6 +554,7 @@ async fn post_page(
         page_id: body.page_id,
         tokens: body.include.iter().any(|x| x == "tokens"),
         terms: body.terms.into_iter().filter(|t| !t.query.trim().is_empty()).collect(),
+        and_terms: body.and_terms.into_iter().filter(|t| !t.query.trim().is_empty()).collect(),
         names: body.names,
     };
     page_response(&state, p)
@@ -514,7 +562,7 @@ async fn post_page(
 
 fn page_response(state: &AppState, p: PageParams) -> Result<axum::response::Response, ApiError> {
     let page = state.search_engine.get_page(p.id, p.part_index, p.page_id).map_err(internal)?;
-    let bundled = p.tokens || !p.terms.is_empty() || !p.names.is_empty();
+    let bundled = p.tokens || !p.terms.is_empty() || !p.and_terms.is_empty() || !p.names.is_empty();
     if !bundled {
         return Ok(Json(page).into_response());
     }
@@ -536,7 +584,12 @@ fn page_response(state: &AppState, p: PageParams) -> Result<axum::response::Resp
     } else {
         (None, false, false)
     };
-    Ok(Json(Some(PageBundle { page, tokens, matches, continues_prev, continues_next })).into_response())
+    let and_matches = if p.and_terms.is_empty() {
+        None
+    } else {
+        Some(state.search_engine.get_match_positions_combined(p.id, p.part_index, p.page_id, &p.and_terms).map_err(internal)?)
+    };
+    Ok(Json(Some(PageBundle { page, tokens, matches, continues_prev, continues_next, and_matches })).into_response())
 }
 
 async fn get_page_by_label(
@@ -968,4 +1021,69 @@ fn warm_page_cache(paths: &[PathBuf]) {
         paths.len(),
         start.elapsed().as_secs_f64()
     );
+}
+
+#[cfg(test)]
+mod proximity_request_tests {
+    use super::*;
+
+    fn term(q: &str) -> SearchTerm {
+        SearchTerm { query: q.to_string(), mode: SearchMode::Surface }
+    }
+
+    #[test]
+    fn the_old_two_term_body_is_the_pair_it_always_was() {
+        let req: ProximitySearchRequest =
+            serde_json::from_str(r#"{"term1":{"query":"قال","mode":"surface"},"term2":{"query":"الله","mode":"lemma"},"distance":5}"#).unwrap();
+        let (q, _, _, _) = req.query().unwrap();
+        assert!(q.is_plain_pair());
+        assert_eq!(q.terms.len(), 2);
+        assert_eq!(q.distances, vec![5]);
+        assert_eq!(q.terms[1].mode, SearchMode::Lemma);
+    }
+
+    #[test]
+    fn a_chain_body_is_read_with_its_ordering_and_page_terms() {
+        let req: ProximitySearchRequest = serde_json::from_str(
+            r#"{"terms":[{"query":"a","mode":"surface"},{"query":"b","mode":"surface"},{"query":"c","mode":"root"}],
+                "distances":[3,4],"ordered":true,"and_terms":[{"query":"x","mode":"lemma"}],"limit":10}"#,
+        )
+        .unwrap();
+        let (q, _, limit, _) = req.query().unwrap();
+        assert_eq!(q.terms.len(), 3);
+        assert_eq!(q.distances, vec![3, 4]);
+        assert!(q.ordered);
+        assert_eq!(q.and_terms, vec![SearchTerm { mode: SearchMode::Lemma, ..term("x") }]);
+        assert_eq!(limit, Some(10));
+    }
+
+    #[test]
+    fn a_bad_chain_is_a_bad_request() {
+        for body in [
+            r#"{"terms":[{"query":"a","mode":"surface"}],"distances":[]}"#,
+            r#"{"terms":[{"query":"a","mode":"surface"},{"query":"b","mode":"surface"}],"distances":[1,2]}"#,
+            r#"{"terms":[{"query":"a","mode":"surface"},{"query":"b","mode":"surface"},{"query":"c","mode":"surface"},{"query":"d","mode":"surface"}],"distances":[1,2,3]}"#,
+            r#"{"terms":[{"query":"a","mode":"surface"},{"query":"b","mode":"surface"}],"distances":[1],"and_terms":[{"query":"x","mode":"surface"},{"query":"y","mode":"surface"},{"query":"z","mode":"surface"}]}"#,
+            r#"{"term1":{"query":"a","mode":"surface"},"distance":1}"#,
+        ] {
+            let req: ProximitySearchRequest = serde_json::from_str(body).unwrap();
+            let (status, _) = req.query().err().expect(body);
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        }
+    }
+
+    #[test]
+    fn the_page_bundle_reads_page_terms_apart_from_the_chain() {
+        let pairs: Vec<(String, String)> = [
+            ("id", "1"), ("page_id", "7"), ("q", "a"), ("mode", "surface"), ("q", "b"), ("mode", "root"),
+            ("and_q", "x"), ("and_mode", "lemma"), ("and_q", " "), ("and_mode", "surface"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let p = page_params(&pairs).unwrap();
+        assert_eq!(p.terms.len(), 2);
+        assert_eq!(p.terms[1].mode, SearchMode::Root);
+        assert_eq!(p.and_terms, vec![SearchTerm { query: "x".into(), mode: SearchMode::Lemma }]);
+    }
 }
