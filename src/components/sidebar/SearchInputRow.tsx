@@ -1,5 +1,6 @@
 import type { SearchMode } from '../../types';
 import type { SearchInput } from '../../types/search';
+import { LONG_PHRASE_NOTE, phraseExceedsCrossPageSpan } from '@kashshaf/shared';
 
 interface SearchInputRowProps {
   input: SearchInput;
@@ -40,6 +41,14 @@ export function SearchInputRow({
           </button>
         )}
       </div>
+
+      {/* A phrase longer than the boundary index covers (21 tokens) is still
+          searched; it may just miss a page break. No cap, no refusal. */}
+      {phraseExceedsCrossPageSpan(input.query) && (
+        <p className="text-[11px] text-app-text-tertiary" data-testid="long-phrase-note">
+          {LONG_PHRASE_NOTE}
+        </p>
+      )}
 
       {/* Mode Selector */}
       <div className="flex gap-1.5 h-8">

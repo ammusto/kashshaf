@@ -1,3 +1,4 @@
+import type { SecondarySpan } from '../utils/crossPage';
 /**
  * Corpus types shared by the Kashshaf and Kashshaf Lab frontends.
  *
@@ -44,6 +45,13 @@ export interface SearchResult {
   score: number;
   /** Token indices that matched the search query (positions in the token array) */
   matched_token_indices: number[];
+  /**
+   * The match runs on from this page onto the next, or in from the one
+   * before: `matched_token_indices` is this page's share and `secondary`
+   * the other page's (corpus 4.3.0's boundary index).
+   */
+  crosses_page?: boolean;
+  secondary?: SecondarySpan;
 }
 
 // ----------------------------------------------------------------- books ---

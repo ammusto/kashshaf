@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import type { SearchResult } from '../../types';
-import { stripHtml, buildCharToTokenMap, getSnippetRange, getHighlightRanges } from '@kashshaf/shared';
+import { stripHtml, buildCharToTokenMap, getSnippetRange, getHighlightRanges, continuationLabel, secondaryIsAfter } from '@kashshaf/shared';
 import { MetadataTooltip } from '../ui';
 import { useBooks } from '../../contexts/BooksContext';
 
@@ -18,6 +18,13 @@ export function SearchResultRow({
 }: SearchResultRowProps) {
   const { booksMap, authorsMap, genresMap } = useBooks();
   const book = booksMap.get(result.id);
+  // A match across a page break: the row is the primary page's, with its
+  // share highlighted, and says at its edge where the rest is.
+  const isMultiPart = book?.parts == null || book.parts > 1;
+  const continuation =
+    result.crosses_page && result.secondary
+      ? continuationLabel(result.secondary, secondaryIsAfter(result, result.secondary), isMultiPart)
+      : null;
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
 
@@ -123,6 +130,15 @@ export function SearchResultRow({
             {snippetContent}
           </p>
         </div>
+        {continuation && (
+          <span
+            dir="ltr"
+            className="flex-shrink-0 text-[11px] text-app-text-tertiary italic whitespace-nowrap"
+            data-testid="continuation"
+          >
+            {continuation}
+          </span>
+        )}
 
         <div
           className="w-56 flex-shrink-0 min-w-0 cursor-pointer"

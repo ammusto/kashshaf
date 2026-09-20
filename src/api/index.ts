@@ -41,22 +41,9 @@ export interface PageBundle {
   tokens: Token[];
   /** Token indices to highlight, or null when nothing was asked for. */
   matches: number[] | null;
-}
-
-/** What `getPageBundle` should include besides the page. */
-export interface PageBundleRequest {
-  tokens: boolean;
-  /** The running search's terms, for the highlights; none when no search runs. */
-  terms?: SearchTerm[];
-  /** A name search's patterns instead of terms. */
-  namePatterns?: string[];
-}
-
-export interface PageBundle {
-  page: SearchResult;
-  tokens: Token[];
-  /** Token indices to highlight, or null when nothing was asked for. */
-  matches: number[] | null;
+  /** A match runs in from the page before / out onto the page after (corpus 4.3.0). */
+  continues_prev: boolean;
+  continues_next: boolean;
 }
 
 export interface SearchTerm {

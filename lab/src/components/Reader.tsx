@@ -86,6 +86,7 @@ export function Reader({
   onSelectRange,
   onClearSelection,
   highlight,
+  continues,
   highlightClass = 'tok-hit',
   layerClass,
   marks,
@@ -112,6 +113,8 @@ export function Reader({
    * heading (spec §7.3 click-through). Distinct from the user's selection.
    */
   highlight?: [number, number] | null;
+  /** The highlighted hit runs in from the page before / out onto the next: a mark at that edge. */
+  continues?: { prev: boolean; next: boolean } | null;
   /**
    * What to draw the highlight in. Green by default, which is a hit; the
    * reuse panel asks for red on the side that matched (8 D).
@@ -342,6 +345,14 @@ export function Reader({
                 {(labels ?? Pages.empty()).label(page.part_index, page.page_id)}
               </span>
             </div>
+            {continues?.prev && (
+              <div
+                className="mx-8 h-0.5 rounded-full bg-red-300"
+                data-testid="continues-prev"
+                title="The highlighted match begins on the previous page"
+                aria-label="The highlighted match begins on the previous page"
+              />
+            )}
             <div className="px-8 pt-3 pb-6">
           <div
             className="arabic page-body text-2xl select-text break-words"
@@ -397,6 +408,14 @@ export function Reader({
             )}
           </div>
             </div>
+            {continues?.next && (
+              <div
+                className="mx-8 mb-3 h-0.5 rounded-full bg-red-300"
+                data-testid="continues-next"
+                title="The highlighted match continues on the next page"
+                aria-label="The highlighted match continues on the next page"
+              />
+            )}
           </article>
         )}
         {!page && !loading && !error && (

@@ -2,6 +2,10 @@
 
 ## [lab 0.10.0] - 2026-09-15
 
+### Search
+
+A phrase split by a page break is found (corpus 4.3.0). The hit says at its edge where the rest is, and the reader marks the edge of the page the highlight runs off. A phrase of more than 21 words is still searched but may miss a break; the form says so.
+
 ### Name disambiguator
 
 One man is written a dozen ways across a book. The isnād panel has a Name

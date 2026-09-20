@@ -34,6 +34,22 @@ export interface Hit {
   score: number;
   /** Token indices the query matched, for the reader's highlight. */
   matched: number[];
+  /**
+   * The match runs on from this page onto the next, or in from the one
+   * before: `matched` is this page's share, `secondary` the other's
+   * (corpus 4.3.0's boundary index).
+   */
+  crosses_page?: boolean;
+  secondary?: HitSecondary;
+}
+
+/** The other page of a hit across a page break, and its share of the match. */
+export interface HitSecondary {
+  part_index: number;
+  page_id: number;
+  part_label: string;
+  page_number: string;
+  matched: number[];
 }
 
 export interface SearchResults {

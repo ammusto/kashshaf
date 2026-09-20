@@ -1,4 +1,5 @@
 import type { SearchInput, SearchMode } from '../../api/search';
+import { LONG_PHRASE_NOTE, phraseExceedsCrossPageSpan } from '@kashshaf/shared';
 
 /**
  * The search form, permanently in the panel's left rail (Phase 7 B).
@@ -143,6 +144,14 @@ function Row({
           </button>
         )}
       </div>
+
+      {/* A phrase longer than the boundary index covers (21 tokens) is still
+          searched; it may just miss a page break. No cap, no refusal. */}
+      {phraseExceedsCrossPageSpan(input.query) && (
+        <p className="text-[11px] text-app-text-tertiary" data-testid="long-phrase-note">
+          {LONG_PHRASE_NOTE}
+        </p>
+      )}
 
       <div className="flex gap-1.5 h-8">
         {(['surface', 'lemma', 'root'] as SearchMode[]).map((mode) => (

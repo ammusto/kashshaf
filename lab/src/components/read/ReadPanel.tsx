@@ -179,6 +179,8 @@ export function ReadPanel({
   const [partInput, setPartInput] = useState('');
   const [pageInput, setPageInput] = useState('');
   const [mark, setMark] = useState<[number, number] | null>(highlight ?? null);
+  /** The marked hit runs in from the page before / out onto the next (corpus 4.3.0). */
+  const [markContinues, setMarkContinues] = useState<{ prev: boolean; next: boolean } | null>(null);
 
   const textRef = useRef<HTMLDivElement>(null);
   const { width: railWidth, handle: railHandle } = useDragWidth('lab.read.rail', 300, 220, 520);
@@ -256,6 +258,7 @@ export function ReadPanel({
         setIndex(next);
         setPage(p);
         setMark(marked);
+        setMarkContinues(null);
         setSelection(null);
         const at = { part_index: entry.part_index, page_id: entry.page_id };
         mem.at = at;
@@ -512,7 +515,13 @@ export function ReadPanel({
   const showHit = (hit: Hit) => {
     const i = pages.indexOf(hit.part_index, hit.page_id);
     if (i < 0) return;
-    void go(i, hit.matched.length ? [Math.min(...hit.matched), Math.max(...hit.matched) + 1] : null);
+    void go(i, hit.matched.length ? [Math.min(...hit.matched), Math.max(...hit.matched) + 1] : null).then(() => {
+      // A hit across a page break: mark the edge of the card it runs off.
+      if (hit.crosses_page && hit.secondary) {
+        const j = pages.indexOf(hit.secondary.part_index, hit.secondary.page_id);
+        setMarkContinues(j > i ? { prev: false, next: true } : { prev: true, next: false });
+      }
+    });
   };
 
   // --- render --------------------------------------------------------------
@@ -620,6 +629,7 @@ export function ReadPanel({
       index={index}
       onNavigate={(i) => void go(i)}
       highlight={mark}
+      continues={markContinues}
       highlightClass={highlightClass}
       labels={pages}
       marks={marks}

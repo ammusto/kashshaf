@@ -17,3 +17,5 @@ export { TokenPopup } from './components/TokenPopup';
 export type { TokenPopupProps } from './components/TokenPopup';
 export { TocTree, ancestorsOf, prune, flattenToc, entryForPage } from './components/TocTree';
 export type { TocEntry, TocRowLike, TocTreeProps } from './components/TocTree';
+export { CROSS_PAGE_MAX_SPAN, LONG_PHRASE_NOTE, phraseExceedsCrossPageSpan, pageLabelC1, continuationLabel, secondaryIsAfter } from './utils/crossPage';
+export type { SecondarySpan } from './utils/crossPage';

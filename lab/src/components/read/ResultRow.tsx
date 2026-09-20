@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { secondaryIsAfter } from '@kashshaf/shared';
 import { createPortal } from 'react-dom';
 import { buildCharToTokenMap, getHighlightRanges, getSnippetRange } from '@kashshaf/shared';
 import type { Hit } from '../../api/search';
@@ -83,6 +84,19 @@ export function ResultRow({
             {snippet}
           </p>
         </div>
+        {/* A match across a page break: this row is the primary page's, and
+            says at its edge where the rest is (C1 label). */}
+        {hit.crosses_page && hit.secondary && (
+          <span dir="ltr" className="flex-shrink-0 text-[11px] text-app-text-tertiary italic whitespace-nowrap" data-testid="continuation">
+            {(() => {
+              const i = pages.indexOf(hit.part_index, hit.page_id);
+              const j = pages.indexOf(hit.secondary.part_index, hit.secondary.page_id);
+              const after = i >= 0 && j >= 0 ? j > i : secondaryIsAfter(hit, hit.secondary);
+              return `${after ? 'continues on' : 'continues from'} p. ${pages.label(hit.secondary.part_index, hit.secondary.page_id)}`;
+            })()}
+          </span>
+        )}
+
 
         <div
           className="w-56 flex-shrink-0 min-w-0"

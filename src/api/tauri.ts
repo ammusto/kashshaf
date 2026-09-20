@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { PageBundle, PageBundleRequest } from './index';
+import type { PageBundle, PageBundleRequest, SearchTerm } from './index';
 import type {
   SearchMode,
   SearchFilters,
@@ -71,12 +71,28 @@ export async function getPageBundle(
   const [tokens, matches] = await Promise.all([
     request.tokens ? getPageTokens(id, partIndex, pageId) : Promise.resolve([] as Token[]),
     request.namePatterns && request.namePatterns.length > 0
-      ? getNameMatchPositions(id, partIndex, pageId, request.namePatterns)
+      ? getNameMatchPositions(id, partIndex, pageId, request.namePatterns).then((indices) => ({ indices, continues_prev: false, continues_next: false }))
       : request.terms && request.terms.length > 0
-        ? getMatchPositionsCombined(id, partIndex, pageId, request.terms)
+        ? getPageMatches(id, partIndex, pageId, request.terms)
         : Promise.resolve(null),
   ]);
-  return { page, tokens, matches };
+  return {
+    page,
+    tokens,
+    matches: matches?.indices ?? null,
+    continues_prev: matches?.continues_prev ?? false,
+    continues_next: matches?.continues_next ?? false,
+  };
+}
+
+/** A page's highlights with whether a match runs off either edge (`get_page_matches`). */
+export async function getPageMatches(
+  id: number,
+  partIndex: number,
+  pageId: number,
+  terms: SearchTerm[]
+): Promise<{ indices: number[]; continues_prev: boolean; continues_next: boolean }> {
+  return invoke('get_page_matches', { id, partIndex, pageId, terms });
 }
 
 /** The book's page spine in reading order (`list_book_pages`). */

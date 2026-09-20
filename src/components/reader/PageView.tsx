@@ -18,6 +18,8 @@ interface PageViewProps {
   tokens: Token[];
   /** Token indices to highlight on this page, for the search that is running. */
   matched: readonly number[];
+  /** A highlighted match runs in from the page before / out onto the next: a mark at that edge. */
+  continues?: { prev: boolean; next: boolean };
   /** `part_label:page_number`, or the page number alone in a single-part book. */
   label: string;
   /** This page opens a new part: draw the divider above it. */
@@ -63,6 +65,7 @@ export function PageView({
   body,
   tokens,
   matched,
+  continues,
   label,
   startsPart,
   partLabel,
@@ -124,6 +127,16 @@ export function PageView({
         <div className="flex justify-end px-10 pt-5 select-none">
           <span className="text-xs font-medium text-app-text-tertiary tabular-nums">{label}</span>
         </div>
+        {/* A match that began on the page before: a mark at the top edge,
+            where the text starts. Colour only, like the highlight itself. */}
+        {continues?.prev && (
+          <div
+            className="mx-10 h-0.5 rounded-full bg-red-300"
+            data-testid="continues-prev"
+            title="The highlighted match begins on the previous page"
+            aria-label="The highlighted match begins on the previous page"
+          />
+        )}
         <div className="px-10 pt-3 pb-8">
           <div dir="rtl" className="text-xl leading-loose font-arabic text-app-text-primary select-text">
             {runs.map((run, i) => {
@@ -152,6 +165,15 @@ export function PageView({
             })}
           </div>
         </div>
+        {/* And one that runs on to the next page: a mark at the bottom edge. */}
+        {continues?.next && (
+          <div
+            className="mx-10 mb-3 h-0.5 rounded-full bg-red-300"
+            data-testid="continues-next"
+            title="The highlighted match continues on the next page"
+            aria-label="The highlighted match continues on the next page"
+          />
+        )}
       </article>
     </div>
   );

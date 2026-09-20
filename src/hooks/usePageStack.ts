@@ -22,6 +22,9 @@ export interface LoadedPage {
   matches: number[] | null;
   /** The `HighlightRequest.key` the page was fetched under; null when there was none. */
   highlightKey: string | null;
+  /** A match runs in from the page before / out onto the page after. */
+  continuesPrev: boolean;
+  continuesNext: boolean;
 }
 
 export interface PageAnchor {
@@ -236,7 +239,15 @@ export function usePageStack({ api, bookId, anchor, highlight = null }: UsePageS
           }
           setPages((prev) => {
             const next = new Map(prev);
-            next.set(i, { entry, body: bundle.page.body ?? '', tokens: bundle.tokens, matches: bundle.matches, highlightKey: key });
+            next.set(i, {
+              entry,
+              body: bundle.page.body ?? '',
+              tokens: bundle.tokens,
+              matches: bundle.matches,
+              highlightKey: key,
+              continuesPrev: bundle.continues_prev ?? false,
+              continuesNext: bundle.continues_next ?? false,
+            });
             return next;
           });
         })

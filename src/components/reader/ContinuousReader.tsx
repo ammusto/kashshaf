@@ -48,6 +48,8 @@ interface ContinuousReaderProps {
   stack: PageStack;
   /** Highlights for a page, by its spine index. */
   matchesFor: (index: number) => readonly number[];
+  /** Whether a highlighted match runs off the top or the bottom of a page. */
+  continuesFor?: (index: number) => { prev: boolean; next: boolean };
   onWordClick: (e: React.MouseEvent, token: Token) => void;
   /** Called with the page the reader is on whenever it changes. */
   onActivePage: (entry: PageEntry, index: number) => void;
@@ -88,6 +90,7 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
   {
     stack,
     matchesFor,
+    continuesFor,
     onWordClick,
     onActivePage,
     multiPart,
@@ -391,6 +394,7 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
         body={loaded.body}
         tokens={loaded.tokens}
         matched={matchesFor(i)}
+        continues={continuesFor?.(i)}
         label={pageLabel(entry, multiPart)}
         startsPart={startsPart}
         partLabel={entry.part_label ? `Part ${entry.part_label}` : `Part ${entry.part_index + 1}`}

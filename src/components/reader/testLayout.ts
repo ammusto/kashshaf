@@ -21,7 +21,9 @@ export function withPageBundle<T extends object>(api: T): T & SearchAPI {
             ? a.getMatchPositionsCombined(id, part, page, request.terms)
             : Promise.resolve(null),
       ]);
-      return { page: p, tokens, matches };
+      // A mock may say where a match runs off the page (`continuesFor`).
+      const continues = (a as { continuesFor?: (part: number, page: number) => { prev: boolean; next: boolean } }).continuesFor?.(part, page);
+      return { page: p, tokens, matches, continues_prev: continues?.prev ?? false, continues_next: continues?.next ?? false };
     });
   }
   return a as T & SearchAPI;

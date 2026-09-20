@@ -1,4 +1,5 @@
 import type { TokenField } from '../../types';
+import { LONG_PHRASE_NOTE, phraseExceedsCrossPageSpan } from '@kashshaf/shared';
 
 export interface ProximityInput {
   term: string;
@@ -31,6 +32,12 @@ export function ProximityInputRow({
                    text-right font-arabic bg-white text-lg"
         />
       </div>
+
+      {phraseExceedsCrossPageSpan(input.term) && (
+        <p className="text-[11px] text-app-text-tertiary" data-testid="long-phrase-note">
+          {LONG_PHRASE_NOTE}
+        </p>
+      )}
 
       {/* Field Selector */}
       <div className="flex gap-1.5 h-8">

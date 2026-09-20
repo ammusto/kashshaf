@@ -178,6 +178,16 @@ export function ReaderPanel({
     [stack.spine, stack.pages, highlight, clickedMatches]
   );
 
+  /** Where a highlighted match runs off the card, for the marks at its edges. */
+  const continuesFor = useCallback(
+    (index: number): { prev: boolean; next: boolean } => {
+      const loaded = stack.pages.get(index);
+      if (!loaded || loaded.highlightKey !== (highlight?.key ?? null)) return { prev: false, next: false };
+      return { prev: loaded.continuesPrev, next: loaded.continuesNext };
+    },
+    [stack.pages, highlight]
+  );
+
   const handleGoClick = async () => {
     const partLabel = partLabelInput.trim();
     const pageNumber = pageNumberInput.trim();
@@ -331,6 +341,7 @@ export function ReaderPanel({
           ref={readerRef}
           stack={stack}
           matchesFor={matchesForIndex}
+          continuesFor={continuesFor}
           onWordClick={handleWordClick}
           onActivePage={handleActivePage}
           multiPart={multiPart}

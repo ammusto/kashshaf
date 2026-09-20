@@ -331,7 +331,13 @@ export class OnlineAPI implements SearchAPI {
     if (raw === null || raw === undefined) return null;
     const asBundle = raw as Partial<PageBundle>;
     if (asBundle.page) {
-      return { page: asBundle.page, tokens: asBundle.tokens ?? [], matches: asBundle.matches ?? null };
+      return {
+        page: asBundle.page,
+        tokens: asBundle.tokens ?? [],
+        matches: asBundle.matches ?? null,
+        continues_prev: asBundle.continues_prev ?? false,
+        continues_next: asBundle.continues_next ?? false,
+      };
     }
     // A bare page: the server predates the bundle.
     const page = raw as SearchResult;
@@ -343,7 +349,7 @@ export class OnlineAPI implements SearchAPI {
           ? this.getMatchPositionsCombined(id, partIndex, pageId, request.terms)
           : Promise.resolve(null),
     ]);
-    return { page, tokens, matches };
+    return { page, tokens, matches, continues_prev: false, continues_next: false };
   }
 
   /**
@@ -406,7 +412,10 @@ export class OnlineAPI implements SearchAPI {
       mode,
     });
 
-    return fetchAPI<number[]>(`/page/matches?${params}`);
+    // Since 0.7.0 the server answers { indices, continues_prev, continues_next };
+    // before that, a bare array. Both are read.
+    const raw = await fetchAPI<number[] | { indices: number[] }>(`/page/matches?${params}`);
+    return Array.isArray(raw) ? raw : raw.indices;
   }
 
   async getMatchPositionsCombined(

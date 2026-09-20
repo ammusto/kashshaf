@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.7.0] — unreleased
+
+**Search.** A phrase or a proximity pair split by a page break is found. Such a result sits on the page holding more of it and says at its edge *continues on p. 11* or *continues from p. 10*; in the reader a mark at the card's edge shows where the highlight runs on. Needs corpus 4.3.0. A phrase of more than 21 words is still searched but may miss a break, and the form says so.
+
 ## [0.6.0] — 2026-09-19
 
 **Reading.** Pages scroll continuously and look like pages. Search highlights follow you as you scroll.
