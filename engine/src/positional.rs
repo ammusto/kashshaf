@@ -375,6 +375,19 @@ pub fn proximity_matcher(max_distance: u32) -> impl Fn(&[Vec<u32>], bool) -> Opt
     }
 }
 
+/// Chain matcher: one slot per term, consecutive slots within their link's
+/// distance, in order when `ordered`. Two unordered slots behave exactly as
+/// `proximity_matcher`.
+pub fn chain_matcher(distances: Vec<u32>, ordered: bool) -> impl Fn(&[Vec<u32>], bool) -> Option<Vec<u32>> {
+    move |p: &[Vec<u32>], want: bool| {
+        if !forward::has_chain(p, &distances, ordered) {
+            return None;
+        }
+        let lens = vec![1u32; p.len()];
+        Some(if want { forward::chain_positions(p, &lens, &distances, ordered) } else { Vec::new() })
+    }
+}
+
 /// Phrase matcher: slot k must occur at `start + k` for every k.
 pub fn phrase_matcher() -> impl Fn(&[Vec<u32>], bool) -> Option<Vec<u32>> {
     move |p: &[Vec<u32>], want: bool| {

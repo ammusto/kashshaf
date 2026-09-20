@@ -153,13 +153,14 @@ pub struct CrossHit {
 }
 
 /// What is being matched, in the boundary document's positions.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum MatchKind {
     /// Consecutive slots, one per word.
     Phrase,
-    /// Two sides of `len1` and `len2` consecutive slots within `max_distance`
-    /// of each other, measured between the sides' first words.
-    Proximity { len1: usize, len2: usize, max_distance: u32 },
+    /// A chain of terms, each of `lens[k]` consecutive slots, consecutive
+    /// terms within `distances[k]` of each other measured between their
+    /// first words, in order when `ordered`.
+    Proximity { lens: Vec<usize>, distances: Vec<u32>, ordered: bool },
 }
 
 /// What a scan may draw on besides the index: the forward index, for
@@ -170,6 +171,26 @@ pub struct ScanSources {
     pub cache: Option<Arc<TokenCache>>,
     pub triples: Option<Arc<TripleMaps>>,
     pub threshold: usize,
+    /// Page-level AND terms of a proximity search, one set per slot of each:
+    /// a hit across a break keeps only if every term is on either of its two
+    /// pages, checked on the forward index.
+    pub and_terms: Vec<Vec<Vec<u32>>>,
+}
+
+/// The page-level check on both pages of a cross hit.
+struct AndOnEitherPage {
+    cache: Arc<TokenCache>,
+    triples: Arc<TripleMaps>,
+    terms: Vec<Vec<Members>>,
+}
+
+impl AndOnEitherPage {
+    fn passes(&self, left: PageKey, right: PageKey) -> bool {
+        let Ok(ids) = self.cache.get_ids_batch(&[left, right]) else { return false };
+        let page = |k: PageKey| -> Vec<u32> { ids.get(&k).map(|d| d.iter().map(|&x| self.triples.triple_of_def(x)).collect()).unwrap_or_default() };
+        let (l, r) = (page(left), page(right));
+        self.terms.iter().all(|sets| !forward::phrase_starts(&l, sets).is_empty() || !forward::phrase_starts(&r, sets).is_empty())
+    }
 }
 
 /// Straddle test for a span `s..=e`: it starts before the midpoint and ends at or past it.
@@ -195,7 +216,7 @@ fn phrase_starts(slots: &[Vec<u32>]) -> Vec<u32> {
 }
 
 /// The matcher's decision for one document: the positions to keep and the attribution.
-fn decide(kind: MatchKind, slots: &[Vec<u32>]) -> Option<(Vec<u32>, Attribution)> {
+fn decide(kind: &MatchKind, slots: &[Vec<u32>]) -> Option<(Vec<u32>, Attribution)> {
     match kind {
         MatchKind::Phrase => {
             let n = slots.len() as u32;
@@ -216,27 +237,27 @@ fn decide(kind: MatchKind, slots: &[Vec<u32>]) -> Option<(Vec<u32>, Attribution)
             out.dedup();
             Some((out, attr))
         }
-        MatchKind::Proximity { len1, len2, max_distance } => {
-            let starts1 = phrase_starts(&slots[..len1]);
-            let starts2 = phrase_starts(&slots[len1..]);
-            let (l1, l2) = (len1 as u32, len2 as u32);
+        MatchKind::Proximity { lens, distances, ordered } => {
+            // Each term's starts, from its run of slots.
+            let mut starts: Vec<Vec<u32>> = Vec::with_capacity(lens.len());
+            let mut at = 0;
+            for &l in lens {
+                starts.push(phrase_starts(&slots[at..at + l]));
+                at += l;
+            }
             let mut out: Vec<u32> = Vec::new();
             let mut attr: Option<Attribution> = None;
-            for &p in &starts1 {
-                for &q in &starts2 {
-                    if p.abs_diff(q) > max_distance {
-                        continue;
-                    }
-                    // One side before the midpoint, the other at or past it.
-                    if (p < SIDE) == (q < SIDE) {
-                        continue;
-                    }
-                    let (s, e) = (p.min(q), p.max(q));
-                    if attr.is_none() {
-                        attr = Some(Attribution { start: s, end: e, primary_is_left: left_owns(s, e) });
-                    }
-                    out.extend(p..(p + l1).min(WIDTH));
-                    out.extend(q..(q + l2).min(WIDTH));
+            for t in chain_tuples_pub(&starts, distances, *ordered) {
+                // A straddle: at least one term on each side of the break.
+                let (lo, hi) = (*t.iter().min().unwrap(), *t.iter().max().unwrap());
+                if !(lo < SIDE && hi >= SIDE) {
+                    continue;
+                }
+                if attr.is_none() {
+                    attr = Some(Attribution { start: lo, end: hi, primary_is_left: left_owns(lo, hi) });
+                }
+                for (k, &s) in t.iter().enumerate() {
+                    out.extend(s..(s + lens[k] as u32).min(WIDTH));
                 }
             }
             let attr = attr?;
@@ -247,9 +268,33 @@ fn decide(kind: MatchKind, slots: &[Vec<u32>]) -> Option<(Vec<u32>, Attribution)
     }
 }
 
+/// The chain's tuples, as `forward` walks them (one start per term).
+fn chain_tuples_pub(starts: &[Vec<u32>], distances: &[u32], ordered: bool) -> Vec<Vec<u32>> {
+    let mut tuples: Vec<Vec<u32>> = starts.first().map(|s0| s0.iter().map(|&s| vec![s]).collect()).unwrap_or_default();
+    for (k, next) in starts.iter().enumerate().skip(1) {
+        let d = distances[k - 1];
+        let mut grown = Vec::new();
+        for t in &tuples {
+            let prev = *t.last().unwrap();
+            for &n in next {
+                if forward::link_ok(prev, n, d, ordered) {
+                    let mut u = t.clone();
+                    u.push(n);
+                    grown.push(u);
+                }
+            }
+        }
+        tuples = grown;
+        if tuples.is_empty() {
+            break;
+        }
+    }
+    tuples
+}
+
 /// The same decision from a rebuilt window: each slot's positions are the
 /// window indices whose triple its set holds. Padding is 0, in no set.
-fn decide_from_window(kind: MatchKind, window: &[u32], members: &[Members]) -> Option<(Vec<u32>, Attribution)> {
+fn decide_from_window(kind: &MatchKind, window: &[u32], members: &[Members]) -> Option<(Vec<u32>, Attribution)> {
     let slots: Vec<Vec<u32>> = members
         .iter()
         .map(|m| window.iter().enumerate().filter(|(_, &t)| t != 0 && forward::TripleSet::contains(m, t)).map(|(i, _)| i as u32).collect())
@@ -366,6 +411,20 @@ impl BoundaryIndex {
             (true, Some(c), Some(t)) => Some((c.clone(), t.clone())),
             (true, _, _) => return None,
         };
+        // Page-level AND terms need the forward index too; without it the
+        // hits could not be checked and none are made.
+        let and_check = if sources.and_terms.is_empty() {
+            None
+        } else {
+            match (&sources.cache, &sources.triples) {
+                (Some(c), Some(t)) => Some(AndOnEitherPage {
+                    cache: c.clone(),
+                    triples: t.clone(),
+                    terms: sources.and_terms.iter().map(|sets| sets.iter().map(|s| Members::from_ids(s, sources.threshold)).collect()).collect(),
+                }),
+                _ => return None,
+            }
+        };
         let filter = self.filter_query(filters);
         let (tx, rx) = sync_channel::<CrossHit>(STREAM_DEPTH);
         let index = Arc::clone(self);
@@ -375,6 +434,7 @@ impl BoundaryIndex {
             .spawn(move || {
                 let searcher = index.reader.searcher();
                 let Ok(columns) = Columns::open(&searcher, 0, index.fields) else { return };
+                let tx = Gate { tx, and_check };
                 let result = match forward {
                     None => index.scan_positional(&searcher, kind, &sets, filter.as_deref(), columns, tx),
                     Some((cache, triples)) => index.scan_hybrid(&searcher, kind, &sets, threshold, filter.as_deref(), columns, cache, triples, tx),
@@ -388,10 +448,10 @@ impl BoundaryIndex {
     }
 
     /// Narrow slots: the positional intersection, one cursor per triple.
-    fn scan_positional(&self, searcher: &Searcher, kind: MatchKind, sets: &[Vec<u32>], filter: Option<&dyn Query>, columns: Columns, tx: SyncSender<CrossHit>) -> Result<()> {
+    fn scan_positional(&self, searcher: &Searcher, kind: MatchKind, sets: &[Vec<u32>], filter: Option<&dyn Query>, columns: Columns, tx: Gate) -> Result<()> {
         let attribution: RefCell<Option<Attribution>> = RefCell::new(None);
         let matcher = |slots: &[Vec<u32>], _want: bool| -> Option<Vec<u32>> {
-            let (positions, attr) = decide(kind, slots)?;
+            let (positions, attr) = decide(&kind, slots)?;
             *attribution.borrow_mut() = Some(attr);
             Some(positions)
         };
@@ -413,7 +473,7 @@ impl BoundaryIndex {
         columns: Columns,
         cache: Arc<TokenCache>,
         triples: Arc<TripleMaps>,
-        tx: SyncSender<CrossHit>,
+        tx: Gate,
     ) -> Result<()> {
         let members: Vec<Members> = sets.iter().map(|s| Members::from_ids(s, threshold)).collect();
         let mut on_chunk = |chunk: &[DocAddress]| -> tantivy::Result<bool> {
@@ -432,9 +492,9 @@ impl BoundaryIndex {
                 let left: Vec<u32> = left.iter().map(|&d| triples.triple_of_def(d)).collect();
                 let right: Vec<u32> = right.iter().map(|&d| triples.triple_of_def(d)).collect();
                 let (w, _) = window(&left, &right);
-                let Some((positions, attr)) = decide_from_window(kind, &w, &members) else { continue };
+                let Some((positions, attr)) = decide_from_window(&kind, &w, &members) else { continue };
                 let hit = columns.cross_hit(a.doc_id, &positions, attr);
-                if tx.send(hit).is_err() {
+                if !tx.send(hit) {
                     return Ok(false);
                 }
             }
@@ -540,10 +600,30 @@ pub fn split_positions(positions: &[u32], page_len_left: u32) -> (Vec<u32>, Vec<
     (left, right)
 }
 
+/// The channel to the consumer, behind the page-level AND check when there
+/// is one: a hit whose pages lack an AND term is dropped here. `send` is
+/// false once the consumer is gone.
+struct Gate {
+    tx: SyncSender<CrossHit>,
+    and_check: Option<AndOnEitherPage>,
+}
+
+impl Gate {
+    fn send(&self, hit: CrossHit) -> bool {
+        if let Some(check) = &self.and_check {
+            let (left, right) = if hit.primary_is_left { (hit.primary, hit.secondary) } else { (hit.secondary, hit.primary) };
+            if !check.passes(left, right) {
+                return true;
+            }
+        }
+        self.tx.send(hit).is_ok()
+    }
+}
+
 /// The positional scan's sink: every straddling document goes down the
 /// channel; a closed channel (the consumer is done) stops the scan.
 struct ChannelSink<'a> {
-    tx: SyncSender<CrossHit>,
+    tx: Gate,
     attribution: &'a RefCell<Option<Attribution>>,
     columns: Columns,
 }
@@ -556,7 +636,7 @@ impl StreamSink for ChannelSink<'_> {
     fn on_hit(&mut self, hit: PositionalHit) -> bool {
         let Some(attr) = self.attribution.borrow_mut().take() else { return true };
         let cross = self.columns.cross_hit(hit.addr.doc_id, &hit.positions, attr);
-        self.tx.send(cross).is_ok()
+        self.tx.send(cross)
     }
 
     fn tick(&mut self) -> bool {
@@ -719,7 +799,7 @@ mod tests {
     fn a_phrase_split_seven_two_belongs_to_the_left_page() {
         // Nine words: seven on the left (13..=19), two on the right (20, 21).
         let s: Vec<Vec<u32>> = (0..9).map(|k| vec![13 + k]).collect();
-        let (positions, attr) = decide(MatchKind::Phrase, &s).unwrap();
+        let (positions, attr) = decide(&MatchKind::Phrase, &s).unwrap();
         assert_eq!(positions, (13..=21).collect::<Vec<_>>());
         assert!(attr.primary_is_left);
         let (l, r) = split_positions(&positions, 20);
@@ -730,43 +810,59 @@ mod tests {
     #[test]
     fn a_phrase_split_two_seven_belongs_to_the_right_page() {
         let s: Vec<Vec<u32>> = (0..9).map(|k| vec![18 + k]).collect();
-        let (_, attr) = decide(MatchKind::Phrase, &s).unwrap();
+        let (_, attr) = decide(&MatchKind::Phrase, &s).unwrap();
         assert!(!attr.primary_is_left);
     }
 
     #[test]
     fn an_even_split_goes_to_the_earlier_page() {
         let s: Vec<Vec<u32>> = (0..8).map(|k| vec![16 + k]).collect();
-        let (_, attr) = decide(MatchKind::Phrase, &s).unwrap();
+        let (_, attr) = decide(&MatchKind::Phrase, &s).unwrap();
         assert!(attr.primary_is_left, "16 + 23 = 39: the left page");
     }
 
     #[test]
     fn a_phrase_wholly_on_one_side_is_the_main_index_s() {
         let left: Vec<Vec<u32>> = (0..3).map(|k| vec![5 + k]).collect();
-        assert!(decide(MatchKind::Phrase, &left).is_none());
+        assert!(decide(&MatchKind::Phrase, &left).is_none());
         let right: Vec<Vec<u32>> = (0..3).map(|k| vec![20 + k]).collect();
-        assert!(decide(MatchKind::Phrase, &right).is_none());
+        assert!(decide(&MatchKind::Phrase, &right).is_none());
         // Ending exactly on the last left token: not a straddle either.
         let edge: Vec<Vec<u32>> = (0..3).map(|k| vec![17 + k]).collect();
-        assert!(decide(MatchKind::Phrase, &edge).is_none());
+        assert!(decide(&MatchKind::Phrase, &edge).is_none());
         // Starting at the midpoint: the right page has it.
         let at: Vec<Vec<u32>> = (0..2).map(|k| vec![20 + k]).collect();
-        assert!(decide(MatchKind::Phrase, &at).is_none());
+        assert!(decide(&MatchKind::Phrase, &at).is_none());
     }
 
     #[test]
     fn proximity_needs_one_term_on_each_side() {
         let both_left = slots(&[&[3], &[7]]);
-        assert!(decide(MatchKind::Proximity { len1: 1, len2: 1, max_distance: 10 }, &both_left).is_none());
+        assert!(decide(&MatchKind::Proximity { lens: vec![1, 1], distances: vec![10], ordered: false }, &both_left).is_none());
         let both_right = slots(&[&[22], &[25]]);
-        assert!(decide(MatchKind::Proximity { len1: 1, len2: 1, max_distance: 10 }, &both_right).is_none());
+        assert!(decide(&MatchKind::Proximity { lens: vec![1, 1], distances: vec![10], ordered: false }, &both_right).is_none());
         let across = slots(&[&[17], &[24]]);
-        let (positions, attr) = decide(MatchKind::Proximity { len1: 1, len2: 1, max_distance: 10 }, &across).unwrap();
+        let (positions, attr) = decide(&MatchKind::Proximity { lens: vec![1, 1], distances: vec![10], ordered: false }, &across).unwrap();
         assert_eq!(positions, vec![17, 24]);
         assert!(!attr.primary_is_left, "17 + 24 = 41: the right page");
         let too_far = slots(&[&[10], &[24]]);
-        assert!(decide(MatchKind::Proximity { len1: 1, len2: 1, max_distance: 10 }, &too_far).is_none());
+        assert!(decide(&MatchKind::Proximity { lens: vec![1, 1], distances: vec![10], ordered: false }, &too_far).is_none());
+    }
+
+    #[test]
+    fn a_three_term_chain_straddles_with_one_term_across() {
+        // A at 15, B at 18 on the left; C at 21 on the right: unordered and ordered both straddle.
+        let chain = MatchKind::Proximity { lens: vec![1, 1, 1], distances: vec![5, 5], ordered: true };
+        let s = slots(&[&[15], &[18], &[21]]);
+        let (positions, attr) = decide(&chain, &s).unwrap();
+        assert_eq!(positions, vec![15, 18, 21]);
+        assert!(attr.primary_is_left, "15 + 21 = 36: the left page holds more");
+        // All three on the left: not a straddle.
+        assert!(decide(&chain, &slots(&[&[10], &[12], &[15]])).is_none());
+        // C before B: unordered straddles, ordered does not.
+        let back = slots(&[&[15], &[22], &[18]]);
+        assert!(decide(&MatchKind::Proximity { lens: vec![1, 1, 1], distances: vec![8, 8], ordered: false }, &back).is_some());
+        assert!(decide(&MatchKind::Proximity { lens: vec![1, 1, 1], distances: vec![8, 8], ordered: true }, &back).is_none());
     }
 
     #[test]
@@ -795,11 +891,11 @@ mod tests {
             Members::from_ids(&[8], 0),
             Members::from_ids(&[9, 10, 11], 1), // over the threshold: a bitmap
         ];
-        let (positions, attr) = decide_from_window(MatchKind::Phrase, &w, &m).unwrap();
+        let (positions, attr) = decide_from_window(&MatchKind::Phrase, &w, &m).unwrap();
         assert_eq!(positions, vec![19, 20]);
         assert!(attr.primary_is_left);
         let none = vec![Members::from_ids(&[8], 0), Members::from_ids(&[5], 0)];
-        assert!(decide_from_window(MatchKind::Phrase, &w, &none).is_none());
+        assert!(decide_from_window(&MatchKind::Phrase, &w, &none).is_none());
         let _ = HashSet::<u32>::new();
     }
 

@@ -184,6 +184,67 @@ pub struct SearchTerm {
     pub mode: SearchMode,
 }
 
+/// A proximity search: up to three terms in a chain, each link with its
+/// own distance (`distances[k]` between `terms[k]` and `terms[k + 1]`),
+/// unordered (`|Δ| <= n`) or ordered (`0 < Δ <= n`), and up to two
+/// page-level AND terms that must also be on the page. Two terms unordered
+/// and no AND terms is the proximity search as it always was.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProximityQuery {
+    pub terms: Vec<SearchTerm>,
+    pub distances: Vec<usize>,
+    #[serde(default)]
+    pub ordered: bool,
+    #[serde(default)]
+    pub and_terms: Vec<SearchTerm>,
+}
+
+impl ProximityQuery {
+    pub fn pair(term1: &SearchTerm, term2: &SearchTerm, max_distance: usize) -> Self {
+        Self { terms: vec![term1.clone(), term2.clone()], distances: vec![max_distance], ordered: false, and_terms: Vec::new() }
+    }
+
+    /// The shape the two-term search has always had, which keeps its walk key.
+    pub fn is_plain_pair(&self) -> bool {
+        self.terms.len() == 2 && !self.ordered && self.and_terms.is_empty()
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if !(2..=3).contains(&self.terms.len()) {
+            anyhow::bail!("a proximity search takes two or three terms, not {}", self.terms.len());
+        }
+        if self.distances.len() != self.terms.len() - 1 {
+            anyhow::bail!("{} terms need {} distances, not {}", self.terms.len(), self.terms.len() - 1, self.distances.len());
+        }
+        if self.and_terms.len() > 2 {
+            anyhow::bail!("at most two page-level terms, not {}", self.and_terms.len());
+        }
+        if self.terms.iter().chain(self.and_terms.iter()).any(|t| t.query.trim().is_empty()) {
+            anyhow::bail!("a term is empty");
+        }
+        Ok(())
+    }
+
+    /// `A ~3 B ~5 C`, with `(ordered)` and `+ X, Y` for the page terms.
+    pub fn display(&self) -> String {
+        let mut s = String::new();
+        for (k, t) in self.terms.iter().enumerate() {
+            if k > 0 {
+                s.push_str(&format!(" ~{} ", self.distances[k - 1]));
+            }
+            s.push_str(&t.query);
+        }
+        if self.ordered {
+            s.push_str(" (ordered)");
+        }
+        if !self.and_terms.is_empty() {
+            s.push_str(" + ");
+            s.push_str(&self.and_terms.iter().map(|t| t.query.as_str()).collect::<Vec<_>>().join(", "));
+        }
+        s
+    }
+}
+
 /// Filters. `book_ids` is a term filter on `text_id`; the other fields are
 /// range queries on the FAST-only numeric columns (`author_id`, `genre_id`,
 /// `century_ah`, `death_ah`).
@@ -765,7 +826,7 @@ impl SearchEngine {
 
     /// What a boundary scan may verify wide slots on.
     fn scan_sources(&self) -> ScanSources {
-        ScanSources { cache: self.cache.clone(), triples: self.triples.clone(), threshold: self.config.wildcard_expansion_threshold }
+        ScanSources { cache: self.cache.clone(), triples: self.triples.clone(), threshold: self.config.wildcard_expansion_threshold, and_terms: Vec::new() }
     }
 
     /// Straddling matches of one phrase (a term of several words), as a
@@ -2058,44 +2119,86 @@ impl SearchEngine {
 
     /// Proximity search returning per-stage timings (compound path).
     pub fn proximity_search_with_stats(&self, term1: &SearchTerm, term2: &SearchTerm, max_distance: usize, filters: &SearchFilters, limit: usize, offset: usize) -> Result<(SearchResults, ProximityStats)> {
+        self.proximity_chain_search_with_stats(&ProximityQuery::pair(term1, term2, max_distance), filters, limit, offset)
+    }
+
+    /// A chain of two or three terms, ordered or not, with page-level AND terms.
+    pub fn proximity_chain_search(&self, q: &ProximityQuery, filters: &SearchFilters, limit: usize, offset: usize) -> Result<SearchResults> {
+        Ok(self.proximity_chain_search_with_stats(q, filters, limit, offset)?.0)
+    }
+
+    /// The chain search with per-stage timings. The two-term unordered case
+    /// without AND terms takes the paths and the walk key it always has, so
+    /// its results and its cached walks are unchanged.
+    pub fn proximity_chain_search_with_stats(&self, q: &ProximityQuery, filters: &SearchFilters, limit: usize, offset: usize) -> Result<(SearchResults, ProximityStats)> {
+        q.validate()?;
         let start = std::time::Instant::now();
         let searcher = self.reader.searcher();
-        let text_query = BooleanQuery::new(vec![
-            (Occur::Must, self.build_term_query(term1)?),
-            (Occur::Must, self.build_term_query(term2)?),
-        ]);
-        let final_query = self.with_filters(Box::new(text_query), filters);
+        let distances: Vec<u32> = q.distances.iter().map(|&d| d as u32).collect();
+
+        // Every chain term and every page term must be on the page: the
+        // candidate set, before any position is looked at.
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        for t in &q.terms {
+            clauses.push((Occur::Must, self.build_term_query(t)?));
+        }
+        let mut and_plans = Vec::with_capacity(q.and_terms.len());
+        for t in &q.and_terms {
+            let plan = self.build_term_plan(t)?;
+            and_plans.push(plan.verify.is_some());
+            clauses.push((Occur::Must, plan.query));
+        }
+        let and_needs_verify = and_plans.iter().any(|&v| v);
+        let final_query = self.with_filters(Box::new(BooleanQuery::new(clauses)), filters);
 
         let (results, total_matches, was_capped, mut stats) = match self.kind {
             IndexKind::Compound => {
-                let mut sets1 = self.highlight_sets(term1);
-                let mut sets2 = self.highlight_sets(term2);
-                let single_words = sets1.len() == 1 && sets2.len() == 1;
-                let key = self.walk_key("prox", &(term1, term2, max_distance), filters);
-                // The pair across a page break, from the boundary index, as a
-                // stream the walk pulls as far as it goes.
+                let sets: Vec<Sets> = q.terms.iter().map(|t| self.highlight_sets(t)).collect();
+                let and_sets: Vec<Sets> = q.and_terms.iter().map(|t| self.term_sets(t)).collect();
+                let single_words = sets.iter().all(|s| s.len() == 1);
+                let key = if q.is_plain_pair() {
+                    self.walk_key("prox", &(&q.terms[0], &q.terms[1], q.distances[0]), filters)
+                } else {
+                    self.walk_key("chain", &q, filters)
+                };
+                // The chain across a page break, from the boundary index, as a
+                // stream the walk pulls as far as it goes; a page term holds
+                // if it is on either page of the pair.
                 let cross = match &self.boundary {
-                    Some(b) if !sets1.is_empty() && !sets2.is_empty() => {
-                        let mut slots: Vec<Vec<u32>> = sets1.clone();
-                        slots.extend(sets2.iter().cloned());
+                    Some(b) if sets.iter().all(|s| !s.is_empty()) && and_sets.iter().all(|s| !s.is_empty()) => {
+                        let slots: Vec<Vec<u32>> = sets.iter().flatten().cloned().collect();
+                        let mut sources = self.scan_sources();
+                        sources.and_terms = and_sets.clone();
                         b.scan(
-                            MatchKind::Proximity { len1: sets1.len(), len2: sets2.len(), max_distance: max_distance as u32 },
+                            MatchKind::Proximity { lens: sets.iter().map(|s| s.len()).collect(), distances: distances.clone(), ordered: q.ordered },
                             slots,
                             filters,
-                            &self.scan_sources(),
+                            &sources,
                         )
                     }
                     _ => None,
                 };
-                if self.config.proximity_impl == ProximityImpl::Positional && single_words {
-                    let (s1, s2) = (sets1.pop().unwrap(), sets2.pop().unwrap());
-                    self.proximity_positional(&searcher, key, s1, s2, filters, max_distance, limit, offset, cross)?
+                if self.config.proximity_impl == ProximityImpl::Positional && single_words && !and_needs_verify {
+                    let slots: Vec<Vec<u32>> = sets.into_iter().map(|mut s| s.pop().unwrap()).collect();
+                    // The page terms narrow the candidate set as a filter on the
+                    // stream: the intersection never sees a page without them.
+                    let filter_query = if q.and_terms.is_empty() {
+                        self.filter_query(filters)
+                    } else {
+                        let mut and_clauses: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Must, Box::new(tantivy::query::AllQuery))];
+                        for t in &q.and_terms {
+                            and_clauses.push((Occur::Must, self.build_term_plan(t)?.query));
+                        }
+                        Some(self.with_filters(Box::new(BooleanQuery::new(and_clauses)), filters))
+                    };
+                    self.proximity_positional(&searcher, key, slots, filter_query, distances, q.ordered, limit, offset, cross)?
                 } else {
-                    self.proximity_forward(&searcher, key, final_query, sets1, sets2, max_distance, limit, offset, cross)?
+                    let and_hashed: Vec<Vec<HashSet<u32>>> = and_sets.iter().map(|s| Self::hash_sets(s)).collect();
+                    self.proximity_forward(&searcher, key, final_query, sets, and_hashed, distances, q.ordered, limit, offset, cross)?
                 }
             }
             IndexKind::ThreeField => {
-                let mut r = self.proximity_postings(&searcher, &*final_query, term1, term2, max_distance, limit, offset)?;
+                let mut r = self.proximity_postings(&searcher, &*final_query, &q.terms, &distances, q.ordered, limit, offset)?;
                 r.3.complete = true;
                 r
             }
@@ -2128,8 +2231,8 @@ impl SearchEngine {
 
         Ok((
             SearchResults {
-                query: format!("{} ~{} {}", term1.query, max_distance, term2.query),
-                mode: term1.mode,
+                query: q.display(),
+                mode: q.terms[0].mode,
                 total_hits: total_matches,
                 results,
                 elapsed_ms: start.elapsed().as_millis() as u64,
@@ -2288,11 +2391,10 @@ impl SearchEngine {
     /// `tokens` postings as a cached, capped walk.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
-    fn proximity_positional(&self, searcher: &Searcher, key: String, set1: Vec<u32>, set2: Vec<u32>, filters: &SearchFilters, max_distance: usize, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
-        let mut stats = ProximityStats { path: "positional-walk", set1_size: set1.len(), set2_size: set2.len(), ..Default::default() };
+    fn proximity_positional(&self, searcher: &Searcher, key: String, slots: Vec<Vec<u32>>, filter_query: Option<Box<dyn Query>>, distances: Vec<u32>, ordered: bool, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+        let mut stats = ProximityStats { path: "positional-walk", set1_size: slots[0].len(), set2_size: slots[1].len(), ..Default::default() };
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
-        let filter_query = self.filter_query(filters);
         let pos_cap = self.config.page_highlight_cap;
         let fields = self.fields;
         let t0 = std::time::Instant::now();
@@ -2300,8 +2402,8 @@ impl SearchEngine {
             let searcher = searcher.clone();
             let merge = CrossMerge::new(&searcher, fields, cross);
             Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
-                let matcher = crate::positional::proximity_matcher(max_distance as u32);
-                let sets = [set1, set2];
+                let matcher = crate::positional::chain_matcher(distances, ordered);
+                let sets = slots;
                 let mut adapter = WalkStreamSink { sink, positions_cap: pos_cap, merge, failed: None };
                 let ps = crate::positional::intersect_n_stream(
                     &searcher,
@@ -2339,15 +2441,13 @@ impl SearchEngine {
 
     /// Three-field proximity: over-fetch candidates ordered by death_ah and
     /// measure distances between postings positions (100 per side).
-    fn proximity_postings(&self, searcher: &Searcher, query: &dyn Query, term1: &SearchTerm, term2: &SearchTerm, max_distance: usize, limit: usize, offset: usize) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+    fn proximity_postings(&self, searcher: &Searcher, query: &dyn Query, terms: &[SearchTerm], distances: &[u32], ordered: bool, limit: usize, offset: usize) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
         let mut stats = ProximityStats { path: "postings", ..Default::default() };
         let overfetch_limit = ((limit + offset) * 50).max(5000);
-        let field1 = self.field_for(term1.mode);
-        let field2 = self.field_for(term2.mode);
-        let terms1: HashSet<String> = self.term_words(term1).into_iter().collect();
-        let terms2: HashSet<String> = self.term_words(term2).into_iter().collect();
-        stats.set1_size = terms1.len();
-        stats.set2_size = terms2.len();
+        let fields: Vec<Field> = terms.iter().map(|t| self.field_for(t.mode)).collect();
+        let words: Vec<HashSet<String>> = terms.iter().map(|t| self.term_words(t).into_iter().collect()).collect();
+        stats.set1_size = words[0].len();
+        stats.set2_size = words[1].len();
 
         let t0 = std::time::Instant::now();
         let (total_candidates, candidates) = self.candidates(searcher, query, overfetch_limit)?;
@@ -2362,17 +2462,9 @@ impl SearchEngine {
             stats.candidates_scanned += 1;
             let seg = searcher.segment_reader(addr.segment_ord);
             let ts = std::time::Instant::now();
-            let pos1 = self.term_positions(seg, addr.doc_id, field1, &terms1, 100);
-            let pos2 = self.term_positions(seg, addr.doc_id, field2, &terms2, 100);
-            let mut matched: Vec<u32> = Vec::new();
-            for &p1 in &pos1 {
-                for &p2 in &pos2 {
-                    if p1.abs_diff(p2) as usize <= max_distance {
-                        matched.push(p1);
-                        matched.push(p2);
-                    }
-                }
-            }
+            let starts: Vec<Vec<u32>> = (0..terms.len()).map(|k| self.term_positions(seg, addr.doc_id, fields[k], &words[k], 100)).collect();
+            let lens = vec![1u32; terms.len()];
+            let mut matched: Vec<u32> = forward::chain_positions(&starts, &lens, distances, ordered);
             stats.scan_us += ts.elapsed().as_micros() as u64;
             if matched.is_empty() {
                 continue;
@@ -2406,22 +2498,23 @@ impl SearchEngine {
     /// in reading order and measure the distance on the forward index, as a
     /// cached, capped walk.
     #[allow(clippy::too_many_arguments)]
-    fn proximity_forward(&self, searcher: &Searcher, key: String, query: Box<dyn Query>, sets1: Sets, sets2: Sets, max_distance: usize, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+    fn proximity_forward(&self, searcher: &Searcher, key: String, query: Box<dyn Query>, sets: Vec<Sets>, and_sets: Vec<Vec<HashSet<u32>>>, distances: Vec<u32>, ordered: bool, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
         let mut stats = ProximityStats { path: "forward-walk", ..Default::default() };
-        let sets1 = Self::hash_sets(&sets1);
-        let sets2 = Self::hash_sets(&sets2);
-        stats.set1_size = sets1.iter().map(|s| s.len()).sum();
-        stats.set2_size = sets2.iter().map(|s| s.len()).sum();
-        let len1 = sets1.len() as u32;
-        let len2 = sets2.len() as u32;
+        let hashed: Vec<Vec<HashSet<u32>>> = sets.iter().map(|s| Self::hash_sets(s)).collect();
+        stats.set1_size = hashed[0].iter().map(|s| s.len()).sum();
+        stats.set2_size = hashed[1].iter().map(|s| s.len()).sum();
+        let lens: Vec<u32> = hashed.iter().map(|s| s.len() as u32).collect();
         let pos_cap = self.config.page_highlight_cap;
         let verify: Arc<dyn Fn(&[u32]) -> Option<Vec<u32>> + Send + Sync> = Arc::new(move |ids: &[u32]| {
-            let starts1 = forward::phrase_starts(ids, &sets1);
-            let starts2 = forward::phrase_starts(ids, &sets2);
-            if !forward::has_pair_within(&starts1, &starts2, max_distance as u32) {
+            // Every page term on the page, then the chain.
+            if !and_sets.iter().all(|s| !forward::phrase_starts(ids, s).is_empty()) {
                 return None;
             }
-            let mut positions = forward::proximity_positions(&starts1, len1, &starts2, len2, max_distance as u32);
+            let starts: Vec<Vec<u32>> = hashed.iter().map(|s| forward::phrase_starts(ids, s)).collect();
+            if !forward::has_chain(&starts, &distances, ordered) {
+                return None;
+            }
+            let mut positions = forward::chain_positions(&starts, &lens, &distances, ordered);
             positions.truncate(pos_cap);
             Some(positions)
         });

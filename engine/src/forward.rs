@@ -139,13 +139,65 @@ pub fn has_pair_within(a: &[u32], b: &[u32], max_distance: u32) -> bool {
 /// Distance is measured between the *start* of each phrase occurrence.
 /// Returns an empty vector when no pair qualifies.
 pub fn proximity_positions(a_starts: &[u32], a_len: u32, b_starts: &[u32], b_len: u32, max_distance: u32) -> Vec<u32> {
-    let mut out = Vec::new();
-    for &a in a_starts {
-        for &b in b_starts {
-            if a.abs_diff(b) <= max_distance {
-                out.extend(a..a + a_len);
-                out.extend(b..b + b_len);
+    chain_positions(&[a_starts.to_vec(), b_starts.to_vec()], &[a_len, b_len], &[max_distance], false)
+}
+
+/// One link of a chain: `next` within `max_distance` of `prev` — either way
+/// round when unordered, strictly after it when ordered.
+#[inline]
+pub fn link_ok(prev: u32, next: u32, max_distance: u32, ordered: bool) -> bool {
+    if ordered {
+        next > prev && next - prev <= max_distance
+    } else {
+        prev.abs_diff(next) <= max_distance
+    }
+}
+
+/// Every tuple of the chain: one start from each term, consecutive ones
+/// within their link's distance (`distances[k]` between term k and k + 1).
+/// Up to three terms in the app; the walk is general.
+fn chain_tuples(starts: &[Vec<u32>], distances: &[u32], ordered: bool) -> Vec<Vec<u32>> {
+    let mut tuples: Vec<Vec<u32>> = starts[0].iter().map(|&s| vec![s]).collect();
+    for (k, next) in starts.iter().enumerate().skip(1) {
+        let d = distances[k - 1];
+        let mut grown = Vec::new();
+        for t in &tuples {
+            let prev = *t.last().unwrap();
+            for &n in next {
+                if link_ok(prev, n, d, ordered) {
+                    let mut u = t.clone();
+                    u.push(n);
+                    grown.push(u);
+                }
             }
+        }
+        tuples = grown;
+        if tuples.is_empty() {
+            break;
+        }
+    }
+    tuples
+}
+
+/// Whether some tuple of the chain exists. Two unordered terms: the same
+/// answer as `has_pair_within`.
+pub fn has_chain(starts: &[Vec<u32>], distances: &[u32], ordered: bool) -> bool {
+    match starts.len() {
+        0 => false,
+        1 => !starts[0].is_empty(),
+        2 if !ordered => has_pair_within(&starts[0], &starts[1], distances[0]),
+        _ => !chain_tuples(starts, distances, ordered).is_empty(),
+    }
+}
+
+/// Every position covered by some tuple of the chain: each term's span from
+/// its start, over every qualifying tuple, sorted, once each. Two unordered
+/// terms give exactly `proximity_positions`.
+pub fn chain_positions(starts: &[Vec<u32>], lens: &[u32], distances: &[u32], ordered: bool) -> Vec<u32> {
+    let mut out = Vec::new();
+    for t in chain_tuples(starts, distances, ordered) {
+        for (k, &s) in t.iter().enumerate() {
+            out.extend(s..s + lens[k]);
         }
     }
     out.sort_unstable();
@@ -211,5 +263,31 @@ mod tests {
             let full = !proximity_positions(&a, 1, &b, 1, d).is_empty();
             assert_eq!(has_pair_within(&a, &b, d), full, "a={:?} b={:?} d={}", a, b, d);
         }
+    }
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use super::*;
+
+    #[test]
+    fn chains_and_order() {
+        // A at 2 and 30, B at 5, C at 9: unordered A~4 B~5 C is (2,5,9); ordered too.
+        let starts = vec![vec![2, 30], vec![5], vec![9]];
+        assert!(has_chain(&starts, &[4, 5], false));
+        assert!(has_chain(&starts, &[4, 5], true));
+        assert_eq!(chain_positions(&starts, &[1, 1, 1], &[4, 5], false), vec![2, 5, 9]);
+        // Ordered fails when C precedes B.
+        let back = vec![vec![2], vec![5], vec![3]];
+        assert!(has_chain(&back, &[4, 5], false));
+        assert!(!has_chain(&back, &[4, 5], true));
+        // Two unordered terms: the pair helpers, span for span.
+        let a = vec![1, 10, 40];
+        let b = vec![12, 41];
+        assert_eq!(has_chain(&[a.clone(), b.clone()], &[3], false), has_pair_within(&a, &b, 3));
+        assert_eq!(chain_positions(&[a.clone(), b.clone()], &[2, 1], &[3], false), proximity_positions(&a, 2, &b, 1, 3));
+        // A link that fails breaks the chain even when the ends are near.
+        let gap = vec![vec![0], vec![50], vec![1]];
+        assert!(!has_chain(&gap, &[5, 5], false));
     }
 }
