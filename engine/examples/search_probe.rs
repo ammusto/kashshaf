@@ -375,6 +375,9 @@ fn load_more(ctx: &Ctx) -> anyhow::Result<()> {
         ("proximity الله ~10 قال", Box::new(|_c: &Ctx| unreachable!())),
         ("wildcard ابن ال*", Box::new(|_c: &Ctx| unreachable!())),
         ("lemma phrase قال رسول الله صلى", Box::new(|_c: &Ctx| unreachable!())),
+        ("surface phrase قال رسول الله صلى", Box::new(|_c: &Ctx| unreachable!())),
+        ("paged word قال", Box::new(|_c: &Ctx| unreachable!())),
+        ("paged AND الله AND الاصبهاني", Box::new(|_c: &Ctx| unreachable!())),
     ];
     for (name, _) in queries {
         ctx.engine.clear_walk_cache();
@@ -382,6 +385,9 @@ fn load_more(ctx: &Ctx) -> anyhow::Result<()> {
             match name {
                 "proximity الله ~10 قال" => ctx.engine.proximity_chain_search(&prox(&["الله", "قال"], &[10], false, &[]), &ctx.filters, LIMIT, offset),
                 "wildcard ابن ال*" => ctx.engine.wildcard_search("ابن ال*", &ctx.filters, LIMIT, offset),
+                "surface phrase قال رسول الله صلى" => ctx.engine.search("قال رسول الله صلى", SearchMode::Surface, &ctx.filters, LIMIT, offset),
+                "paged word قال" => ctx.engine.search("قال", SearchMode::Surface, &ctx.filters, LIMIT, offset),
+                "paged AND الله AND الاصبهاني" => ctx.engine.combined_search(&[s("الله"), s("الاصبهاني")], &[], &ctx.filters, LIMIT, offset),
                 _ => ctx.engine.search("قال رسول الله صلى", SearchMode::Lemma, &ctx.filters, LIMIT, offset),
             }
         };
@@ -409,7 +415,7 @@ fn load_more(ctx: &Ctx) -> anyhow::Result<()> {
                 "    offset {offset}: {served:.1} ms, rows {}, total {} | reused={} wait={} ms key={} ms results={} ms highlights={} ms",
                 r.results.len(),
                 r.total_hits,
-                a.amount.get("walk.reused").copied().unwrap_or(0),
+                a.amount.get("walk.reused").copied().unwrap_or(0) + a.amount.get("paged.cache_hit").copied().unwrap_or(0),
                 ms(a.us.get("walk.wait").copied().unwrap_or(0)),
                 ms(a.us.get("walk.key").copied().unwrap_or(0)),
                 ms(a.us.get("results").copied().unwrap_or(0)),

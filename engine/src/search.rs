@@ -428,6 +428,22 @@ struct Walked {
     complete: bool,
 }
 
+/// A paged query's whole answer in reading order, for load-more.
+struct PagedList {
+    total: usize,
+    /// The first documents in reading order — all of them when `complete`.
+    items: Vec<(DocAddress, Option<CrossRef>)>,
+    complete: bool,
+}
+
+/// Paged lists kept (least recently used first out), how many documents of
+/// one list are kept (a prefix, for a common single word's millions), and
+/// the most items all lists may hold together (~16 bytes each, cross refs
+/// apart).
+const PAGED_LISTS_ENTRIES: usize = 32;
+const PAGED_LIST_MAX_ITEMS: usize = 1_000_000;
+const PAGED_LISTS_MAX_ITEMS: usize = 8_000_000;
+
 /// What the frontend needs to know about the engine it talks to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineCapabilities {
@@ -630,6 +646,9 @@ pub struct SearchEngine {
     exact_counts: AtomicBool,
     /// `PhraseImpl::Tantivy` when set (a runtime switch, for comparison).
     phrase_tantivy: AtomicBool,
+    /// Paged (non-walk) queries' whole document lists, so that load-more is
+    /// a slice rather than the query again (audit finding 3).
+    paged_lists: std::sync::Mutex<lru::LruCache<String, Arc<PagedList>>>,
     /// Single segment whose doc ids are monotonic in reading order.
     reading_order: bool,
     triples: Option<Arc<TripleMaps>>,
@@ -831,6 +850,7 @@ impl SearchEngine {
             glob_cache: std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(GLOB_CACHE_ENTRIES).unwrap())),
             exact_counts: AtomicBool::new(config.exact_counts),
             phrase_tantivy: AtomicBool::new(config.phrase_impl == PhraseImpl::Tantivy),
+            paged_lists: std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(PAGED_LISTS_ENTRIES).unwrap())),
             config,
             reading_order,
             triples,
@@ -914,12 +934,47 @@ impl SearchEngine {
         CrossStream::merged(streams)
     }
 
-    /// The window `[offset, offset + limit)` of the query's matches with the
-    /// cross hits interleaved by reading order, and the exact total of both.
-    /// The main matches are walked in doc order, which is reading order.
-    fn paged_with_cross(&self, searcher: &Searcher, query: &dyn Query, cross: Option<CrossStream>, limit: usize, offset: usize) -> Result<(usize, Vec<(DocAddress, Option<CrossRef>)>)> {
-        let (total, items, _cut) = self.paged_with_cross_flagged(searcher, query, cross, limit, offset)?;
-        Ok((total, items))
+    /// `paged_with_cross_flagged` through the paged-list cache: the first
+    /// request for a key runs the query to its end and keeps every document
+    /// (and cross hit) in reading order; every later window — load-more —
+    /// is a slice of that. A list cut short by the walk budget is not kept.
+    /// The boundary stream is only opened when the list has to be made.
+    fn paged_cached(
+        &self,
+        key: String,
+        searcher: &Searcher,
+        query: &dyn Query,
+        cross: impl FnOnce() -> Option<CrossStream>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(usize, Vec<(DocAddress, Option<CrossRef>)>, bool)> {
+        let hit: Option<Arc<PagedList>> = self.paged_lists.lock().unwrap_or_else(|p| p.into_inner()).get(&key).cloned();
+        if let Some(list) = hit {
+            // A prefix serves every window inside it; a window past it (a
+            // very common word, deep into its millions) runs the query.
+            if list.complete || offset.saturating_add(limit) <= list.items.len() {
+                crate::probe::amount("paged.cache_hit", 1);
+                let window = list.items.iter().skip(offset).take(limit).cloned().collect();
+                return Ok((list.total, window, false));
+            }
+            return self.paged_with_cross_flagged(searcher, query, cross(), limit, offset);
+        }
+        // The first request: the query to its end, keeping the first
+        // `PAGED_LIST_MAX_ITEMS` documents for later windows.
+        let keep = PAGED_LIST_MAX_ITEMS.max(offset.saturating_add(limit));
+        let (total, all, cut) = self.paged_with_cross_flagged(searcher, query, cross(), keep, 0)?;
+        let window: Vec<(DocAddress, Option<CrossRef>)> = all.iter().skip(offset).take(limit).cloned().collect();
+        if !cut {
+            crate::probe::amount("paged.cache_store", all.len() as u64);
+            let complete = total <= all.len();
+            let mut lists = self.paged_lists.lock().unwrap_or_else(|p| p.into_inner());
+            lists.put(key, Arc::new(PagedList { total, items: all, complete }));
+            // Bound the whole cache by items, dropping the least recent.
+            while lists.iter().map(|(_, l)| l.items.len()).sum::<usize>() > PAGED_LISTS_MAX_ITEMS && lists.len() > 1 {
+                lists.pop_lru();
+            }
+        }
+        Ok((total, window, cut))
     }
 
     /// `paged_with_cross`, saying whether the boundary stream was cut by the
@@ -1169,6 +1224,7 @@ impl SearchEngine {
     }
 
     pub fn clear_walk_cache(&self) {
+        self.paged_lists.lock().unwrap_or_else(|p| p.into_inner()).clear();
         self.walks.clear();
         self.walk_pages.lock().unwrap_or_else(|p| p.into_inner()).clear();
     }
@@ -2172,8 +2228,9 @@ impl SearchEngine {
                 }
             }
         }
-        // Phrases across page breaks, for the paths below (compound only).
-        let cross = if self.kind == IndexKind::Compound { self.cross_stream_for_terms(and_terms, or_terms, filters) } else { None };
+        // Phrases across page breaks, for the paths below (compound only);
+        // opened where it is needed, not for a window the cache answers.
+        let cross_for = || if self.kind == IndexKind::Compound { self.cross_stream_for_terms(and_terms, or_terms, filters) } else { None };
 
         let mut and_plans = Vec::with_capacity(and_terms.len());
         for t in and_terms {
@@ -2237,7 +2294,7 @@ impl SearchEngine {
                 Some(positions)
             });
             let key = self.walk_key("combined", &(and_terms, or_terms), filters);
-            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross)?;
+            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross_for())?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
             let complete = w.done;
             let join = |ts: &[SearchTerm], sep: &str| ts.iter().map(|t| t.query.as_str()).collect::<Vec<_>>().join(sep);
@@ -2261,7 +2318,7 @@ impl SearchEngine {
         }
         // The paged path is exact, and drains the boundary stream to its end.
         let (total_hits, items, cut) = self
-            .paged_with_cross_flagged(&searcher, &*final_query, cross, limit, offset)
+            .paged_cached(self.walk_key("paged", &(and_terms, or_terms), filters), &searcher, &*final_query, cross_for, limit, offset)
             .map_err(|e| map_expansion_error(e, "the phrase"))?;
         let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
         let was_capped = cut;
@@ -2920,11 +2977,8 @@ impl SearchEngine {
         }
         // Across a page break: one form's phrases, merged in reading order;
         // two forms must both be on a page, which has no boundary reading.
-        let cross: Option<CrossStream> = if form_retrieval.len() == 1 {
-            CrossStream::merged(form_retrieval[0].iter().filter_map(|sets| self.cross_stream_phrase(sets, filters)).collect())
-        } else {
-            None
-        };
+        let cross_phrases: Vec<Sets> = if form_retrieval.len() == 1 { form_retrieval[0].clone() } else { Vec::new() };
+        let cross_for = || CrossStream::merged(cross_phrases.iter().filter_map(|sets| self.cross_stream_phrase(sets, filters)).collect());
         let cap = self.config.result_highlight_cap;
         let query_display = patterns_by_form
             .iter()
@@ -2942,7 +2996,7 @@ impl SearchEngine {
         {
             let groups: Vec<Vec<Sets>> = form_retrieval.remove(0).into_iter().map(|sets| vec![sets]).collect();
             let key = self.walk_key("name", &patterns_by_form, filters);
-            let w = self.phrase_groups_walk(&searcher, key, groups, filters, limit, offset, cross)?;
+            let w = self.phrase_groups_walk(&searcher, key, groups, filters, limit, offset, cross_for())?;
             let mut results = w.results;
             let first_form_len = patterns_by_form.first().map(|p| p.len()).unwrap_or(0);
             let sets: Vec<Sets> = pattern_terms.iter().take(first_form_len).map(|t| self.highlight_sets(t)).collect();
@@ -2996,7 +3050,7 @@ impl SearchEngine {
                 Some(positions)
             });
             let key = self.walk_key("name", &patterns_by_form, filters);
-            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross)?;
+            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross_for())?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
             return Ok(SearchResults {
                 query: query_display,
@@ -3010,7 +3064,7 @@ impl SearchEngine {
             });
         }
         // The paged path is exact, and drains the boundary stream to its end.
-        let (total_hits, items, cut) = self.paged_with_cross_flagged(&searcher, &*final_query, cross, limit, offset)?;
+        let (total_hits, items, cut) = self.paged_cached(self.walk_key("paged-name", &patterns_by_form, filters), &searcher, &*final_query, cross_for, limit, offset)?;
         let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
         let was_capped = cut;
         let mut results = self.results_with_cross(&searcher, &items, None)?;
@@ -3217,12 +3271,12 @@ impl SearchEngine {
         // exceed the budget skips the (sort-heavy) trie count.
         let ids_total: usize = sizes.iter().sum();
         let states: usize = if sets.len() > 1 && ids_total <= REGEX_STATE_BUDGET { sets.iter().map(|s| trie_nodes(s)).sum() } else { ids_total };
-        let cross = self.cross_stream_phrase(&sets, filters);
+        let cross_for = || self.cross_stream_phrase(&sets, filters);
         if sets.len() == 1 || states <= REGEX_STATE_BUDGET {
             let plan = self.compound_plan(&sets)?;
             debug_assert!(plan.verify.is_none());
             let final_query = self.with_filters(plan.query, filters);
-            let (total, items, cut) = self.paged_with_cross_flagged(searcher, &*final_query, cross, limit, offset)?;
+            let (total, items, cut) = self.paged_cached(self.walk_key("paged-wildcard", &normalized, filters), searcher, &*final_query, cross_for, limit, offset)?;
             let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
             let mut results = self.results_with_cross(searcher, &items, None)?;
             let keys = self.keys_of(searcher, &addrs);
@@ -3250,6 +3304,7 @@ impl SearchEngine {
             eprintln!("[wildcard] path=walk sizes={:?} trie_nodes={} threshold={}", sizes, states, self.config.wildcard_expansion_threshold);
         }
         let key = self.walk_key("wildcard", &normalized, filters);
+        let cross = cross_for();
         self.phrase_positional_core(searcher, key, sets, filters, limit, offset, cross)
     }
 
