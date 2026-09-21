@@ -61,6 +61,12 @@ export interface FakeLayout {
   scrollToPageQuick: (index: number) => void;
   /** Let pending frames and effects run without scrolling. */
   settle: () => Promise<void>;
+  /**
+   * Wait `n` animation frames of our own, each queued behind whatever the
+   * reader has queued: a measure in the reader's own clock, not the wall's,
+   * so it holds under load.
+   */
+  frames: (n: number) => Promise<void>;
   /** Spine indices mounted, in order. */
   mounted: () => number[];
   /** The scroll container, once rendered. */
@@ -140,17 +146,20 @@ export function installLayout(options: LayoutOptions = {}): FakeLayout {
 
   /**
    * Let the reader react. It answers a scroll in an animation frame, and
-   * jsdom runs those on a ~16 ms timer, so waiting a macrotask is not enough:
-   * wait for a frame of our own, which is queued behind the reader's.
+   * jsdom runs those on a ~16 ms timer, so waiting a macrotask is not
+   * enough: wait for frames of our own, each queued behind the reader's.
+   * Frames, not a wall-clock sleep: under load jsdom's frame timer and
+   * the reader's stretch together, and a fixed sleep would run out first.
    */
-  const flush = async () => {
+  const frames = async (n: number) => {
     await act(async () => {
-      await new Promise<void>((r) => requestAnimationFrame(() => r()));
-      await new Promise((r) => setTimeout(r, 20));
-      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      for (let i = 0; i < n; i++) {
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
       await new Promise((r) => setTimeout(r, 0));
     });
   };
+  const flush = () => frames(4);
 
   return {
     async scrollTo(top: number) {
@@ -180,6 +189,7 @@ export function installLayout(options: LayoutOptions = {}): FakeLayout {
     async settle() {
       await flush();
     },
+    frames,
     mounted() {
       return [...document.querySelectorAll('[data-page-index]')]
         .map((el) => Number((el as HTMLElement).dataset.pageIndex))

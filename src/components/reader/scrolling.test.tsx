@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Profiler } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import type { PageEntry, SearchResult, Token } from '../../types';
 import type { SearchAPI } from '../../api';
@@ -57,19 +58,40 @@ function makeApi() {
 }
 
 let layout: FakeLayout;
+/** Commits of the reader tree: a settled reader makes none. */
+let commits = 0;
+
+// These run under whatever else the machine is doing (cargo, the other
+// test files' workers): every wait below is in frames of the reader's own
+// clock, and the wall-clock limits are only a guard against a hang.
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+/** How many frames a settled reader must stay still for. */
+const QUIET_FRAMES = 8;
 
 async function renderReader(pageHeight: (i: number) => number = () => TALL) {
   const api = makeApi();
   installResizeObserver(pageHeight);
   layout = installLayout({ viewportHeight: VIEWPORT, pageHeight });
+  commits = 0;
   render(
-    <BooksProvider api={api}>
-      <ReaderPanel api={api} bookId={7} anchor={{ part_index: 0, page_id: 1 }} />
-    </BooksProvider>
+    <Profiler id="reader" onRender={() => commits++}>
+      <BooksProvider api={api}>
+        <ReaderPanel api={api} bookId={7} anchor={{ part_index: 0, page_id: 1 }} />
+      </BooksProvider>
+    </Profiler>
   );
-  await waitFor(() => expect(document.querySelector('[data-page-index]')).toBeTruthy());
+  await waitFor(() => expect(document.querySelector('[data-page-index]')).toBeTruthy(), { timeout: 60_000 });
   await layout.settle();
   return api;
+}
+
+/** No commits across `QUIET_FRAMES` frames, and the mounted set as it was. */
+async function expectSettled() {
+  const before = layout.mounted();
+  const at = commits;
+  await layout.frames(QUIET_FRAMES);
+  expect(commits - at, `commits across ${QUIET_FRAMES} frames`).toBe(0);
+  expect(layout.mounted()).toEqual(before);
 }
 
 /** The page the header says the reader is on. */
@@ -122,11 +144,9 @@ describe('scrolling a book of tall pages', () => {
     await renderReader();
     for (let top = 0; top <= TALL * 4; top += VIEWPORT) {
       await layout.scrollTo(top);
-      const after = layout.mounted();
-      // Nothing more happens without the user doing anything.
-      await layout.settle();
-      await layout.settle();
-      expect(layout.mounted()).toEqual(after);
+      // Nothing more happens without the user doing anything: not a
+      // commit across the quiet frames, not a change to the window.
+      await expectSettled();
     }
   });
 
