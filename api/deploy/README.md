@@ -35,6 +35,7 @@ by `.github/workflows/release.yml` (with `dry_run: false`).
 | `KASHSHAF_RATE_LIMIT` | `1` | in-process limiter for searches, 10 req/s burst 30 per client IP (`<per_second>[,<burst>]` to change; unset/`0` off) |
 | `KASHSHAF_RATE_LIMIT_READER` | unset | the reader's bucket (`/page*`, `/book/{id}/pages`, `/book/{id}/toc`) while the limiter is on: 60 req/s burst 120 by default (`<per_second>[,<burst>]`) |
 | `KASHSHAF_MAX_CONCURRENT_WALKS` | `4` | detached verified walks running at once (default would be `nproc - 2`); `KASHSHAF_MAX_WALKS` is an alias |
+| `KASHSHAF_BLOCKING_THREADS` | unset | threads of the pool every engine call runs on, off tokio's workers (default twice the cores). The workers only parse, serialise and wait, so a long walk no longer delays a page load (dev-docs/LOAD_TEST_2026-09-21.md) |
 | `RUST_LOG` | `info` | tracing filter |
 
 ## Binary
