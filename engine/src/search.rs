@@ -20,7 +20,7 @@ pub mod name_probe;
 
 use crate::cache::TokenCache;
 use crate::collectors::{AllDocsCollector, ReadingOrderCollector};
-use crate::boundary::{BoundaryIndex, CrossHit, CrossStream, Interleave, MatchKind, OrderKey as CrossOrderKey, ScanSources};
+use crate::boundary::{ask_until, AndDocs, BoundaryIndex, CrossHit, CrossStream, Interleave, MatchKind, OrderKey as CrossOrderKey, Pull, ScanSources};
 use crate::forward;
 use crate::forward::Members;
 use crate::glob::GlobPattern;
@@ -850,7 +850,39 @@ impl SearchEngine {
 
     /// What a boundary scan may verify wide slots on.
     fn scan_sources(&self) -> ScanSources {
-        ScanSources { cache: self.cache.clone(), triples: self.triples.clone(), threshold: self.config.wildcard_expansion_threshold, and_terms: Vec::new() }
+        ScanSources { cache: self.cache.clone(), triples: self.triples.clone(), threshold: self.config.wildcard_expansion_threshold, and_docs: Vec::new(), doc_of: None }
+    }
+
+    /// A page-level AND term as the boundary scan checks it: the bitset of
+    /// the main-index documents holding it (its bag of words, for a
+    /// phrase), from one pass over its scorer.
+    fn and_term_docs(&self, searcher: &Searcher, term: &SearchTerm) -> Result<AndDocs> {
+        let _t = crate::probe::timer("and.bitset");
+        let plan = self.build_term_plan(term)?;
+        let sets = self.term_sets(term);
+        let max_doc = searcher.segment_readers().iter().map(|s| s.max_doc()).max().unwrap_or(0);
+        let mut bits = vec![0u64; (max_doc as usize + 63) / 64];
+        let weight = plan.query.weight(EnableScoring::disabled_from_searcher(searcher))?;
+        // The boundary index is only built over a single reading-order
+        // segment, so document ids are the segment's.
+        if let Some(seg) = searcher.segment_readers().first() {
+            let mut scorer = weight.scorer(seg, 1.0)?;
+            let mut doc = scorer.doc();
+            while doc != TERMINATED {
+                bits[(doc / 64) as usize] |= 1u64 << (doc % 64);
+                doc = scorer.advance();
+            }
+        }
+        let exact = if sets.len() > 1 { Some(sets.iter().map(|s| Members::from_ids(s, self.config.wildcard_expansion_threshold)).collect()) } else { None };
+        Ok(AndDocs { bits: Arc::new(bits), exact })
+    }
+
+    /// The main-index document of an order key, for the boundary scan's
+    /// AND check (single segment, reading order).
+    fn doc_of_order_key(&self, searcher: &Searcher) -> Arc<dyn Fn(CrossOrderKey) -> Option<u32> + Send + Sync> {
+        let cols = segment_columns(searcher, 0);
+        let max_doc = searcher.segment_reader(0).max_doc();
+        Arc::new(move |k: CrossOrderKey| doc_by_order_key(&cols, max_doc, k))
     }
 
     /// Straddling matches of one phrase (a term of several words), as a
@@ -886,11 +918,20 @@ impl SearchEngine {
     /// cross hits interleaved by reading order, and the exact total of both.
     /// The main matches are walked in doc order, which is reading order.
     fn paged_with_cross(&self, searcher: &Searcher, query: &dyn Query, cross: Option<CrossStream>, limit: usize, offset: usize) -> Result<(usize, Vec<(DocAddress, Option<CrossRef>)>)> {
+        let (total, items, _cut) = self.paged_with_cross_flagged(searcher, query, cross, limit, offset)?;
+        Ok((total, items))
+    }
+
+    /// `paged_with_cross`, saying whether the boundary stream was cut by the
+    /// walk budget before its end (the count is then a lower bound).
+    fn paged_with_cross_flagged(&self, searcher: &Searcher, query: &dyn Query, cross: Option<CrossStream>, limit: usize, offset: usize) -> Result<(usize, Vec<(DocAddress, Option<CrossRef>)>, bool)> {
         let mut inter = Interleave::new(cross);
         if inter.is_empty() || !self.reading_order {
             let (total, addrs) = self.paged(searcher, query, limit, offset)?;
-            return Ok((total, addrs.into_iter().map(|a| (a, None)).collect()));
+            return Ok((total, addrs.into_iter().map(|a| (a, None)).collect(), false));
         }
+        // The request thread pulls the stream with the walk budget as its deadline.
+        let mut ask = ask_until(std::time::Instant::now() + std::time::Duration::from_millis(self.config.walk_budget_ms));
         let end = offset.saturating_add(limit);
         let mut seen = 0usize;
         let mut out: Vec<(DocAddress, Option<CrossRef>)> = Vec::new();
@@ -917,13 +958,13 @@ impl SearchEngine {
                 if alive.map_or(true, |b| b.is_alive(doc)) {
                     let addr = DocAddress::new(seg_ord as u32, doc);
                     let key = cols.order_key(doc);
-                    for c in inter.before(key) {
+                    for c in inter.before(key, &mut ask) {
                         if let Some(item) = self.cross_item(searcher, &c)? {
                             take(item, &mut seen);
                         }
                     }
                     take((addr, None), &mut seen);
-                    for c in inter.at(key) {
+                    for c in inter.at(key, &mut ask) {
                         if let Some(item) = self.cross_item(searcher, &c)? {
                             take(item, &mut seen);
                         }
@@ -933,12 +974,12 @@ impl SearchEngine {
             }
         }
         crate::probe::amount("iterate.docs", iterated);
-        for c in inter.rest() {
+        for c in inter.rest(&mut ask) {
             if let Some(item) = self.cross_item(searcher, &c)? {
                 take(item, &mut seen);
             }
         }
-        Ok((seen, out))
+        Ok((seen, out, inter.is_cut()))
     }
 
     /// A cross hit as a main-index address (its primary page) plus the other page.
@@ -2207,11 +2248,11 @@ impl SearchEngine {
             });
         }
         // The paged path is exact, and drains the boundary stream to its end.
-        let (total_hits, items) = self
-            .paged_with_cross(&searcher, &*final_query, cross, limit, offset)
+        let (total_hits, items, cut) = self
+            .paged_with_cross_flagged(&searcher, &*final_query, cross, limit, offset)
             .map_err(|e| map_expansion_error(e, "the phrase"))?;
         let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
-        let was_capped = false;
+        let was_capped = cut;
         let mut results = self.results_with_cross(&searcher, &items, None)?;
 
         let all_terms: Vec<&SearchTerm> = and_terms.iter().chain(or_terms.iter()).collect();
@@ -2329,7 +2370,10 @@ impl SearchEngine {
                     Some(b) if sets.iter().all(|s| !s.is_empty()) && and_sets.iter().all(|s| !s.is_empty()) => {
                         let slots: Vec<Vec<u32>> = sets.iter().flatten().cloned().collect();
                         let mut sources = self.scan_sources();
-                        sources.and_terms = and_sets.clone();
+                        if !q.and_terms.is_empty() {
+                            sources.and_docs = q.and_terms.iter().map(|t| self.and_term_docs(&searcher, t)).collect::<Result<Vec<_>>>()?;
+                            sources.doc_of = Some(self.doc_of_order_key(&searcher));
+                        }
                         crate::probe::amount("boundary.streams", 1);
                         b.scan(
                             MatchKind::Proximity { lens: sets.iter().map(|s| s.len()).collect(), distances: distances.clone(), ordered: q.ordered },
@@ -2954,9 +2998,9 @@ impl SearchEngine {
             });
         }
         // The paged path is exact, and drains the boundary stream to its end.
-        let (total_hits, items) = self.paged_with_cross(&searcher, &*final_query, cross, limit, offset)?;
+        let (total_hits, items, cut) = self.paged_with_cross_flagged(&searcher, &*final_query, cross, limit, offset)?;
         let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
-        let was_capped = false;
+        let was_capped = cut;
         let mut results = self.results_with_cross(&searcher, &items, None)?;
 
         match self.kind {
@@ -3166,7 +3210,7 @@ impl SearchEngine {
             let plan = self.compound_plan(&sets)?;
             debug_assert!(plan.verify.is_none());
             let final_query = self.with_filters(plan.query, filters);
-            let (total, items) = self.paged_with_cross(searcher, &*final_query, cross, limit, offset)?;
+            let (total, items, cut) = self.paged_with_cross_flagged(searcher, &*final_query, cross, limit, offset)?;
             let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
             let mut results = self.results_with_cross(searcher, &items, None)?;
             let keys = self.keys_of(searcher, &addrs);
@@ -3188,7 +3232,7 @@ impl SearchEngine {
                     total
                 );
             }
-            return Ok(Walked { total, results, was_capped: false, walk_key: None, complete: true });
+            return Ok(Walked { total, results, was_capped: cut, walk_key: None, complete: true });
         }
         if prox_debug() {
             eprintln!("[wildcard] path=walk sizes={:?} trie_nodes={} threshold={}", sizes, states, self.config.wildcard_expansion_threshold);
@@ -3615,11 +3659,20 @@ impl CrossMerge {
         Ok(true)
     }
 
+    /// What the stream's pull asks the walk: go on (its budget), and
+    /// whether its window is already served.
+    fn ask(sink: &mut Sink) -> Pull {
+        Pull { go: sink.tick(), window_served: sink.window_served() }
+    }
+
     /// A main hit, with the cross hits due before and on its page.
     fn push_main(&mut self, sink: &mut Sink, addr: DocAddress, positions: Vec<u32>) -> Result<bool> {
         if !self.inter.is_empty() {
             let key = self.key_of(addr);
-            let before = self.inter.before(key);
+            let before = self.inter.before(key, &mut || Self::ask(sink));
+            if self.inter.is_cut() {
+                sink.note_capped();
+            }
             for c in &before {
                 if !self.push_cross(sink, c)? {
                     return Ok(false);
@@ -3629,7 +3682,10 @@ impl CrossMerge {
                 self.stopped = true;
                 return Ok(false);
             }
-            let at = self.inter.at(key);
+            let at = self.inter.at(key, &mut || Self::ask(sink));
+            if self.inter.is_cut() {
+                sink.note_capped();
+            }
             for c in &at {
                 if !self.push_cross(sink, c)? {
                     return Ok(false);
@@ -3651,7 +3707,10 @@ impl CrossMerge {
         if self.stopped {
             return Ok(());
         }
-        let rest = self.inter.rest();
+        let rest = self.inter.rest(&mut || Self::ask(sink));
+        if self.inter.is_cut() {
+            sink.note_capped();
+        }
         for c in &rest {
             if !self.push_cross(sink, c)? {
                 return Ok(());

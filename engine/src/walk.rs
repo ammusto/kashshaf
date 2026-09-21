@@ -270,6 +270,10 @@ pub struct Sink {
     start: Instant,
     pending: Vec<WalkHit>,
     pushed: usize,
+    /// `offset + limit` of the request that started the walk: once that
+    /// many hits are pushed its window is served, and waiting on a lagging
+    /// boundary stream is bounded (`Sink::window_served`).
+    want: usize,
     candidates: usize,
     has_permit: bool,
     stopped_by_cap: bool,
@@ -282,7 +286,7 @@ pub struct Sink {
 const FLUSH_EVERY: usize = 64;
 
 impl Sink {
-    fn new(entry: Arc<WalkEntry>, pool: Arc<PermitPool>, limits: WalkLimits, queue_timeout: Duration) -> Self {
+    fn new(entry: Arc<WalkEntry>, pool: Arc<PermitPool>, limits: WalkLimits, queue_timeout: Duration, want: usize) -> Self {
         Self {
             entry,
             pool,
@@ -291,6 +295,7 @@ impl Sink {
             start: Instant::now(),
             pending: Vec::with_capacity(FLUSH_EVERY),
             pushed: 0,
+            want,
             candidates: 0,
             has_permit: false,
             stopped_by_cap: false,
@@ -298,6 +303,17 @@ impl Sink {
             stopped_by_queue: false,
             walker_capped: false,
         }
+    }
+
+    /// The window of the request that started this walk has been pushed.
+    /// An uncapped walk (exact count) has no window to speak of: false.
+    pub fn window_served(&self) -> bool {
+        self.limits.max_hits.is_some() && self.pushed >= self.want
+    }
+
+    /// The stream it consumes was cut short: the count is a lower bound.
+    pub fn note_capped(&mut self) {
+        self.walker_capped = true;
     }
 
     /// Deliver one verified hit. Returns `false` once the hit cap is reached
@@ -496,6 +512,7 @@ impl WalkCache {
         start: Instant,
         make: impl FnOnce() -> Result<Walker>,
     ) -> Result<WalkWindow> {
+        let want = offset.saturating_add(limit);
         if fresh {
             let walker = match make() {
                 Ok(w) => w,
@@ -509,7 +526,7 @@ impl WalkCache {
             let queue_timeout = self.queue_timeout;
             let spawned = std::thread::Builder::new()
                 .name("kashshaf-walk".into())
-                .spawn(move || run_walk(e2, pool, walker, limits, queue_timeout));
+                .spawn(move || run_walk(e2, pool, walker, limits, queue_timeout, want));
             if let Err(e) = spawned {
                 self.remove(key);
                 return Err(anyhow!("could not start walk thread: {}", e));
@@ -517,7 +534,6 @@ impl WalkCache {
         }
         // Without a hit cap the answer is the whole walk (exact, or budgeted).
         let wait_for_all = limits.max_hits.is_none();
-        let want = offset.saturating_add(limit);
         let inline_deadline = start + Duration::from_millis(WALK_INLINE_MS);
         let mut st = entry.lock();
         loop {
@@ -621,11 +637,11 @@ impl WalkCache {
     }
 }
 
-fn run_walk(entry: Arc<WalkEntry>, pool: Arc<PermitPool>, walker: Walker, limits: WalkLimits, queue_timeout: Duration) {
+fn run_walk(entry: Arc<WalkEntry>, pool: Arc<PermitPool>, walker: Walker, limits: WalkLimits, queue_timeout: Duration, want: usize) {
     let start = Instant::now();
     let _t = crate::probe::timer("walk.total");
     pool.running_inc();
-    let mut sink = Sink::new(entry.clone(), pool.clone(), limits, queue_timeout);
+    let mut sink = Sink::new(entry.clone(), pool.clone(), limits, queue_timeout, want);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| walker(&mut sink)));
     sink.flush();
     let capped = sink.stopped_by_cap || sink.stopped_by_budget || sink.walker_capped || sink.stopped_by_queue;

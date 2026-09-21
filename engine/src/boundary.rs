@@ -46,8 +46,9 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tantivy::query::{BooleanQuery, Occur, Query, RangeQuery, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, Schema, Term};
 use tantivy::{DocAddress, Index, IndexReader, ReloadPolicy, Searcher};
@@ -171,25 +172,67 @@ pub struct ScanSources {
     pub cache: Option<Arc<TokenCache>>,
     pub triples: Option<Arc<TripleMaps>>,
     pub threshold: usize,
-    /// Page-level AND terms of a proximity search, one set per slot of each:
-    /// a hit across a break keeps only if every term is on either of its two
-    /// pages, checked on the forward index.
-    pub and_terms: Vec<Vec<Vec<u32>>>,
+    /// Page-level AND terms of a proximity search: a hit across a break
+    /// keeps only if every term is on either of its two pages. Each is the
+    /// set of main-index documents holding the term (a bitset, looked up by
+    /// the page's order key), and for a multi-word term the phrase to check
+    /// on the page itself once the bitset (its bag of words) has passed.
+    pub and_docs: Vec<AndDocs>,
+    /// The main-index document of an order key, for the bitsets.
+    pub doc_of: Option<Arc<dyn Fn(OrderKey) -> Option<u32> + Send + Sync>>,
 }
 
-/// The page-level check on both pages of a cross hit.
+/// One page-level AND term as the boundary scan checks it.
+#[derive(Clone)]
+pub struct AndDocs {
+    /// Bit `d` set when main-index document `d` holds the term (every word
+    /// of it, for a phrase).
+    pub bits: Arc<Vec<u64>>,
+    /// The phrase to verify on the page, when the term has several words.
+    pub exact: Option<Vec<Members>>,
+}
+
+impl AndDocs {
+    #[inline]
+    pub fn has(&self, doc: u32) -> bool {
+        self.bits.get((doc / 64) as usize).map_or(false, |w| w & (1u64 << (doc % 64)) != 0)
+    }
+}
+
+/// The page-level check on both pages of a cross hit: the bitsets first
+/// (two lookups per term, no page read), the forward index only for a
+/// phrase term whose words are all there.
 struct AndOnEitherPage {
-    cache: Arc<TokenCache>,
-    triples: Arc<TripleMaps>,
-    terms: Vec<Vec<Members>>,
+    cache: Option<Arc<TokenCache>>,
+    triples: Option<Arc<TripleMaps>>,
+    docs: Vec<AndDocs>,
+    doc_of: Arc<dyn Fn(OrderKey) -> Option<u32> + Send + Sync>,
 }
 
 impl AndOnEitherPage {
-    fn passes(&self, left: PageKey, right: PageKey) -> bool {
-        let Ok(ids) = self.cache.get_ids_batch(&[left, right]) else { return false };
-        let page = |k: PageKey| -> Vec<u32> { ids.get(&k).map(|d| d.iter().map(|&x| self.triples.triple_of_def(x)).collect()).unwrap_or_default() };
-        let (l, r) = (page(left), page(right));
-        self.terms.iter().all(|sets| !forward::phrase_starts(&l, sets).is_empty() || !forward::phrase_starts(&r, sets).is_empty())
+    fn passes(&self, hit: &CrossHit) -> bool {
+        let k = hit.order_key;
+        let primary = (self.doc_of)(k);
+        let secondary = (self.doc_of)((k.0, k.1, hit.secondary.part_index, hit.secondary.page_id));
+        let on = |d: &AndDocs, doc: Option<u32>| doc.map_or(false, |x| d.has(x));
+        let mut exact_needed: Vec<&Vec<Members>> = Vec::new();
+        for d in &self.docs {
+            let (p, s) = (on(d, primary), on(d, secondary));
+            if !(p || s) {
+                return false;
+            }
+            if let Some(m) = &d.exact {
+                exact_needed.push(m);
+            }
+        }
+        if exact_needed.is_empty() {
+            return true;
+        }
+        let (Some(cache), Some(triples)) = (&self.cache, &self.triples) else { return false };
+        let Ok(ids) = cache.get_ids_batch(&[hit.primary, hit.secondary]) else { return false };
+        let page = |k: PageKey| -> Vec<u32> { ids.get(&k).map(|d| d.iter().map(|&x| triples.triple_of_def(x)).collect()).unwrap_or_default() };
+        let (l, r) = (page(hit.primary), page(hit.secondary));
+        exact_needed.iter().all(|sets| !forward::phrase_starts(&l, sets).is_empty() || !forward::phrase_starts(&r, sets).is_empty())
     }
 }
 
@@ -411,19 +454,17 @@ impl BoundaryIndex {
             (true, Some(c), Some(t)) => Some((c.clone(), t.clone())),
             (true, _, _) => return None,
         };
-        // Page-level AND terms need the forward index too; without it the
-        // hits could not be checked and none are made.
-        let and_check = if sources.and_terms.is_empty() {
+        // Page-level AND terms are checked on their document bitsets; a
+        // phrase among them needs the forward index too, and without it no
+        // hits are made.
+        let and_check = if sources.and_docs.is_empty() {
             None
         } else {
-            match (&sources.cache, &sources.triples) {
-                (Some(c), Some(t)) => Some(AndOnEitherPage {
-                    cache: c.clone(),
-                    triples: t.clone(),
-                    terms: sources.and_terms.iter().map(|sets| sets.iter().map(|s| Members::from_ids(s, sources.threshold)).collect()).collect(),
-                }),
-                _ => return None,
+            let Some(doc_of) = sources.doc_of.clone() else { return None };
+            if sources.and_docs.iter().any(|d| d.exact.is_some()) && (sources.cache.is_none() || sources.triples.is_none()) {
+                return None;
             }
+            Some(AndOnEitherPage { cache: sources.cache.clone(), triples: sources.triples.clone(), docs: sources.and_docs.clone(), doc_of })
         };
         let filter = self.filter_query(filters);
         let (tx, rx) = sync_channel::<CrossHit>(STREAM_DEPTH);
@@ -612,8 +653,7 @@ struct Gate {
 impl Gate {
     fn send(&self, hit: CrossHit) -> bool {
         if let Some(check) = &self.and_check {
-            let (left, right) = if hit.primary_is_left { (hit.primary, hit.secondary) } else { (hit.secondary, hit.primary) };
-            if !check.passes(left, right) {
+            if !check.passes(&hit) {
                 return true;
             }
         }
@@ -713,20 +753,68 @@ impl CrossStream {
 pub struct Interleave {
     rx: Option<Receiver<CrossHit>>,
     head: Option<CrossHit>,
+    /// The stream was dropped before its end (the consumer's budget ran
+    /// out, or its window was served and the scan was far behind): the
+    /// cross hits still to come are lost and the count is a lower bound.
+    cut: bool,
+    /// Time spent waiting on the stream since the consumer's window was served.
+    waited_after_window: Duration,
+}
+
+/// How long a pull waits before asking the consumer whether to go on.
+const PULL_SLICE: Duration = Duration::from_millis(50);
+/// How long a consumer whose window is already served keeps waiting on a
+/// lagging scan, in all, before it cuts the stream.
+pub const CROSS_WAIT_AFTER_WINDOW: Duration = Duration::from_millis(500);
+
+/// What the consumer says at each pull slice: `go` false stops at once
+/// (its budget is spent); `window_served` true bounds the waiting.
+pub struct Pull {
+    pub go: bool,
+    pub window_served: bool,
 }
 
 impl Interleave {
+    /// The stream, its first hit pulled without a consumer to ask (the
+    /// stream has only just started).
     pub fn new(stream: Option<CrossStream>) -> Self {
-        let mut i = Self { rx: stream.map(|s| s.rx), head: None };
-        i.pull();
+        let mut i = Self { rx: stream.map(|s| s.rx), head: None, cut: false, waited_after_window: Duration::ZERO };
+        i.pull(&mut || Pull { go: true, window_served: false });
         i
     }
 
-    fn pull(&mut self) {
+    /// The next hit, waiting in slices and asking the consumer between
+    /// them: a consumer out of budget, or one whose window is served and
+    /// has waited `CROSS_WAIT_AFTER_WINDOW` in all, cuts the stream.
+    fn pull(&mut self, ask: &mut dyn FnMut() -> Pull) {
         let _t = crate::probe::timer("boundary.wait");
-        self.head = self.rx.as_ref().and_then(|rx| rx.recv().ok());
-        if self.head.is_none() {
-            self.rx = None;
+        self.head = None;
+        let Some(rx) = self.rx.as_ref() else { return };
+        loop {
+            match rx.recv_timeout(PULL_SLICE) {
+                Ok(h) => {
+                    self.head = Some(h);
+                    return;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.rx = None;
+                    return;
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    let p = ask();
+                    let mut cut = !p.go;
+                    if p.window_served {
+                        self.waited_after_window += PULL_SLICE;
+                        cut |= self.waited_after_window >= CROSS_WAIT_AFTER_WINDOW;
+                    }
+                    if cut {
+                        crate::probe::amount("boundary.cut", 1);
+                        self.cut = true;
+                        self.rx = None;
+                        return;
+                    }
+                }
+            }
         }
     }
 
@@ -735,41 +823,51 @@ impl Interleave {
         self.head.is_none()
     }
 
+    /// The stream was dropped before its end.
+    pub fn is_cut(&self) -> bool {
+        self.cut
+    }
+
     /// Cross hits ordered strictly before `key`.
-    pub fn before(&mut self, key: OrderKey) -> Vec<CrossHit> {
+    pub fn before(&mut self, key: OrderKey, ask: &mut dyn FnMut() -> Pull) -> Vec<CrossHit> {
         let mut out = Vec::new();
         while let Some(h) = &self.head {
             if h.order_key >= key {
                 break;
             }
             out.push(self.head.take().unwrap());
-            self.pull();
+            self.pull(ask);
         }
         out
     }
 
     /// Cross hits on the same page as `key`.
-    pub fn at(&mut self, key: OrderKey) -> Vec<CrossHit> {
+    pub fn at(&mut self, key: OrderKey, ask: &mut dyn FnMut() -> Pull) -> Vec<CrossHit> {
         let mut out = Vec::new();
         while let Some(h) = &self.head {
             if h.order_key != key {
                 break;
             }
             out.push(self.head.take().unwrap());
-            self.pull();
+            self.pull(ask);
         }
         out
     }
 
-    /// Everything left: the scan runs to its end.
-    pub fn rest(&mut self) -> Vec<CrossHit> {
+    /// Everything left: the scan runs to its end (or is cut).
+    pub fn rest(&mut self, ask: &mut dyn FnMut() -> Pull) -> Vec<CrossHit> {
         let mut out = Vec::new();
         while let Some(h) = self.head.take() {
             out.push(h);
-            self.pull();
+            self.pull(ask);
         }
         out
     }
+}
+
+/// A consumer with a deadline and no window notion (the paged path).
+pub fn ask_until(deadline: Instant) -> impl FnMut() -> Pull {
+    move || Pull { go: Instant::now() < deadline, window_served: false }
 }
 
 /// A page's window with its neighbours, as the boundary documents hold it:
@@ -913,10 +1011,11 @@ mod tests {
             primary_is_left: true,
         };
         let mut i = Interleave::new(Some(CrossStream::from_vec(vec![hit((1, 1, 0, 7)), hit((1, 1, 0, 3)), hit((2, 5, 0, 1))])));
-        assert_eq!(i.before((1, 1, 0, 5)).iter().map(|h| h.order_key).collect::<Vec<_>>(), vec![(1, 1, 0, 3)]);
-        assert_eq!(i.at((1, 1, 0, 7)).len(), 1);
+        let mut go = || Pull { go: true, window_served: false };
+        assert_eq!(i.before((1, 1, 0, 5), &mut go).iter().map(|h| h.order_key).collect::<Vec<_>>(), vec![(1, 1, 0, 3)]);
+        assert_eq!(i.at((1, 1, 0, 7), &mut go).len(), 1);
         assert!(!i.is_empty());
-        assert_eq!(i.rest().len(), 1);
+        assert_eq!(i.rest(&mut go).len(), 1);
         assert!(i.is_empty());
         // Two streams merge by order, with a repeated span once.
         let a = CrossStream::from_vec(vec![hit((1, 1, 0, 2)), hit((1, 1, 0, 9))]);
