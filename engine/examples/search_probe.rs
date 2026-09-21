@@ -205,7 +205,14 @@ fn report_case(ctx: &Ctx, c: &Case, cold: &[Measured], warm: &[Measured]) {
 }
 
 fn run_cases(ctx: &Ctx, cases: &[Case]) -> anyhow::Result<()> {
+    // `KASHSHAF_PROBE_SKIP=a;b` leaves out cases whose name contains a or b.
+    let skip: Vec<String> = std::env::var("KASHSHAF_PROBE_SKIP").unwrap_or_default().split(';').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
     for c in cases {
+        if skip.iter().any(|x| c.name.contains(x.as_str())) {
+            println!("
+## [{}] {} — skipped", c.group, c.name);
+            continue;
+        }
         let mut cold = Vec::new();
         let mut warm = Vec::new();
         for _ in 0..RUNS {
