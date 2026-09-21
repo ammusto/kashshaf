@@ -469,7 +469,10 @@ impl WalkCache {
             }
         };
         entry.attached.fetch_add(1, Ordering::SeqCst);
+        crate::probe::amount(if fresh { "walk.fresh" } else { "walk.reused" }, 1);
+        let t = Instant::now();
         let result = self.serve(&key, &entry, fresh, offset, limit, limits, start, make);
+        crate::probe::stage("walk.wait", t);
         entry.attached.fetch_sub(1, Ordering::SeqCst);
         result
     }
@@ -612,6 +615,7 @@ impl WalkCache {
 
 fn run_walk(entry: Arc<WalkEntry>, pool: Arc<PermitPool>, walker: Walker, limits: WalkLimits, queue_timeout: Duration) {
     let start = Instant::now();
+    let _t = crate::probe::timer("walk.total");
     pool.running_inc();
     let mut sink = Sink::new(entry.clone(), pool.clone(), limits, queue_timeout);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| walker(&mut sink)));

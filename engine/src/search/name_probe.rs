@@ -74,6 +74,28 @@ impl SearchEngine {
         self.name_retrieval_sets(patterns)
     }
 
+    /// The slot sets of any term, in its mode.
+    pub fn probe_term_sets(&self, term: &SearchTerm) -> Sets {
+        self.term_sets(term)
+    }
+
+    /// Per slot, the summed document frequency of its triple ids: the
+    /// postings a phrase scorer over these slots reads in full.
+    pub fn probe_slot_doc_freqs(&self, sets: &[Vec<u32>]) -> Vec<u64> {
+        let searcher = self.reader.searcher();
+        let tokens = self.fields.tokens.expect("compound index");
+        let mut out = vec![0u64; sets.len()];
+        for seg in searcher.segment_readers() {
+            let Ok(inv) = seg.inverted_index(tokens) else { continue };
+            for (k, ids) in sets.iter().enumerate() {
+                for &t in ids {
+                    out[k] += inv.doc_freq(&Term::from_field_text(tokens, &triple_term(t))).unwrap_or(0) as u64;
+                }
+            }
+        }
+        out
+    }
+
     /// The slot sets of each pattern, one list per pattern.
     pub fn probe_sets(&self, patterns: &[String]) -> Vec<Sets> {
         patterns.iter().map(|p| self.term_sets(&SearchTerm { query: p.clone(), mode: SearchMode::Surface })).collect()

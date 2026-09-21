@@ -432,6 +432,7 @@ impl BoundaryIndex {
         std::thread::Builder::new()
             .name("kashshaf-boundary".into())
             .spawn(move || {
+                let _t = crate::probe::timer("boundary.total");
                 let searcher = index.reader.searcher();
                 let Ok(columns) = Columns::open(&searcher, 0, index.fields) else { return };
                 let tx = Gate { tx, and_check };
@@ -616,6 +617,7 @@ impl Gate {
                 return true;
             }
         }
+        crate::probe::amount("boundary.hits", 1);
         self.tx.send(hit).is_ok()
     }
 }
@@ -721,6 +723,7 @@ impl Interleave {
     }
 
     fn pull(&mut self) {
+        let _t = crate::probe::timer("boundary.wait");
         self.head = self.rx.as_ref().and_then(|rx| rx.recv().ok());
         if self.head.is_none() {
             self.rx = None;

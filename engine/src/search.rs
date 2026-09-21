@@ -841,6 +841,7 @@ impl SearchEngine {
         if sets.len() < 2 {
             return None;
         }
+        crate::probe::amount("boundary.streams", 1);
         b.scan(MatchKind::Phrase, sets.to_vec(), filters, &self.scan_sources())
     }
 
@@ -879,13 +880,20 @@ impl SearchEngine {
             }
             *seen += 1;
         };
+        let t = std::time::Instant::now();
         let weight = query.weight(EnableScoring::disabled_from_searcher(searcher))?;
+        crate::probe::stage("weight", t);
+        let mut iterated = 0u64;
         for (seg_ord, seg) in searcher.segment_readers().iter().enumerate() {
             let cols = self.columns(searcher, seg_ord as u32);
+            let t = std::time::Instant::now();
             let mut scorer = weight.scorer(seg, 1.0)?;
+            crate::probe::stage("scorer", t);
+            let _t = crate::probe::timer("iterate");
             let alive = seg.alive_bitset();
             let mut doc = scorer.doc();
             while doc != TERMINATED {
+                iterated += 1;
                 if alive.map_or(true, |b| b.is_alive(doc)) {
                     let addr = DocAddress::new(seg_ord as u32, doc);
                     let key = cols.order_key(doc);
@@ -904,6 +912,7 @@ impl SearchEngine {
                 doc = scorer.advance();
             }
         }
+        crate::probe::amount("iterate.docs", iterated);
         for c in inter.rest() {
             if let Some(item) = self.cross_item(searcher, &c)? {
                 take(item, &mut seen);
@@ -961,6 +970,7 @@ impl SearchEngine {
     }
 
     fn attach_cross(&self, searcher: &Searcher, r: &mut SearchResult, c: &CrossRef) -> Result<()> {
+        let _t = crate::probe::timer("results.cross");
         let (part_label, page_number) = match self.find_page(searcher, c.secondary.id, c.secondary.part_index, c.secondary.page_id)? {
             Some(addr) => {
                 let doc: TantivyDocument = searcher.doc(addr)?;
@@ -984,7 +994,10 @@ impl SearchEngine {
     /// are rebuilt from the forward index (the same 20 + 20 tokens the index
     /// holds) and searched for a straddling phrase.
     pub fn get_page_matches(&self, id: u64, part_index: u64, page_id: u64, terms: &[SearchTerm]) -> Result<PageMatches> {
+        let t = std::time::Instant::now();
         let mut out = PageMatches { indices: self.get_match_positions_combined(id, part_index, page_id, terms)?, ..Default::default() };
+        crate::probe::stage("page.positions", t);
+        let _t = crate::probe::timer("page.edges");
         let (Some(b), Some(cache), Some(triples)) = (&self.boundary, &self.cache, &self.triples) else {
             return Ok(out);
         };
@@ -1105,9 +1118,12 @@ impl SearchEngine {
             return Arc::new(self.triples().triples_for_surface(&g.raw));
         }
         if let Some(v) = self.glob_cache.lock().unwrap_or_else(|p| p.into_inner()).get(&g.raw).cloned() {
+            crate::probe::amount("glob.cache_hit", 1);
             return v;
         }
+        let _t = crate::probe::timer("glob.expand");
         let v = Arc::new(self.triples().triples_for_glob(g));
+        crate::probe::amount("glob.ids", v.len() as u64);
         self.glob_cache.lock().unwrap_or_else(|p| p.into_inner()).put(g.raw.clone(), v.clone());
         v
     }
@@ -1122,6 +1138,7 @@ impl SearchEngine {
 
     /// Cache key of a walk: the query, its filters and the exact flag.
     fn walk_key<T: Serialize>(&self, kind: &str, parts: &T, filters: &SearchFilters) -> String {
+        let _t = crate::probe::timer("walk.key");
         let mut f = filters.clone();
         if let Some(ids) = f.book_ids.as_mut() {
             ids.sort_unstable();
@@ -1171,26 +1188,41 @@ impl SearchEngine {
         let mut merge = CrossMerge::new(&searcher, self.fields, cross);
         Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
             let mut process_chunk = |chunk: &[DocAddress], sink: &mut Sink| -> Result<bool> {
+                let t = std::time::Instant::now();
                 let keys = page_keys(&searcher, chunk);
                 let pages = page_triples_with(&cache, &triples, &keys)?;
+                crate::probe::stage("walk.fetch", t);
+                crate::probe::amount("walk.candidates", chunk.len() as u64);
                 sink.add_candidates(chunk.len());
+                let t = std::time::Instant::now();
+                let mut hits = 0u64;
                 for (addr, key) in chunk.iter().zip(keys.iter()) {
                     let Some(ids) = pages.get(key) else { continue };
                     if let Some(positions) = verify(ids) {
+                        hits += 1;
                         if !merge.push_main(sink, *addr, positions)? {
+                            crate::probe::stage("walk.verify", t);
+                            crate::probe::amount("walk.hits", hits);
                             return Ok(false);
                         }
                     }
                 }
+                crate::probe::stage("walk.verify", t);
+                crate::probe::amount("walk.hits", hits);
                 Ok(sink.tick())
             };
             if reading_order {
+                let t = std::time::Instant::now();
                 let weight = query.weight(EnableScoring::disabled_from_searcher(&searcher))?;
+                crate::probe::stage("walk.weight", t);
                 for (seg_ord, seg) in searcher.segment_readers().iter().enumerate() {
+                    let t = std::time::Instant::now();
                     let mut scorer = weight.scorer(seg, 1.0)?;
+                    crate::probe::stage("walk.scorer", t);
                     let alive = seg.alive_bitset();
                     let mut chunk: Vec<DocAddress> = Vec::with_capacity(FORWARD_BATCH);
                     loop {
+                        let t = std::time::Instant::now();
                         let mut doc = scorer.doc();
                         while doc != TERMINATED && chunk.len() < FORWARD_BATCH {
                             if alive.map_or(true, |b| b.is_alive(doc)) {
@@ -1198,6 +1230,7 @@ impl SearchEngine {
                             }
                             doc = scorer.advance();
                         }
+                        crate::probe::stage("walk.iterate", t);
                         if chunk.is_empty() {
                             break;
                         }
@@ -1342,6 +1375,7 @@ impl SearchEngine {
 
     /// Resolve each word of a term to its triple-id set.
     fn term_sets(&self, term: &SearchTerm) -> Sets {
+        let _t = crate::probe::timer("term_sets");
         let t = self.triples();
         self.term_words(term)
             .iter()
@@ -1381,7 +1415,10 @@ impl SearchEngine {
                     return Ok(Plan { query: Box::new(EmptyQuery), verify: None });
                 }
                 let states: usize = sets.iter().map(|s| trie_nodes(s)).sum();
+                crate::probe::amount("plan.slot_ids", sets.iter().map(|s| s.len() as u64).sum());
+                crate::probe::amount("plan.regex_states", states as u64);
                 if states <= REGEX_STATE_BUDGET {
+                    crate::probe::amount("plan.regex_phrase", 1);
                     let patterns: Vec<String> = sets
                         .iter()
                         .map(|s| {
@@ -1397,6 +1434,7 @@ impl SearchEngine {
                 if slop > 0 {
                     return Err(anyhow::anyhow!("phrase too wide for a slop search"));
                 }
+                crate::probe::amount("plan.bag_of_words", 1);
                 let clauses: Vec<(Occur, Box<dyn Query>)> =
                     sets.iter().map(|s| (Occur::Must, self.set_query(s))).collect();
                 Ok(Plan {
@@ -1416,6 +1454,7 @@ impl SearchEngine {
 
     /// `build_term_plan` for a phrase with `slop` positions of leniency.
     fn build_term_plan_slop(&self, term: &SearchTerm, slop: u32) -> Result<Plan> {
+        let _t = crate::probe::timer("plan");
         match self.kind {
             IndexKind::ThreeField => {
                 let words = self.term_words(term);
@@ -1534,7 +1573,40 @@ impl SearchEngine {
     /// `(total_hits, addresses)` for the requested window in reading order.
     fn paged(&self, searcher: &Searcher, query: &dyn Query, limit: usize, offset: usize) -> Result<(usize, Vec<DocAddress>)> {
         if self.reading_order {
+            if crate::probe::on() {
+                // The probe's split of the collector pass: the same docs in
+                // the same order, with the weight, the scorers and the
+                // iteration timed apart.
+                let end = offset.saturating_add(limit);
+                let mut seen = 0usize;
+                let mut out: Vec<DocAddress> = Vec::new();
+                let t = std::time::Instant::now();
+                let weight = query.weight(EnableScoring::disabled_from_searcher(searcher))?;
+                crate::probe::stage("weight", t);
+                for (seg_ord, seg) in searcher.segment_readers().iter().enumerate() {
+                    let t = std::time::Instant::now();
+                    let mut scorer = weight.scorer(seg, 1.0)?;
+                    crate::probe::stage("scorer", t);
+                    let t = std::time::Instant::now();
+                    let alive = seg.alive_bitset();
+                    let mut doc = scorer.doc();
+                    while doc != TERMINATED {
+                        if alive.map_or(true, |b| b.is_alive(doc)) {
+                            if seen >= offset && seen < end {
+                                out.push(DocAddress::new(seg_ord as u32, doc));
+                            }
+                            seen += 1;
+                        }
+                        doc = scorer.advance();
+                    }
+                    crate::probe::stage("iterate", t);
+                }
+                crate::probe::amount("iterate.docs", seen as u64);
+                return Ok((seen, out));
+            }
+            let t = std::time::Instant::now();
             let (total, docs) = searcher.search(query, &ReadingOrderCollector { offset, limit })?;
+            crate::probe::stage("collect", t);
             return Ok((total, docs));
         }
         let (total, top) = searcher.search(
@@ -1611,6 +1683,8 @@ impl SearchEngine {
     }
 
     fn results_from(&self, searcher: &Searcher, addrs: &[DocAddress]) -> Result<Vec<SearchResult>> {
+        let _t = crate::probe::timer("results");
+        crate::probe::amount("results.rows", addrs.len() as u64);
         let mut out = Vec::with_capacity(addrs.len());
         for addr in addrs {
             let doc: TantivyDocument = searcher.doc(*addr)?;
@@ -1637,6 +1711,9 @@ impl SearchEngine {
 
     /// Union of highlight positions of several resolved terms on each page.
     fn forward_highlights(&self, keys: &[PageKey], terms: &[Sets], cap: usize) -> Result<HashMap<PageKey, Vec<u32>>> {
+        let _t = crate::probe::timer("highlights");
+        crate::probe::amount("highlights.pages", keys.len() as u64);
+        crate::probe::amount("highlights.sets", terms.len() as u64);
         let pages = self.page_triples(keys)?;
         let hashed: Vec<Vec<HashSet<u32>>> = terms.iter().map(|s| Self::hash_sets(s)).collect();
         let mut out = HashMap::with_capacity(keys.len());
@@ -2173,6 +2250,7 @@ impl SearchEngine {
                         let slots: Vec<Vec<u32>> = sets.iter().flatten().cloned().collect();
                         let mut sources = self.scan_sources();
                         sources.and_terms = and_sets.clone();
+                        crate::probe::amount("boundary.streams", 1);
                         b.scan(
                             MatchKind::Proximity { lens: sets.iter().map(|s| s.len()).collect(), distances: distances.clone(), ordered: q.ordered },
                             slots,

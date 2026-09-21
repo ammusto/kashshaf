@@ -360,6 +360,16 @@ pub fn intersect_n_stream(
         }
     }
     stats.intersect_us = (start.elapsed().as_micros() as u64).saturating_sub(stats.open_us + stats.positions_us);
+    if crate::probe::on() {
+        crate::probe::amount("pos.open_us", stats.open_us);
+        crate::probe::amount("pos.intersect_us", stats.intersect_us);
+        crate::probe::amount("pos.positions_us", stats.positions_us);
+        crate::probe::amount("pos.cursors", stats.cursors.iter().sum::<usize>() as u64);
+        crate::probe::amount("pos.doc_freq_sum", stats.doc_freqs.iter().sum::<u64>());
+        crate::probe::amount("pos.doc_freq_min", stats.doc_freqs.iter().copied().min().unwrap_or(0));
+        crate::probe::amount("pos.co_occurring", stats.co_occurring as u64);
+        crate::probe::amount("pos.hits", stats.hits as u64);
+    }
     Ok(stats)
 }
 
@@ -749,6 +759,14 @@ pub fn cooccurring_hybrid_stream(
     }
     out.stats.intersect_us =
         (start.elapsed().as_micros() as u64).saturating_sub(out.stats.open_us + out.stats.positions_us);
+    if crate::probe::on() {
+        crate::probe::amount("hyb.open_us", out.stats.open_us);
+        crate::probe::amount("hyb.intersect_us", out.stats.intersect_us);
+        crate::probe::amount("hyb.cursors", out.stats.cursors.iter().sum::<usize>() as u64);
+        crate::probe::amount("hyb.doc_freq_sum", out.stats.doc_freqs.iter().sum::<u64>());
+        crate::probe::amount("hyb.candidates", out.stats.co_occurring as u64);
+        crate::probe::amount("hyb.wide_slots", out.wide.iter().filter(|w| **w).count() as u64);
+    }
     Ok((out.wide, out.stats))
 }
 
