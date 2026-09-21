@@ -2,13 +2,17 @@
 
 ## [0.8.0] — unreleased
 
-**Proximity search.** Chain up to three terms, each within its own distance of the next; require the written order; name up to two terms the page must also contain, shown in a second colour in the reader. Needs API 0.8.0 for chains online; two-term searches work against any server.
+**Proximity search.** Chain up to three terms, each within its own distance of the next; require the written order; add up to two terms the page must also contain, shown in a second colour in the reader. Needs API 0.8.0 online; two-term searches work against any server.
 
-**Text selection.** The dialog has a bar at the foot with the count, Cancel and Confirm; Cancel, × and Escape put back the selection you opened it with.
+**Name search.** Faster, and a name split by a page turn is found and highlighted across both pages, as phrases are (corpus 4.3.0).
 
-**Name search.** Four times faster on a full form, and a name split by a page turn is now found and highlighted across both pages, as phrases are. Needs corpus 4.3.0 for the page turns.
+**Faster searches.** Phrases, booleans with phrases and name forms run on the engine's own matcher with exact counts (a common two-word phrase: 2 s → under 0.5 s). Loading more results no longer re-runs the search. Result rows carry a snippet, not the whole page. A proximity search with a page term no longer ties up the server behind the page-break scan.
 
-**Faster searches.** Phrases, booleans with phrases and name forms run on the engine's own positional matcher with exact counts (a common two-word phrase 2 s → under 0.5 s); loading more results is a slice of the first search, not the search again; result rows carry a snippet instead of the whole page; a proximity search with a page term no longer ties up the server for minutes behind the page-break scan. **Lemma searches include the exact word.** A lemma slot now also matches the typed word's own surface form, so a lemma search always finds the word as written, and a phrase with a name or a clitic form in it (احمد, وسلم) is found instead of nothing. Counts can rise slightly where the lemmatiser had not attached a form to its lemma.
+**Lemma searches include the exact word.** A lemma search now also matches the word as written, so a phrase with a name or a clitic form in it (احمد, وسلم) is found instead of nothing. Counts can rise slightly.
+
+**Text selection.** Moved to the top bar. The dialog has Cancel and Confirm at the foot; Cancel, × and Escape restore the selection you opened it with.
+
+**Fixed.** The result-row tooltip could stay up after the pointer left.
 
 ## [0.7.1] — 2026-09-20
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { secondaryIsAfter } from '@kashshaf/shared';
 import { createPortal } from 'react-dom';
 import { buildCharToTokenMap, getHighlightRanges, getSnippetRange } from '@kashshaf/shared';
@@ -31,6 +31,38 @@ export function ResultRow({
   onClick: () => void;
 }) {
   const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
+
+  // The tooltip follows the pointer and goes when it leaves the title. A
+  // row can move out from under a still pointer (the list scrolls, rows
+  // re-render) without a mouseleave ever arriving, and then it stayed up.
+  // While it shows, the document is watched: pointer movement outside the
+  // title, any scroll or wheel, a click, or Escape puts it away.
+  useEffect(() => {
+    if (!tip) return;
+    const hide = () => setTip(null);
+    const onMove = (e: PointerEvent) => {
+      const el = titleRef.current;
+      if (!el || !(e.target instanceof Node) || !el.contains(e.target)) hide();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') hide();
+    };
+    document.addEventListener('pointermove', onMove, true);
+    document.addEventListener('scroll', hide, true);
+    document.addEventListener('wheel', hide, { capture: true, passive: true });
+    document.addEventListener('pointerdown', hide, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('blur', hide);
+    return () => {
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('scroll', hide, true);
+      document.removeEventListener('wheel', hide, true);
+      document.removeEventListener('pointerdown', hide, true);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('blur', hide);
+    };
+  }, [tip !== null]);
 
   const snippet = useMemo(() => {
     const { plain } = readBody(hit.body);
