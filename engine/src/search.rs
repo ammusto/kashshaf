@@ -2465,6 +2465,24 @@ impl SearchEngine {
             IndexKind::Compound => {
                 let sets: Vec<Sets> = q.terms.iter().map(|t| self.highlight_sets(t)).collect();
                 let and_sets: Vec<Sets> = q.and_terms.iter().map(|t| self.term_sets(t)).collect();
+                // A term with no triples matches nothing: no walk entry, no
+                // thread, no boundary stream (audit finding 10).
+                if sets.iter().chain(and_sets.iter()).any(|term| term.iter().any(|slot| slot.is_empty())) {
+                    let stats = ProximityStats { path: "empty", complete: true, ..Default::default() };
+                    return Ok((
+                        SearchResults {
+                            query: q.display(),
+                            mode: q.terms[0].mode,
+                            total_hits: 0,
+                            results: Vec::new(),
+                            elapsed_ms: start.elapsed().as_millis() as u64,
+                            was_capped: None,
+                            walk_key: None,
+                            complete: None,
+                        },
+                        stats,
+                    ));
+                }
                 let single_words = sets.iter().all(|s| s.len() == 1);
                 let key = if q.is_plain_pair() {
                     self.walk_key("prox", &(&q.terms[0], &q.terms[1], q.distances[0]), filters)
