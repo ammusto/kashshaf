@@ -65,8 +65,11 @@ fn the_bundle_s_positions_are_the_search_s_own() {
         assert!(results.total_hits > 0, "{pattern} is on some page");
         assert!(!results.results.is_empty());
 
-        // The bundle: the same displayed pattern, expanded the same way, on each result's page.
-        for r in &results.results {
+        // The bundle: the same displayed pattern, expanded the same way, on
+        // each result's page. A name split by a page break is a cross hit
+        // whose page alone does not hold the phrase; the bundle answers for
+        // pages, so those are set aside here (engine/tests/name_cross.rs).
+        for r in results.results.iter().filter(|r| !r.crosses_page) {
             let bundle = engine
                 .get_name_match_positions(r.id, r.part_index, r.page_id, &expand_name_patterns(&[pattern.clone()]))
                 .expect("positions");

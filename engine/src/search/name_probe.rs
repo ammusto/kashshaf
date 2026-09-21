@@ -56,10 +56,6 @@ fn words(p: &str) -> Vec<String> {
     normalize_arabic(p.trim()).split_whitespace().map(|s| s.to_string()).collect()
 }
 
-fn contains_seq(hay: &[String], needle: &[String]) -> bool {
-    !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
-}
-
 impl SearchEngine {
     /// The expanded list, as the search sees it.
     pub fn probe_expand(&self, display: &[String]) -> Vec<String> {
@@ -70,13 +66,12 @@ impl SearchEngine {
     /// contiguous run of words: a page that has it has the shorter one, so
     /// the shorter alone retrieves the same pages.
     pub fn probe_minimal(patterns: &[String]) -> Vec<String> {
-        let ws: Vec<Vec<String>> = patterns.iter().map(|p| words(p)).collect();
-        patterns
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !ws.iter().enumerate().any(|(j, other)| j != *i && other != &ws[*i] && contains_seq(&ws[*i], other)))
-            .map(|(_, p)| p.clone())
-            .collect()
+        crate::names::minimal_patterns(patterns)
+    }
+
+    /// What `name_search` now retrieves on: (a+c) in one.
+    pub fn probe_retrieval_sets(&self, patterns: &[String]) -> Vec<Sets> {
+        self.name_retrieval_sets(patterns)
     }
 
     /// The slot sets of each pattern, one list per pattern.

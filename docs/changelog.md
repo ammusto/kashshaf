@@ -6,6 +6,8 @@
 
 **Text selection.** The dialog has a bar at the foot with the count, Cancel and Confirm; Cancel, × and Escape put back the selection you opened it with.
 
+**Name search.** Four times faster on a full form, and a name split by a page turn is now found and highlighted across both pages, as phrases are. Needs corpus 4.3.0 for the page turns.
+
 ## [0.7.1] — 2026-09-20
 
 **Fixed.** Clicking a name-search result in the web app failed for names with many forms. Name patterns are now expanded on the server.

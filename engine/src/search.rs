@@ -2541,6 +2541,34 @@ impl SearchEngine {
 
     /// Name search: each form is a list of surface patterns (proclitic
     /// expansion already applied). OR within a form, AND across forms.
+    /// What a name form is retrieved on (compound index): the minimal
+    /// patterns (`names::minimal_patterns`), and among those the ones that
+    /// differ only in their first word — a kunya's three forms, each with
+    /// its proclitics — as one phrase whose first slot is the union of
+    /// theirs. The OR of the phrases is unchanged; the queries are few. The
+    /// nineteen displayed patterns of a full form, 282 expanded, come to
+    /// seven.
+    fn name_retrieval_sets(&self, patterns: &[String]) -> Vec<Sets> {
+        let mut groups: Vec<(Vec<String>, Sets)> = Vec::new();
+        for p in crate::names::minimal_patterns(patterns) {
+            let term = SearchTerm { query: p.clone(), mode: SearchMode::Surface };
+            let w = self.term_words(&term);
+            if w.is_empty() {
+                continue;
+            }
+            let sets = self.term_sets(&term);
+            let tail: Vec<String> = w[1..].to_vec();
+            if let Some((_, g)) = groups.iter_mut().find(|(t, g)| *t == tail && g.len() == sets.len()) {
+                g[0].extend(sets[0].iter().copied());
+                g[0].sort_unstable();
+                g[0].dedup();
+            } else {
+                groups.push((tail, sets));
+            }
+        }
+        groups.into_iter().map(|(_, s)| s).collect()
+    }
+
     pub fn name_search(&self, patterns_by_form: &[Vec<String>], filters: &SearchFilters, limit: usize, offset: usize) -> Result<SearchResults> {
         let start = std::time::Instant::now();
         let empty = || SearchResults {
@@ -2559,34 +2587,67 @@ impl SearchEngine {
         let searcher = self.reader.searcher();
 
         let mut form_queries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        // Every pattern of every form, for the highlights.
         let mut pattern_terms: Vec<SearchTerm> = Vec::new();
-        // per form: per pattern: per position sets (for verification)
+        // per form: per retrieval phrase: per position sets (for verification)
         let mut form_sets: Vec<Vec<Vec<HashSet<u32>>>> = Vec::new();
+        // The first form's every pattern, hashed (for the walk's highlights).
+        let mut first_form_highlight: Vec<Vec<HashSet<u32>>> = Vec::new();
+        // per form: the phrases retrieved on (for the boundary index)
+        let mut form_retrieval: Vec<Vec<Sets>> = Vec::new();
         let mut needs_verify = false;
-        for patterns in patterns_by_form {
+        for (form_index, patterns) in patterns_by_form.iter().enumerate() {
             let mut pattern_queries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
             let mut sets_for_form: Vec<Vec<HashSet<u32>>> = Vec::new();
+            let mut retrieval: Vec<Sets> = Vec::new();
+            match self.kind {
+                IndexKind::Compound => {
+                    for sets in self.name_retrieval_sets(patterns) {
+                        let plan = self.compound_plan(&sets)?;
+                        needs_verify |= plan.verify.is_some();
+                        pattern_queries.push((Occur::Should, plan.query));
+                        sets_for_form.push(Self::hash_sets(&sets));
+                        retrieval.push(sets);
+                    }
+                }
+                IndexKind::ThreeField => {
+                    for pattern in crate::names::minimal_patterns(patterns) {
+                        let term = SearchTerm { query: pattern, mode: SearchMode::Surface };
+                        if self.term_words(&term).is_empty() {
+                            continue;
+                        }
+                        let plan = self.build_term_plan(&term)?;
+                        needs_verify |= plan.verify.is_some();
+                        pattern_queries.push((Occur::Should, plan.query));
+                    }
+                }
+            }
             for pattern in patterns {
                 let term = SearchTerm { query: pattern.clone(), mode: SearchMode::Surface };
                 if self.term_words(&term).is_empty() {
                     continue;
                 }
-                let plan = self.build_term_plan(&term)?;
-                needs_verify |= plan.verify.is_some();
-                pattern_queries.push((Occur::Should, plan.query));
-                if self.kind == IndexKind::Compound {
-                    sets_for_form.push(Self::hash_sets(&self.term_sets(&term)));
+                if form_index == 0 && self.kind == IndexKind::Compound {
+                    first_form_highlight.push(Self::hash_sets(&self.term_sets(&term)));
                 }
                 pattern_terms.push(term);
             }
             if !pattern_queries.is_empty() {
                 form_queries.push((Occur::Must, Box::new(BooleanQuery::new(pattern_queries))));
                 form_sets.push(sets_for_form);
+                form_retrieval.push(retrieval);
             }
         }
         if form_queries.is_empty() {
             return Ok(empty());
         }
+        // Across a page break: one form's phrases, merged in reading order;
+        // two forms must both be on a page, which has no boundary reading.
+        let cross: Option<CrossStream> = if form_retrieval.len() == 1 {
+            CrossStream::merged(form_retrieval[0].iter().filter_map(|sets| self.cross_stream_phrase(sets, filters)).collect())
+        } else {
+            None
+        };
         let text_query: Box<dyn Query> = if form_queries.len() == 1 {
             form_queries.pop().unwrap().1
         } else {
@@ -2610,15 +2671,14 @@ impl SearchEngine {
                 if !ok {
                     return None;
                 }
-                // Highlight with the first form's patterns, as before.
+                // Highlight with the first form's every pattern: the ones not
+                // retrieved on mark words the retrieved ones do not.
                 let mut positions: Vec<u32> = Vec::new();
-                if let Some(first) = form_sets.first() {
-                    for sets in first {
-                        match sets.len() {
-                            0 => {}
-                            1 => positions.extend(forward::member_positions(ids, &sets[0])),
-                            _ => positions.extend(forward::phrase_positions(ids, sets)),
-                        }
+                for sets in &first_form_highlight {
+                    match sets.len() {
+                        0 => {}
+                        1 => positions.extend(forward::member_positions(ids, &sets[0])),
+                        _ => positions.extend(forward::phrase_positions(ids, sets)),
                     }
                 }
                 positions.sort_unstable();
@@ -2627,7 +2687,7 @@ impl SearchEngine {
                 Some(positions)
             });
             let key = self.walk_key("name", &patterns_by_form, filters);
-            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, None)?;
+            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross)?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
             return Ok(SearchResults {
                 query: query_display,
@@ -2640,18 +2700,28 @@ impl SearchEngine {
                 complete: Some(w.done),
             });
         }
-        let (total_hits, addrs) = self.paged(&searcher, &*final_query, limit, offset)?;
+        // The paged path is exact, and drains the boundary stream to its end.
+        let (total_hits, items) = self.paged_with_cross(&searcher, &*final_query, cross, limit, offset)?;
+        let addrs: Vec<DocAddress> = items.iter().map(|(a, _)| *a).collect();
         let was_capped = false;
-        let mut results = self.results_from(&searcher, &addrs)?;
+        let mut results = self.results_with_cross(&searcher, &items, None)?;
 
         match self.kind {
             IndexKind::Compound => {
                 let keys = self.keys_of(&searcher, &addrs);
-                // Highlight with the first form's patterns, as before.
+                // Highlight with the first form's every pattern, as before.
                 let first_form_len = patterns_by_form.first().map(|p| p.len()).unwrap_or(0);
                 let sets: Vec<Sets> = pattern_terms.iter().take(first_form_len).map(|t| self.highlight_sets(t)).collect();
                 let map = self.forward_highlights(&keys, &sets, cap.max(50))?;
                 self.attach_highlights(&mut results, &map);
+                // A cross hit's highlights are its own share of the span.
+                for (r, (_, c)) in results.iter_mut().zip(items.iter()) {
+                    if c.is_some() {
+                        if let Some(h) = self.cross_positions_of(&items, r) {
+                            r.matched_token_indices = h;
+                        }
+                    }
+                }
             }
             IndexKind::ThreeField => {
                 let surface = self.fields.surface.unwrap();

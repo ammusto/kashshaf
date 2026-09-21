@@ -107,8 +107,16 @@ fn main() -> anyhow::Result<()> {
             r.walk_key,
             r.was_capped
         );
-        let served: Vec<(u64, u64, u64)> = r.results.iter().map(|x| (x.id, x.part_index, x.page_id)).collect();
-        let served_hl: Vec<Vec<u32>> = r.results.iter().map(|x| x.matched_token_indices.clone()).collect();
+        // The probe's variants are single-page retrievals; the search now
+        // also finds names across page breaks, so those are set aside here.
+        let cross: Vec<&kashshaf_engine::SearchResult> = r.results.iter().filter(|x| x.crosses_page).collect();
+        println!("  cross-page hits among them: {}", cross.len());
+        for c in cross.iter().take(5) {
+            let s = c.secondary.as_ref().unwrap();
+            println!("    book {} {}:{} + {}:{}  positions {:?} + {:?}", c.id, c.part_label, c.page_number, s.part_label, s.page_number, c.matched_token_indices, s.matched_token_indices);
+        }
+        let served: Vec<(u64, u64, u64)> = r.results.iter().filter(|x| !x.crosses_page).map(|x| (x.id, x.part_index, x.page_id)).collect();
+        let served_hl: Vec<Vec<u32>> = r.results.iter().filter(|x| !x.crosses_page).map(|x| x.matched_token_indices.clone()).collect();
 
         if round == 1 {
             // Each of the expanded patterns alone.
@@ -131,9 +139,13 @@ fn main() -> anyhow::Result<()> {
 
         let base = engine.probe_tantivy("baseline: 282 phrase queries", &engine.probe_sets(&expanded), &expanded, None, LIMIT)?;
         report(&base, None);
-        if base.pages != served || base.highlights != served_hl {
-            println!("  !! the probe's baseline differs from name_search itself");
+        if base.pages == served && base.highlights == served_hl {
+            println!("  name_search's single-page results are identical to the 282-query baseline");
+        } else {
+            println!("  !! name_search's single-page results differ from the 282-query baseline");
         }
+        let now = engine.probe_tantivy("name_search's own retrieval (a+c)", &engine.probe_retrieval_sets(&expanded), &expanded, None, LIMIT)?;
+        report(&now, Some(&base));
 
         // (a) one query per displayed pattern, first slot merged
         let merged = engine.probe_merged_first_slot(&expanded);

@@ -74,6 +74,31 @@ pub fn expand_forms(display: &[Vec<String>]) -> Vec<Vec<String>> {
     display.iter().map(|f| expand_patterns(f)).collect()
 }
 
+/// Normalised words of a pattern.
+fn words(pattern: &str) -> Vec<String> {
+    normalize_arabic(pattern.trim()).split_whitespace().map(|s| s.to_string()).collect()
+}
+
+fn contains_run(hay: &[String], needle: &[String]) -> bool {
+    !needle.is_empty() && hay.len() >= needle.len() && hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// The patterns worth retrieving on: every pattern that contains another of
+/// the list as a run of words is dropped, since a page that has the longer
+/// has the shorter, and the shorter alone finds the same pages. Order is
+/// kept; a pattern is never dropped for one equal to it. Highlights still
+/// want the whole list — the longer pattern marks the words the shorter
+/// does not.
+pub fn minimal_patterns(patterns: &[String]) -> Vec<String> {
+    let ws: Vec<Vec<String>> = patterns.iter().map(|p| words(p)).collect();
+    patterns
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !ws.iter().enumerate().any(|(j, other)| j != *i && other != &ws[*i] && contains_run(&ws[*i], other)))
+        .map(|(_, p)| p.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +129,17 @@ mod tests {
         let out = expand_patterns(&s(&["أحمد", " ", "احمد"]));
         assert_eq!(out.len(), 6);
         assert_eq!(out[0], "احمد");
+    }
+
+    #[test]
+    fn a_pattern_containing_another_is_not_retrieved_on() {
+        let out = minimal_patterns(&s(&["ابو منصور معمر", "ابو منصور معمر بن احمد", "معمر بن احمد", "بن احمد الاصبهاني", "معمر"]));
+        // "معمر" is inside the first three; "بن احمد الاصبهاني" contains none of the others.
+        assert_eq!(out, s(&["بن احمد الاصبهاني", "معمر"]));
+        // Equal patterns both stay; nothing is dropped for itself.
+        assert_eq!(minimal_patterns(&s(&["احمد", "احمد"])), s(&["احمد", "احمد"]));
+        // A run, not a subsequence: "ابو احمد" is not inside "ابو منصور احمد".
+        assert_eq!(minimal_patterns(&s(&["ابو منصور احمد", "ابو احمد"])).len(), 2);
     }
 
     #[test]
