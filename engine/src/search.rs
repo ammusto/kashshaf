@@ -1456,7 +1456,19 @@ impl SearchEngine {
             .iter()
             .map(|w| match term.mode {
                 SearchMode::Surface => t.triples_for_surface(w),
-                SearchMode::Lemma => t.triples_for_lemma(w),
+                // A word the lemmatiser never produced (a proper name such
+                // as احمد, a clitic form such as وسلم) has no lemma triples;
+                // its surface form stands in, so the phrase around it is
+                // still searchable rather than empty (audit finding 9).
+                SearchMode::Lemma => {
+                    let v = t.triples_for_lemma(w);
+                    if v.is_empty() {
+                        crate::probe::amount("lemma.surface_fallback", 1);
+                        t.triples_for_surface(w)
+                    } else {
+                        v
+                    }
+                }
                 SearchMode::Root => t.triples_for_root(w),
             })
             .collect()

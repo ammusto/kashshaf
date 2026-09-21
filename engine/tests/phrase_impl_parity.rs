@@ -79,3 +79,22 @@ fn a_name_form_answers_as_before() {
     let expanded = expand_name_patterns(&display);
     both(&engine, "name form", &|| engine.name_search(&[expanded.clone()], &filters, 100_000, 0).unwrap());
 }
+
+/// A lemma phrase with a word the lemmatiser never produced (a name) used
+/// to be empty. The word's surface triples stand in for the missing lemma
+/// slot, so the phrase finds what its surface form finds on that word.
+#[test]
+fn a_lemma_slot_with_no_triples_falls_back_to_the_surface_form() {
+    let Some(engine) = open() else { return };
+    let filters = SearchFilters::default();
+    // The sample has these as surfaces; بن and احمد are names, never lemmas.
+    let lemma = engine.search("عبد الله بن احمد", SearchMode::Lemma, &filters, 100_000, 0).unwrap();
+    let surface = engine.search("عبد الله بن احمد", SearchMode::Surface, &filters, 100_000, 0).unwrap();
+    assert!(surface.total_hits > 0, "the sample has the surface phrase");
+    // Every surface hit is a lemma hit (the lemma slots are supersets of the surface ones).
+    let lemma_pages: std::collections::HashSet<_> = lemma.results.iter().map(|r| (r.id, r.part_index, r.page_id)).collect();
+    for r in &surface.results {
+        assert!(lemma_pages.contains(&(r.id, r.part_index, r.page_id)), "surface hit {}:{}:{} is a lemma hit", r.id, r.part_index, r.page_id);
+    }
+    assert!(lemma.total_hits >= surface.total_hits);
+}
