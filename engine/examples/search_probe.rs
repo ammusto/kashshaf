@@ -207,7 +207,12 @@ fn report_case(ctx: &Ctx, c: &Case, cold: &[Measured], warm: &[Measured]) {
 fn run_cases(ctx: &Ctx, cases: &[Case]) -> anyhow::Result<()> {
     // `KASHSHAF_PROBE_SKIP=a;b` leaves out cases whose name contains a or b.
     let skip: Vec<String> = std::env::var("KASHSHAF_PROBE_SKIP").unwrap_or_default().split(';').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
+    // `KASHSHAF_PROBE_ONLY=a;b` runs only cases whose group or name contains a or b.
+    let only: Vec<String> = std::env::var("KASHSHAF_PROBE_ONLY").unwrap_or_default().split(';').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
     for c in cases {
+        if !only.is_empty() && !only.iter().any(|x| c.name.contains(x.as_str()) || c.group.contains(x.as_str())) {
+            continue;
+        }
         if skip.iter().any(|x| c.name.contains(x.as_str())) {
             println!("
 ## [{}] {} — skipped", c.group, c.name);
@@ -555,7 +560,11 @@ fn main() -> anyhow::Result<()> {
     let mut engine = SearchEngine::open_with_corpus(&dir.join("tantivy_index"), Some(&db), EngineConfig::api_server())?;
     let cache = Arc::new(TokenCache::new(db, 100_000)?);
     engine.set_token_cache(cache.clone());
-    println!("boundary index: {}, segments: {}, reading order: {}", engine.has_boundary_index(), engine.segment_count(), engine.reading_order());
+    // `KASHSHAF_PHRASE_IMPL=tantivy` for the before-numbers of finding 1.
+    if std::env::var("KASHSHAF_PHRASE_IMPL").map(|v| v == "tantivy").unwrap_or(false) {
+        engine.set_phrase_impl(kashshaf_engine::PhraseImpl::Tantivy);
+    }
+    println!("boundary index: {}, segments: {}, reading order: {}, phrase impl: {:?}", engine.has_boundary_index(), engine.segment_count(), engine.reading_order(), engine.phrase_impl());
     let ctx = Ctx { engine, cache, filters: SearchFilters::default() };
     // One throwaway query so the index's first touch is not charged to a case.
     let _ = ctx.engine.search("قال", SearchMode::Surface, &ctx.filters, 1, 0)?;

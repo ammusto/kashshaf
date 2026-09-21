@@ -34,7 +34,7 @@ use crate::walk::{
 };
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -368,6 +368,8 @@ pub struct EngineConfig {
     pub prefer_root_text: bool,
     /// Which compound proximity implementation to use for single-word sides.
     pub proximity_impl: ProximityImpl,
+    /// How phrases are matched on the compound index (`PhraseImpl`).
+    pub phrase_impl: PhraseImpl,
     /// Kept for the bench flag; walks use `walk_budget_ms` instead.
     pub proximity_budget_ms: u64,
     /// Compound phrases: a slot that expands to more triple ids than this
@@ -449,6 +451,7 @@ impl Default for EngineConfig {
             force_fallback_ordering: false,
             prefer_root_text: true,
             proximity_impl: ProximityImpl::Positional,
+            phrase_impl: PhraseImpl::Positional,
             proximity_budget_ms: 1_500,
             wildcard_expansion_threshold: WILDCARD_EXPANSION_THRESHOLD,
             max_verified_hits: MAX_VERIFIED_HITS,
@@ -533,6 +536,20 @@ fn prox_debug() -> bool {
     std::env::var_os("KASHSHAF_PROX_DEBUG").is_some()
 }
 
+/// How a compound-index phrase (and a boolean of phrases, and a name's
+/// retrieval phrases) is matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhraseImpl {
+    /// The engine's positional leapfrog on the `tokens` postings, as an
+    /// uncapped walk: exact count, the time budget the only stop.
+    Positional,
+    /// Tantivy's `RegexPhraseQuery`, paged: exact count, but every slot's
+    /// postings are read into bitsets and every co-occurring document is
+    /// checked at several microseconds each (the audit's finding 1).
+    Tantivy,
+}
+
 /// Which text fields the index carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -611,6 +628,8 @@ pub struct SearchEngine {
     glob_cache: std::sync::Mutex<lru::LruCache<String, Arc<Vec<u32>>>>,
     /// Runtime override of `config.exact_counts` (desktop toggle).
     exact_counts: AtomicBool,
+    /// `PhraseImpl::Tantivy` when set (a runtime switch, for comparison).
+    phrase_tantivy: AtomicBool,
     /// Single segment whose doc ids are monotonic in reading order.
     reading_order: bool,
     triples: Option<Arc<TripleMaps>>,
@@ -811,6 +830,7 @@ impl SearchEngine {
             walk_pages: std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(WALK_PAGE_MEMO_ENTRIES).unwrap())),
             glob_cache: std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(GLOB_CACHE_ENTRIES).unwrap())),
             exact_counts: AtomicBool::new(config.exact_counts),
+            phrase_tantivy: AtomicBool::new(config.phrase_impl == PhraseImpl::Tantivy),
             config,
             reading_order,
             triples,
@@ -1054,6 +1074,20 @@ impl SearchEngine {
     /// keyed on the flag, so both variants can coexist.
     pub fn set_exact_counts(&self, on: bool) {
         self.exact_counts.store(on, Ordering::SeqCst);
+    }
+
+    /// Phrase matching at runtime: the positional walk, or Tantivy's phrase
+    /// query for comparison.
+    pub fn set_phrase_impl(&self, imp: PhraseImpl) {
+        self.phrase_tantivy.store(imp == PhraseImpl::Tantivy, Ordering::Relaxed);
+    }
+
+    pub fn phrase_impl(&self) -> PhraseImpl {
+        if self.phrase_tantivy.load(Ordering::Relaxed) {
+            PhraseImpl::Tantivy
+        } else {
+            PhraseImpl::Positional
+        }
     }
 
     pub fn exact_counts(&self) -> bool {
@@ -2023,6 +2057,52 @@ impl SearchEngine {
         }
         let searcher = self.reader.searcher();
 
+        // A phrase, or a boolean with a phrase in it: the positional walk,
+        // uncapped (audit finding 1). AND terms and each OR term make one
+        // group; a boolean of single words stays on the paged path.
+        if self.kind == IndexKind::Compound && self.phrase_impl() == PhraseImpl::Positional {
+            let any_phrase = and_terms.iter().chain(or_terms.iter()).any(|t| self.term_words(t).len() > 1);
+            if any_phrase {
+                let and_sets: Vec<Sets> = and_terms.iter().map(|t| self.term_sets(t)).collect();
+                let or_sets: Vec<Sets> = or_terms.iter().map(|t| self.term_sets(t)).collect();
+                let groups: Vec<Vec<Sets>> = if or_sets.is_empty() {
+                    vec![and_sets]
+                } else {
+                    or_sets
+                        .into_iter()
+                        .map(|o| {
+                            let mut g = and_sets.clone();
+                            g.push(o);
+                            g
+                        })
+                        .collect()
+                };
+                if groups.iter().all(|g| g.iter().all(|sets| self.positional_ok(sets))) {
+                    let cross = self.cross_stream_for_terms(and_terms, or_terms, filters);
+                    let key = self.walk_key("phrases", &(and_terms, or_terms), filters);
+                    let w = self.phrase_groups_walk(&searcher, key, groups, filters, limit, offset, cross)?;
+                    let join = |ts: &[SearchTerm], sep: &str| ts.iter().map(|t| t.query.as_str()).collect::<Vec<_>>().join(sep);
+                    let query_display = if !and_terms.is_empty() && !or_terms.is_empty() {
+                        format!("({}) AND ({})", join(and_terms, " AND "), join(or_terms, " OR "))
+                    } else if !and_terms.is_empty() {
+                        join(and_terms, " AND ")
+                    } else {
+                        join(or_terms, " OR ")
+                    };
+                    return Ok(SearchResults {
+                        query: query_display,
+                        mode: and_terms.first().or(or_terms.first()).map(|t| t.mode).unwrap_or_default(),
+                        total_hits: w.total,
+                        results: w.results,
+                        elapsed_ms: start.elapsed().as_millis() as u64,
+                        was_capped: if w.was_capped { Some(true) } else { None },
+                        walk_key: w.walk_key,
+                        complete: Some(w.complete),
+                    });
+                }
+            }
+        }
+
         // Single compound phrase whose slots are too wide for RegexPhraseQuery:
         // exact positional phrase instead of capped verification.
         if self.kind == IndexKind::Compound
@@ -2363,6 +2443,69 @@ impl SearchEngine {
             walk_key: w.walk_key,
             complete: Some(w.complete),
         })
+    }
+
+    /// Every slot narrow enough for one posting cursor per triple, and none empty.
+    fn positional_ok(&self, sets: &[Vec<u32>]) -> bool {
+        !sets.is_empty() && sets.iter().all(|s| !s.is_empty() && s.len() <= self.config.wildcard_expansion_threshold)
+    }
+
+    /// Phrases and words on the positional leapfrog, as an uncapped walk:
+    /// `groups` is an OR of AND-groups, each group a list of terms (each a
+    /// list of slots). One group is one intersection over all its slots
+    /// with `multi_phrase_matcher`; several groups are intersected one by
+    /// one and their hits unioned in reading order before they reach the
+    /// sink. The count is exact unless the time budget stops the walk.
+    #[allow(clippy::too_many_arguments)]
+    fn phrase_groups_walk(&self, searcher: &Searcher, key: String, groups: Vec<Vec<Sets>>, filters: &SearchFilters, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<Walked> {
+        let key_for_memo = key.clone();
+        let tokens = self.fields.tokens.expect("compound index");
+        let filter_query = self.filter_query(filters);
+        let pos_cap = self.config.result_highlight_cap.max(50);
+        let fields = self.fields;
+        let limits = if self.exact_counts() { WalkLimits::exact() } else { WalkLimits::budgeted(self.config.walk_budget_ms) };
+        let w = self.walks.window(key, offset, limit, limits, || -> Result<Walker> {
+            let searcher = searcher.clone();
+            let merge = CrossMerge::new(&searcher, fields, cross);
+            Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
+                let mut co = 0usize;
+                if groups.len() == 1 {
+                    let group = &groups[0];
+                    let lens: Vec<usize> = group.iter().map(|s| s.len()).collect();
+                    let slots: Vec<Vec<u32>> = group.iter().flatten().cloned().collect();
+                    let matcher = crate::positional::multi_phrase_matcher(lens);
+                    let mut adapter = WalkStreamSink { sink, positions_cap: pos_cap, merge, failed: None };
+                    let ps = crate::positional::intersect_n_stream(&searcher, tokens, &slots, &triple_term, &matcher, filter_query.as_deref(), &mut adapter)?;
+                    adapter.finish()?;
+                    co = ps.co_occurring;
+                } else {
+                    // OR of groups: each group's hits, then the union in reading order.
+                    let mut hits: BTreeMap<(u32, u32), Vec<u32>> = BTreeMap::new();
+                    for group in &groups {
+                        let lens: Vec<usize> = group.iter().map(|s| s.len()).collect();
+                        let slots: Vec<Vec<u32>> = group.iter().flatten().cloned().collect();
+                        let matcher = crate::positional::multi_phrase_matcher(lens);
+                        let mut union = UnionSink { hits: &mut hits, sink: &mut *sink };
+                        let ps = crate::positional::intersect_n_stream(&searcher, tokens, &slots, &triple_term, &matcher, filter_query.as_deref(), &mut union)?;
+                        co += ps.co_occurring;
+                        if ps.budget_exhausted {
+                            break;
+                        }
+                    }
+                    let mut adapter = WalkStreamSink { sink, positions_cap: pos_cap, merge, failed: None };
+                    for ((seg, doc), positions) in hits {
+                        if !adapter.on_hit(PositionalHit { addr: DocAddress::new(seg, doc), positions }) {
+                            break;
+                        }
+                    }
+                    adapter.finish()?;
+                }
+                sink.add_candidates(co);
+                Ok(())
+            }))
+        })?;
+        let results = self.walk_window_results(searcher, &key_for_memo, offset, limit, &w)?;
+        Ok(Walked { total: w.total, results, was_capped: w.was_capped, walk_key: Some(key_for_memo), complete: w.done })
     }
 
     /// (total hits, result window, was_capped) for a compound phrase given
@@ -2726,13 +2869,6 @@ impl SearchEngine {
         } else {
             None
         };
-        let text_query: Box<dyn Query> = if form_queries.len() == 1 {
-            form_queries.pop().unwrap().1
-        } else {
-            Box::new(BooleanQuery::new(form_queries))
-        };
-        let final_query = self.with_filters(text_query, filters);
-
         let cap = self.config.result_highlight_cap;
         let query_display = patterns_by_form
             .iter()
@@ -2740,6 +2876,45 @@ impl SearchEngine {
             .map(|p| p.first().map(|s| s.as_str()).unwrap_or(""))
             .collect::<Vec<_>>()
             .join(" AND ");
+        // One form on the positional walk (audit finding 1): its retrieval
+        // phrases as an OR of groups; the highlights of the served rows from
+        // the form's every pattern, as on the paged path.
+        if self.kind == IndexKind::Compound
+            && self.phrase_impl() == PhraseImpl::Positional
+            && form_retrieval.len() == 1
+            && form_retrieval[0].iter().all(|sets| self.positional_ok(sets))
+        {
+            let groups: Vec<Vec<Sets>> = form_retrieval.remove(0).into_iter().map(|sets| vec![sets]).collect();
+            let key = self.walk_key("name", &patterns_by_form, filters);
+            let w = self.phrase_groups_walk(&searcher, key, groups, filters, limit, offset, cross)?;
+            let mut results = w.results;
+            let first_form_len = patterns_by_form.first().map(|p| p.len()).unwrap_or(0);
+            let sets: Vec<Sets> = pattern_terms.iter().take(first_form_len).map(|t| self.highlight_sets(t)).collect();
+            let keys: Vec<PageKey> = results.iter().filter(|r| !r.crosses_page).map(|r| PageKey::new(r.id, r.part_index, r.page_id)).collect();
+            let map = self.forward_highlights(&keys, &sets, cap.max(50))?;
+            for r in results.iter_mut().filter(|r| !r.crosses_page) {
+                if let Some(p) = map.get(&PageKey::new(r.id, r.part_index, r.page_id)) {
+                    r.matched_token_indices = p.clone();
+                }
+            }
+            return Ok(SearchResults {
+                query: query_display,
+                mode: SearchMode::Surface,
+                total_hits: w.total,
+                results,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                was_capped: if w.was_capped { Some(true) } else { None },
+                walk_key: w.walk_key,
+                complete: Some(w.complete),
+            });
+        }
+        let text_query: Box<dyn Query> = if form_queries.len() == 1 {
+            form_queries.pop().unwrap().1
+        } else {
+            Box::new(BooleanQuery::new(form_queries))
+        };
+        let final_query = self.with_filters(text_query, filters);
+
         if needs_verify {
             let hl_cap = cap.max(50);
             let verify: Arc<dyn Fn(&[u32]) -> Option<Vec<u32>> + Send + Sync> = Arc::new(move |ids: &[u32]| {
@@ -3337,6 +3512,36 @@ impl StreamSink for WalkStreamSink<'_> {
                 false
             }
         }
+    }
+
+    fn tick(&mut self) -> bool {
+        self.sink.tick()
+    }
+}
+
+/// Collects one group's hits of an OR of groups, keyed by document so the
+/// union comes out in reading order; the walk's sink is ticked for the
+/// budget.
+struct UnionSink<'a> {
+    hits: &'a mut BTreeMap<(u32, u32), Vec<u32>>,
+    sink: &'a mut Sink,
+}
+
+impl StreamSink for UnionSink<'_> {
+    fn want_positions(&mut self, _hits_so_far: usize) -> bool {
+        true
+    }
+
+    fn on_hit(&mut self, hit: PositionalHit) -> bool {
+        let e = self.hits.entry((hit.addr.segment_ord, hit.addr.doc_id)).or_default();
+        if e.is_empty() {
+            *e = hit.positions;
+        } else {
+            e.extend(hit.positions);
+            e.sort_unstable();
+            e.dedup();
+        }
+        true
     }
 
     fn tick(&mut self) -> bool {

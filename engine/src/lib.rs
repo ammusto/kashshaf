@@ -41,6 +41,7 @@ pub use normalize::{normalize_arabic, normalize_root_query};
 pub use names::{expand_forms as expand_name_forms, expand_patterns as expand_name_patterns};
 pub use cache::BatchStats;
 pub use glob::GlobPattern;
+pub use search::PhraseImpl;
 pub use search::{
     parse_wildcard_query, validate_wildcard_query, EngineCapabilities, EngineConfig, IndexKind, PageEntry, PageMatches,
     PageWithMatches, ProximityImpl, ProximityQuery, ProximityStats, SearchEngine, SearchFilters, SearchMode, SearchResult, SearchResults,

@@ -398,6 +398,49 @@ pub fn chain_matcher(distances: Vec<u32>, ordered: bool) -> impl Fn(&[Vec<u32>],
     }
 }
 
+/// Several clauses that must all be on the page — words and phrases, the
+/// slots of clause i being the next `lens[i]` of the list — each phrase
+/// with its words at `start + k`. Positions are the union of every
+/// clause's, sorted, when wanted.
+pub fn multi_phrase_matcher(lens: Vec<usize>) -> impl Fn(&[Vec<u32>], bool) -> Option<Vec<u32>> {
+    move |p: &[Vec<u32>], want: bool| {
+        let mut out: Vec<u32> = Vec::new();
+        let mut at = 0usize;
+        for &len in &lens {
+            let slots = &p[at..at + len];
+            at += len;
+            if len == 1 {
+                if slots[0].is_empty() {
+                    return None;
+                }
+                if want {
+                    out.extend_from_slice(&slots[0]);
+                }
+                continue;
+            }
+            let n = len as u32;
+            let mut found = false;
+            for &start in &slots[0] {
+                if (1..n).all(|k| slots[k as usize].binary_search(&(start + k)).is_ok()) {
+                    found = true;
+                    if !want {
+                        break;
+                    }
+                    out.extend(start..start + n);
+                }
+            }
+            if !found {
+                return None;
+            }
+        }
+        if want {
+            out.sort_unstable();
+            out.dedup();
+        }
+        Some(out)
+    }
+}
+
 /// Phrase matcher: slot k must occur at `start + k` for every k.
 pub fn phrase_matcher() -> impl Fn(&[Vec<u32>], bool) -> Option<Vec<u32>> {
     move |p: &[Vec<u32>], want: bool| {

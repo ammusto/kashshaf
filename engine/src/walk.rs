@@ -108,6 +108,13 @@ impl WalkLimits {
         Self { max_hits: Some(max_hits), budget: Some(Duration::from_millis(budget_ms)) }
     }
 
+    /// No hit cap: the walk runs to its end and the window waits for it,
+    /// so the count is exact; only the time budget can stop it, and then
+    /// the count is a lower bound (`was_capped`).
+    pub fn budgeted(budget_ms: u64) -> Self {
+        Self { max_hits: None, budget: Some(Duration::from_millis(budget_ms)) }
+    }
+
     pub fn is_exact(&self) -> bool {
         self.max_hits.is_none() && self.budget.is_none()
     }
@@ -508,7 +515,8 @@ impl WalkCache {
                 return Err(anyhow!("could not start walk thread: {}", e));
             }
         }
-        let wait_for_all = limits.is_exact();
+        // Without a hit cap the answer is the whole walk (exact, or budgeted).
+        let wait_for_all = limits.max_hits.is_none();
         let want = offset.saturating_add(limit);
         let inline_deadline = start + Duration::from_millis(WALK_INLINE_MS);
         let mut st = entry.lock();
