@@ -373,6 +373,189 @@ pub fn intersect_n_stream(
     Ok(stats)
 }
 
+/// An OR of groups in one pass: every distinct slot gets one cursor,
+/// shared by the groups that have it, and the walk is driven by the union
+/// of the groups' rarest slots. On each driver document, each group whose
+/// driver is there probes its other slots by `seek`; a group with every
+/// slot on the document has its positions handed to its matcher, and one
+/// hit per document carries the union of the matching groups' positions.
+/// Every cursor moves forward once, however many groups share it — which
+/// is what running the groups one by one paid for again and again.
+///
+/// `groups[g]` is the group's slots (its terms' slots in order), `matchers[g]`
+/// its matcher over exactly those slots.
+#[allow(clippy::too_many_arguments)]
+pub fn intersect_groups_stream(
+    searcher: &Searcher,
+    field: Field,
+    groups: &[Vec<Vec<u32>>],
+    term_of: &dyn Fn(u32) -> String,
+    matchers: &[&dyn Fn(&[Vec<u32>], bool) -> Option<Vec<u32>>],
+    filter: Option<&dyn Query>,
+    sink: &mut dyn StreamSink,
+) -> tantivy::Result<PositionalStats> {
+    let start = Instant::now();
+    let mut stats = PositionalStats::default();
+    if groups.is_empty() || groups.iter().any(|g| g.is_empty() || g.iter().any(|s| s.is_empty())) {
+        return Ok(stats);
+    }
+    // Distinct slots, and each group's slots as indices into them.
+    let mut distinct: Vec<&Vec<u32>> = Vec::new();
+    let group_slots: Vec<Vec<usize>> = groups
+        .iter()
+        .map(|g| {
+            g.iter()
+                .map(|s| match distinct.iter().position(|d| *d == s) {
+                    Some(i) => i,
+                    None => {
+                        distinct.push(s);
+                        distinct.len() - 1
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let n = distinct.len();
+    stats.cursors = vec![0; n];
+    stats.doc_freqs = vec![0; n];
+    let filter_weight: Option<Box<dyn Weight>> = match filter {
+        Some(q) => Some(q.weight(EnableScoring::disabled_from_searcher(searcher))?),
+        None => None,
+    };
+    let mut slot_positions: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut buf: Vec<u32> = Vec::new();
+
+    'segments: for (seg_ord, seg) in searcher.segment_readers().iter().enumerate() {
+        let t_open = Instant::now();
+        let inverted = seg.inverted_index(field)?;
+        let mut cursors: Vec<UnionCursor> = Vec::with_capacity(n);
+        for (k, ids) in distinct.iter().enumerate() {
+            let mut v = Vec::with_capacity(ids.len());
+            for &t in ids.iter() {
+                let term = Term::from_field_text(field, &term_of(t));
+                if let Some(p) = inverted.read_postings(&term, IndexRecordOption::WithFreqsAndPositions)? {
+                    v.push(p);
+                }
+            }
+            let c = UnionCursor::new(v);
+            stats.cursors[k] += c.len();
+            stats.doc_freqs[k] += c.doc_freq;
+            cursors.push(c);
+        }
+        let mut filter_set = match &filter_weight {
+            Some(w) => Some(w.scorer(seg, 1.0)?),
+            None => None,
+        };
+        stats.open_us += t_open.elapsed().as_micros() as u64;
+        // Each group's driver: its rarest slot; a group with an empty
+        // cursor can never match here.
+        let drivers: Vec<Option<usize>> = group_slots
+            .iter()
+            .map(|gs| {
+                if gs.iter().any(|&k| cursors[k].len() == 0) {
+                    None
+                } else {
+                    gs.iter().copied().min_by_key(|&k| cursors[k].doc_freq)
+                }
+            })
+            .collect();
+        if drivers.iter().all(|d| d.is_none()) {
+            continue;
+        }
+        let alive = seg.alive_bitset();
+        // The current doc of each group's driver: positions read once per doc.
+        let mut have_positions: Vec<bool> = vec![false; n];
+        let mut checked = 0u32;
+        loop {
+            // The next document any driver sits on.
+            let d = drivers.iter().flatten().map(|&k| cursors[k].doc()).min().unwrap_or(TERMINATED);
+            if d == TERMINATED {
+                break;
+            }
+            let live = alive.map_or(true, |bs| bs.is_alive(d));
+            let passes_filter = match &mut filter_set {
+                Some(f) => {
+                    let fd = if f.doc() < d { f.seek(d) } else { f.doc() };
+                    fd == d
+                }
+                None => true,
+            };
+            let mut positions: Vec<u32> = Vec::new();
+            let mut matched_any = false;
+            if live && passes_filter {
+                have_positions.iter_mut().for_each(|h| *h = false);
+                let want = sink.want_positions(stats.hits);
+                for (g, gs) in group_slots.iter().enumerate() {
+                    let Some(driver) = drivers[g] else { continue };
+                    if cursors[driver].doc() != d {
+                        continue;
+                    }
+                    // The other slots, by seek; a shared cursor already past d says no.
+                    let all_here = gs.iter().all(|&k| {
+                        let c = &mut cursors[k];
+                        if c.doc() < d {
+                            c.seek(d);
+                        }
+                        c.doc() == d
+                    });
+                    if !all_here {
+                        continue;
+                    }
+                    stats.co_occurring += 1;
+                    let t_pos = Instant::now();
+                    for &k in gs {
+                        if !have_positions[k] {
+                            let (p, b) = (&mut slot_positions[k], &mut buf);
+                            cursors[k].positions(p, b);
+                            have_positions[k] = true;
+                        }
+                    }
+                    let group_positions: Vec<Vec<u32>> = gs.iter().map(|&k| slot_positions[k].clone()).collect();
+                    let m = matchers[g](&group_positions, want);
+                    stats.positions_us += t_pos.elapsed().as_micros() as u64;
+                    if let Some(p) = m {
+                        matched_any = true;
+                        positions.extend(p);
+                    }
+                }
+            }
+            if matched_any {
+                positions.sort_unstable();
+                positions.dedup();
+                stats.hits += 1;
+                if !sink.on_hit(PositionalHit { addr: DocAddress::new(seg_ord as u32, d), positions }) {
+                    stats.budget_exhausted = true;
+                    break 'segments;
+                }
+            }
+            // Every driver on d moves on.
+            for &k in drivers.iter().flatten() {
+                if cursors[k].doc() == d {
+                    cursors[k].advance();
+                }
+            }
+            checked += 1;
+            if checked % 4096 == 0 && !sink.tick() {
+                stats.budget_exhausted = true;
+                break 'segments;
+            }
+        }
+    }
+    stats.intersect_us = (start.elapsed().as_micros() as u64).saturating_sub(stats.open_us + stats.positions_us);
+    if crate::probe::on() {
+        crate::probe::amount("pos.open_us", stats.open_us);
+        crate::probe::amount("pos.intersect_us", stats.intersect_us);
+        crate::probe::amount("pos.positions_us", stats.positions_us);
+        crate::probe::amount("pos.cursors", stats.cursors.iter().sum::<usize>() as u64);
+        crate::probe::amount("pos.doc_freq_sum", stats.doc_freqs.iter().sum::<u64>());
+        crate::probe::amount("pos.co_occurring", stats.co_occurring as u64);
+        crate::probe::amount("pos.hits", stats.hits as u64);
+        crate::probe::amount("pos.groups", groups.len() as u64);
+        crate::probe::amount("pos.distinct_slots", n as u64);
+    }
+    Ok(stats)
+}
+
 /// Proximity matcher: some position of slot 0 within `max_distance` of some
 /// position of slot 1.
 pub fn proximity_matcher(max_distance: u32) -> impl Fn(&[Vec<u32>], bool) -> Option<Vec<u32>> {

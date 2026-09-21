@@ -34,7 +34,7 @@ use crate::walk::{
 };
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1523,18 +1523,21 @@ impl SearchEngine {
             .iter()
             .map(|w| match term.mode {
                 SearchMode::Surface => t.triples_for_surface(w),
-                // A word the lemmatiser never produced (a proper name such
-                // as احمد, a clitic form such as وسلم) has no lemma triples;
-                // its surface form stands in, so the phrase around it is
-                // still searchable rather than empty (audit finding 9).
+                // A lemma slot is the lemma's triples and the typed word's
+                // own surface triples: a lemma search always matches the
+                // exact word typed, and a word the lemmatiser never produced
+                // (a name such as احمد, a clitic form such as وسلم) or
+                // produced rarely is not lost.
                 SearchMode::Lemma => {
-                    let v = t.triples_for_lemma(w);
-                    if v.is_empty() {
-                        crate::probe::amount("lemma.surface_fallback", 1);
-                        t.triples_for_surface(w)
-                    } else {
-                        v
+                    let mut v = t.triples_for_lemma(w);
+                    let surface = t.triples_for_surface(w);
+                    if !surface.is_empty() {
+                        crate::probe::amount("lemma.surface_union", surface.len() as u64);
+                        v.extend(surface);
+                        v.sort_unstable();
+                        v.dedup();
                     }
+                    v
                 }
                 SearchMode::Root => t.triples_for_root(w),
             })
@@ -2642,7 +2645,7 @@ impl SearchEngine {
             let searcher = searcher.clone();
             let merge = CrossMerge::new(&searcher, fields, cross());
             Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
-                let mut co = 0usize;
+                let co;
                 if groups.len() == 1 {
                     let group = &groups[0];
                     let lens: Vec<usize> = group.iter().map(|s| s.len()).collect();
@@ -2653,26 +2656,19 @@ impl SearchEngine {
                     adapter.finish()?;
                     co = ps.co_occurring;
                 } else {
-                    // OR of groups: each group's hits, then the union in reading order.
-                    let mut hits: BTreeMap<(u32, u32), Vec<u32>> = BTreeMap::new();
-                    for group in &groups {
-                        let lens: Vec<usize> = group.iter().map(|s| s.len()).collect();
-                        let slots: Vec<Vec<u32>> = group.iter().flatten().cloned().collect();
-                        let matcher = crate::positional::multi_phrase_matcher(lens);
-                        let mut union = UnionSink { hits: &mut hits, sink: &mut *sink };
-                        let ps = crate::positional::intersect_n_stream(&searcher, tokens, &slots, &triple_term, &matcher, filter_query.as_deref(), &mut union)?;
-                        co += ps.co_occurring;
-                        if ps.budget_exhausted {
-                            break;
-                        }
-                    }
+                    // OR of groups in one pass: shared slots read once, the
+                    // union of the groups' rarest slots driving, hits in
+                    // reading order as they come.
+                    let group_slots: Vec<Vec<Vec<u32>>> = groups.iter().map(|g| g.iter().flatten().cloned().collect()).collect();
+                    let matchers: Vec<Box<dyn Fn(&[Vec<u32>], bool) -> Option<Vec<u32>>>> = groups
+                        .iter()
+                        .map(|g| Box::new(crate::positional::multi_phrase_matcher(g.iter().map(|s| s.len()).collect())) as Box<dyn Fn(&[Vec<u32>], bool) -> Option<Vec<u32>>>)
+                        .collect();
+                    let matcher_refs: Vec<&dyn Fn(&[Vec<u32>], bool) -> Option<Vec<u32>>> = matchers.iter().map(|m| m.as_ref()).collect();
                     let mut adapter = WalkStreamSink { sink, positions_cap: pos_cap, merge, failed: None };
-                    for ((seg, doc), positions) in hits {
-                        if !adapter.on_hit(PositionalHit { addr: DocAddress::new(seg, doc), positions }) {
-                            break;
-                        }
-                    }
+                    let ps = crate::positional::intersect_groups_stream(&searcher, tokens, &group_slots, &triple_term, &matcher_refs, filter_query.as_deref(), &mut adapter)?;
                     adapter.finish()?;
+                    co = ps.co_occurring;
                 }
                 sink.add_candidates(co);
                 Ok(())
@@ -3700,36 +3696,6 @@ impl StreamSink for WalkStreamSink<'_> {
                 false
             }
         }
-    }
-
-    fn tick(&mut self) -> bool {
-        self.sink.tick()
-    }
-}
-
-/// Collects one group's hits of an OR of groups, keyed by document so the
-/// union comes out in reading order; the walk's sink is ticked for the
-/// budget.
-struct UnionSink<'a> {
-    hits: &'a mut BTreeMap<(u32, u32), Vec<u32>>,
-    sink: &'a mut Sink,
-}
-
-impl StreamSink for UnionSink<'_> {
-    fn want_positions(&mut self, _hits_so_far: usize) -> bool {
-        true
-    }
-
-    fn on_hit(&mut self, hit: PositionalHit) -> bool {
-        let e = self.hits.entry((hit.addr.segment_ord, hit.addr.doc_id)).or_default();
-        if e.is_empty() {
-            *e = hit.positions;
-        } else {
-            e.extend(hit.positions);
-            e.sort_unstable();
-            e.dedup();
-        }
-        true
     }
 
     fn tick(&mut self) -> bool {
