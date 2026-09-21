@@ -6,7 +6,7 @@
 
 **Name search.** Faster, and names split across a page turn are now found.
 
-**Faster searches.** Phrases run up to 8× faster with exact counts. Loading more results is instant. Result rows carry a snippet, not the whole page.
+**Faster searches.** Phrases run up to 8× faster with exact counts. Loading more results is instant. Result rows carry a snippet, not the whole page. Online, one long search no longer delays everyone else's page loads, and a very common phrase answers at once, its count settling a moment later.
 
 **Lemma searches match the exact word.** A phrase with a name or clitic form in it (احمد, وسلم) is found instead of nothing.
 
