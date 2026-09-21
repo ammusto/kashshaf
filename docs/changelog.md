@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.8.0] — unreleased
+## [0.8.0] — 2026-09-21
 
 **Proximity.** Chain up to three terms, each with its own distance. Require order. Add up to two terms the page must also contain, highlighted in a second colour.
 
@@ -18,7 +18,7 @@
 
 **Fixed.** Clicking a name-search result in the web app failed for names with many forms. Name patterns are now expanded on the server.
 
-## [0.7.0] — unreleased
+## [0.7.0] — 2026-09-20
 
 **Search across page breaks.** A phrase or proximity match split by a page turn is now found and highlighted across both pages. Needs corpus 4.3.0.
 
