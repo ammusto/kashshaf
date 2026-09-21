@@ -8,6 +8,8 @@
 
 **Name search.** Four times faster on a full form, and a name split by a page turn is now found and highlighted across both pages, as phrases are. Needs corpus 4.3.0 for the page turns.
 
+**Faster searches.** Phrases, booleans with phrases and name forms run on the engine's own positional matcher with exact counts (a common two-word phrase 2 s → under 0.5 s); loading more results is a slice of the first search, not the search again; result rows carry a snippet instead of the whole page; a proximity search with a page term no longer ties up the server for minutes behind the page-break scan. A lemma phrase with a name or a clitic form in it (احمد, وسلم) now finds it instead of nothing.
+
 ## [0.7.1] — 2026-09-20
 
 **Fixed.** Clicking a name-search result in the web app failed for names with many forms. Name patterns are now expanded on the server.
