@@ -35,22 +35,35 @@ export function ResultRow({
   const snippet = useMemo(() => {
     const { plain } = readBody(hit.body);
     if (!plain) return null;
-    const charToToken = buildCharToTokenMap(plain);
-    const first = hit.matched[0] ?? 0;
-    const before = Math.min(first, MAX_FROM_START);
-    const range = getSnippetRange(charToToken, first, before, MAX_TOKENS - before - 1, MAX_FROM_START);
-    const text = plain.slice(range.start, range.end);
+    // An engine of 0.8.0 sends the snippet cut, with the token it starts
+    // at; an older one the page, cut here the same way.
+    let text: string;
+    let startToken: number;
+    let truncatedStart: boolean;
+    if (hit.snippet_start_token !== undefined) {
+      text = plain;
+      startToken = hit.snippet_start_token;
+      truncatedStart = startToken > 0;
+    } else {
+      const charToToken = buildCharToTokenMap(plain);
+      const first = hit.matched[0] ?? 0;
+      const before = Math.min(first, MAX_FROM_START);
+      const range = getSnippetRange(charToToken, first, before, MAX_TOKENS - before - 1, MAX_FROM_START);
+      text = plain.slice(range.start, range.end);
+      startToken = range.startToken;
+      truncatedStart = range.truncatedStart;
+    }
 
     const local = new Set<number>();
     for (const idx of hit.matched) {
-      const adjusted = idx - range.startToken;
+      const adjusted = idx - startToken;
       if (adjusted >= 0) local.add(adjusted);
     }
     const ranges = getHighlightRanges(buildCharToTokenMap(text), local);
-    if (ranges.length === 0) return range.truncatedStart ? `… ${text}` : text;
+    if (ranges.length === 0) return truncatedStart ? `… ${text}` : text;
 
     const out: React.ReactNode[] = [];
-    if (range.truncatedStart) out.push('… ');
+    if (truncatedStart) out.push('… ');
     let last = 0;
     for (const r of ranges) {
       if (r.start > last) out.push(text.slice(last, r.start));
@@ -63,7 +76,7 @@ export function ResultRow({
     }
     if (last < text.length) out.push(text.slice(last));
     return <>{out}</>;
-  }, [hit.body, hit.matched]);
+  }, [hit.body, hit.matched, hit.snippet_start_token]);
 
   return (
     <>

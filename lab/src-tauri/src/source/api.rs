@@ -399,6 +399,8 @@ impl BookSource for ApiSource {
             #[serde(default)]
             body: String,
             #[serde(default)]
+            snippet_start_token: Option<u32>,
+            #[serde(default)]
             score: f32,
             #[serde(default)]
             matched_token_indices: Vec<u32>,
@@ -445,6 +447,7 @@ impl BookSource for ApiSource {
                     part_label: h.part_label,
                     page_number: h.page_number,
                     body: h.body,
+                    snippet_start_token: h.snippet_start_token,
                     score: h.score,
                     matched: h.matched_token_indices,
                     crosses_page: h.crosses_page,

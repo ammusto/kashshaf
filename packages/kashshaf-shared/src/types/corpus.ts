@@ -40,8 +40,18 @@ export interface SearchResult {
   century_ah?: number;
   part_label: string;
   page_number: string;
-  /** Full body text - only present from get_page, not search results */
+  /**
+   * From `get_page`: the whole page. On a search row (API 0.8.0): the
+   * page's snippet around the first highlight, `snippet_start_token` saying
+   * which token it starts at; an older server sends the whole page and no
+   * `snippet_start_token`.
+   */
   body?: string;
+  /**
+   * The token index the row's `body` snippet starts at. `matched_token_indices`
+   * are the page's: subtract this to place them in the snippet.
+   */
+  snippet_start_token?: number;
   score: number;
   /** Token indices that matched the search query (positions in the token array) */
   matched_token_indices: number[];

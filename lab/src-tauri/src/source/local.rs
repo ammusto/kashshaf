@@ -465,6 +465,7 @@ impl BookSource for LocalSource {
                     part_label: h.part_label,
                     page_number: h.page_number,
                     body: h.body,
+                    snippet_start_token: h.snippet_start_token,
                     score: h.score,
                     matched,
                     crosses_page: h.crosses_page,

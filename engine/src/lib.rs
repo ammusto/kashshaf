@@ -20,6 +20,7 @@ pub mod normalize;
 pub mod positional;
 pub mod probe;
 pub mod search;
+pub mod snippet;
 pub mod toc;
 pub mod tokens;
 pub mod triples;

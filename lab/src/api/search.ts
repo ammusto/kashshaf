@@ -30,7 +30,10 @@ export interface Hit {
   page_id: number;
   part_label: string;
   page_number: string;
+  /** The page's snippet around the first hit (engine 0.8.0), or the whole page from an older API. */
   body: string;
+  /** The token `body` starts at when it is a snippet; absent for a whole page. */
+  snippet_start_token?: number;
   score: number;
   /** Token indices the query matched, for the reader's highlight. */
   matched: number[];

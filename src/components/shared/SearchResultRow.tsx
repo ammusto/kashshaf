@@ -46,15 +46,28 @@ export function SearchResultRow({
     const plainText = stripHtml(body);
     if (plainText.length === 0) return null;
 
-    const charToToken = buildCharToTokenMap(plainText);
-    const firstMatchIdx = result.matched_token_indices?.[0] ?? 0;
-    // Limit snippet to 100 tokens total, with match within first 10 tokens
-    const maxTokens = 50;
-    const maxDistanceFromStart = 5;
-    const tokensBefore = Math.min(firstMatchIdx, maxDistanceFromStart);
-    const tokensAfter = maxTokens - tokensBefore - 1;
-    const snippetRange = getSnippetRange(charToToken, firstMatchIdx, tokensBefore, tokensAfter, maxDistanceFromStart);
-    const snippetText = plainText.slice(snippetRange.start, snippetRange.end);
+    // A 0.8.0 server sends the snippet already cut, with the token it
+    // starts at; an older one sends the page, cut here the same way.
+    let snippetText: string;
+    let startToken: number;
+    let truncatedStart: boolean;
+    if (result.snippet_start_token !== undefined) {
+      snippetText = plainText;
+      startToken = result.snippet_start_token;
+      truncatedStart = startToken > 0;
+    } else {
+      const charToToken = buildCharToTokenMap(plainText);
+      const firstMatchIdx = result.matched_token_indices?.[0] ?? 0;
+      // Limit snippet to 50 tokens total, with match within the first 5 tokens
+      const maxTokens = 50;
+      const maxDistanceFromStart = 5;
+      const tokensBefore = Math.min(firstMatchIdx, maxDistanceFromStart);
+      const tokensAfter = maxTokens - tokensBefore - 1;
+      const snippetRange = getSnippetRange(charToToken, firstMatchIdx, tokensBefore, tokensAfter, maxDistanceFromStart);
+      snippetText = plainText.slice(snippetRange.start, snippetRange.end);
+      startToken = snippetRange.startToken;
+      truncatedStart = snippetRange.truncatedStart;
+    }
 
     // Build char-to-token map for the snippet text
     const snippetCharToToken = buildCharToTokenMap(snippetText);
@@ -62,7 +75,7 @@ export function SearchResultRow({
     // Adjust matched indices relative to snippet's starting token
     const adjustedMatchedIndices = new Set<number>();
     for (const idx of matchedIndicesSet) {
-      const adjusted = idx - snippetRange.startToken;
+      const adjusted = idx - startToken;
       if (adjusted >= 0) {
         adjustedMatchedIndices.add(adjusted);
       }
@@ -72,13 +85,13 @@ export function SearchResultRow({
 
     if (highlightRanges.length === 0) {
       // Add ellipsis if start was truncated
-      return snippetRange.truncatedStart ? <>… {snippetText}</> : <>{snippetText}</>;
+      return truncatedStart ? <>… {snippetText}</> : <>{snippetText}</>;
     }
 
     const elements: React.ReactNode[] = [];
 
     // Add ellipsis prefix if start was truncated
-    if (snippetRange.truncatedStart) {
+    if (truncatedStart) {
       elements.push('… ');
     }
 
@@ -101,7 +114,7 @@ export function SearchResultRow({
     }
 
     return <>{elements}</>;
-  }, [body, matchedIndicesSet, result.matched_token_indices]);
+  }, [body, matchedIndicesSet, result.matched_token_indices, result.snippet_start_token]);
 
   return (
     <>

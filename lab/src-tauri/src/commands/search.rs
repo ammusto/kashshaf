@@ -31,6 +31,10 @@ pub struct Hit {
     pub part_label: String,
     pub page_number: String,
     pub body: String,
+    /// The token `body` starts at when it is the engine's snippet (0.8.0);
+    /// none when it is the whole page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet_start_token: Option<u32>,
     pub score: f32,
     /// Token indices the query matched, for the reader's highlight.
     pub matched: Vec<u32>,

@@ -273,8 +273,16 @@ pub struct SearchResult {
     pub century_ah: Option<u64>,
     pub part_label: String,
     pub page_number: String,
+    /// A search row: the page's snippet around its first highlight
+    /// (`snippet_start_token` says which token it starts at). A page from
+    /// `get_page`: the whole body.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub body: String,
+    /// The token index the row's `body` snippet starts at; absent when
+    /// `body` is the whole page. Highlight indices are the page's; a client
+    /// subtracts this to place them in the snippet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet_start_token: Option<u32>,
     pub score: f32,
     pub matched_token_indices: Vec<u32>,
     /// The match runs on from this page onto the next, or in from the one
@@ -1396,10 +1404,13 @@ impl SearchEngine {
         limit: usize,
         offset: usize,
         verify: Arc<dyn Fn(&[u32]) -> Option<Vec<u32>> + Send + Sync>,
-        cross: Option<CrossStream>,
+        cross: impl FnOnce() -> Option<CrossStream>,
     ) -> Result<WalkWindow> {
+        // The boundary stream is opened inside the walker factory: only a
+        // fresh walk needs one, and a scan started for a cached window
+        // would run to its first hit for nothing.
         self.walks
-            .window(key, offset, limit, self.walk_limits(), || self.verified_walker(searcher, query, verify, cross))
+            .window(key, offset, limit, self.walk_limits(), || self.verified_walker(searcher, query, verify, cross()))
     }
 
     /// Attach the token cache used for forward-index highlighting and
@@ -1818,6 +1829,7 @@ impl SearchEngine {
             part_label: str_of(doc, f.part_label),
             page_number: str_of(doc, f.page_number),
             body: str_of(doc, f.body),
+            snippet_start_token: None,
             score,
             matched_token_indices: matched,
             crosses_page: false,
@@ -1885,6 +1897,23 @@ impl SearchEngine {
     /// triple sets for highlighting.
     fn highlight_sets(&self, term: &SearchTerm) -> Sets {
         self.term_sets(term)
+    }
+
+    /// Search rows carry a snippet, not the page (audit finding 4): the
+    /// body cut to `snippet::SNIPPET_TOKENS` tokens around the first
+    /// highlight, with the token it starts at. Done once: a row already
+    /// cut is left alone.
+    fn finish(&self, mut r: SearchResults) -> SearchResults {
+        let _t = crate::probe::timer("snippets");
+        for row in r.results.iter_mut() {
+            if row.snippet_start_token.is_some() || row.body.is_empty() {
+                continue;
+            }
+            let (text, start) = crate::snippet::snip(&row.body, row.matched_token_indices.first().copied());
+            row.body = text;
+            row.snippet_start_token = Some(start);
+        }
+        r
     }
 
     fn attach_highlights(&self, results: &mut [SearchResult], map: &HashMap<PageKey, Vec<u32>>) {
@@ -2151,6 +2180,11 @@ impl SearchEngine {
     }
 
     pub fn combined_search(&self, and_terms: &[SearchTerm], or_terms: &[SearchTerm], filters: &SearchFilters, limit: usize, offset: usize) -> Result<SearchResults> {
+        let r = self.combined_search_inner(and_terms, or_terms, filters, limit, offset)?;
+        Ok(self.finish(r))
+    }
+
+    fn combined_search_inner(&self, and_terms: &[SearchTerm], or_terms: &[SearchTerm], filters: &SearchFilters, limit: usize, offset: usize) -> Result<SearchResults> {
         let start = std::time::Instant::now();
         if and_terms.is_empty() && or_terms.is_empty() {
             return Ok(SearchResults {
@@ -2187,9 +2221,9 @@ impl SearchEngine {
                         .collect()
                 };
                 if groups.iter().all(|g| g.iter().all(|sets| self.positional_ok(sets))) {
-                    let cross = self.cross_stream_for_terms(and_terms, or_terms, filters);
+                    let cross_for = || self.cross_stream_for_terms(and_terms, or_terms, filters);
                     let key = self.walk_key("phrases", &(and_terms, or_terms), filters);
-                    let w = self.phrase_groups_walk(&searcher, key, groups, filters, limit, offset, cross)?;
+                    let w = self.phrase_groups_walk(&searcher, key, groups, filters, limit, offset, cross_for)?;
                     let join = |ts: &[SearchTerm], sep: &str| ts.iter().map(|t| t.query.as_str()).collect::<Vec<_>>().join(sep);
                     let query_display = if !and_terms.is_empty() && !or_terms.is_empty() {
                         format!("({}) AND ({})", join(and_terms, " AND "), join(or_terms, " OR "))
@@ -2294,7 +2328,7 @@ impl SearchEngine {
                 Some(positions)
             });
             let key = self.walk_key("combined", &(and_terms, or_terms), filters);
-            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross_for())?;
+            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross_for)?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
             let complete = w.done;
             let join = |ts: &[SearchTerm], sep: &str| ts.iter().map(|t| t.query.as_str()).collect::<Vec<_>>().join(sep);
@@ -2402,6 +2436,11 @@ impl SearchEngine {
     /// without AND terms takes the paths and the walk key it always has, so
     /// its results and its cached walks are unchanged.
     pub fn proximity_chain_search_with_stats(&self, q: &ProximityQuery, filters: &SearchFilters, limit: usize, offset: usize) -> Result<(SearchResults, ProximityStats)> {
+        let (r, stats) = self.proximity_chain_search_inner(q, filters, limit, offset)?;
+        Ok((self.finish(r), stats))
+    }
+
+    fn proximity_chain_search_inner(&self, q: &ProximityQuery, filters: &SearchFilters, limit: usize, offset: usize) -> Result<(SearchResults, ProximityStats)> {
         q.validate()?;
         let start = std::time::Instant::now();
         let searcher = self.reader.searcher();
@@ -2435,23 +2474,28 @@ impl SearchEngine {
                 // The chain across a page break, from the boundary index, as a
                 // stream the walk pulls as far as it goes; a page term holds
                 // if it is on either page of the pair.
-                let cross = match &self.boundary {
-                    Some(b) if sets.iter().all(|s| !s.is_empty()) && and_sets.iter().all(|s| !s.is_empty()) => {
-                        let slots: Vec<Vec<u32>> = sets.iter().flatten().cloned().collect();
-                        let mut sources = self.scan_sources();
-                        if !q.and_terms.is_empty() {
-                            sources.and_docs = q.and_terms.iter().map(|t| self.and_term_docs(&searcher, t)).collect::<Result<Vec<_>>>()?;
-                            sources.doc_of = Some(self.doc_of_order_key(&searcher));
-                        }
-                        crate::probe::amount("boundary.streams", 1);
-                        b.scan(
-                            MatchKind::Proximity { lens: sets.iter().map(|s| s.len()).collect(), distances: distances.clone(), ordered: q.ordered },
-                            slots,
-                            filters,
-                            &sources,
-                        )
+                let cross_sets = sets.clone();
+                let cross_and = and_sets.clone();
+                let cross_distances = distances.clone();
+                let cross_searcher = searcher.clone();
+                let cross = move || -> Option<CrossStream> {
+                    let b = self.boundary.as_ref()?;
+                    if !(cross_sets.iter().all(|s| !s.is_empty()) && cross_and.iter().all(|s| !s.is_empty())) {
+                        return None;
                     }
-                    _ => None,
+                    let slots: Vec<Vec<u32>> = cross_sets.iter().flatten().cloned().collect();
+                    let mut sources = self.scan_sources();
+                    if !q.and_terms.is_empty() {
+                        sources.and_docs = q.and_terms.iter().map(|t| self.and_term_docs(&cross_searcher, t)).collect::<Result<Vec<_>>>().ok()?;
+                        sources.doc_of = Some(self.doc_of_order_key(&cross_searcher));
+                    }
+                    crate::probe::amount("boundary.streams", 1);
+                    b.scan(
+                        MatchKind::Proximity { lens: cross_sets.iter().map(|s| s.len()).collect(), distances: cross_distances, ordered: q.ordered },
+                        slots,
+                        filters,
+                        &sources,
+                    )
                 };
                 if self.config.proximity_impl == ProximityImpl::Positional && single_words && !and_needs_verify {
                     let slots: Vec<Vec<u32>> = sets.into_iter().map(|mut s| s.pop().unwrap()).collect();
@@ -2544,8 +2588,7 @@ impl SearchEngine {
     /// index.
     #[allow(clippy::too_many_arguments)]
     fn phrase_positional(&self, searcher: &Searcher, term: &SearchTerm, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, start: std::time::Instant) -> Result<SearchResults> {
-        let cross = self.cross_stream_phrase(&sets, filters);
-        let w = self.phrase_positional_core(searcher, key, sets, filters, limit, offset, cross)?;
+        let w = self.phrase_positional_core(searcher, key, sets.clone(), filters, limit, offset, || self.cross_stream_phrase(&sets, filters))?;
         Ok(SearchResults {
             query: term.query.clone(),
             mode: term.mode,
@@ -2570,7 +2613,7 @@ impl SearchEngine {
     /// one and their hits unioned in reading order before they reach the
     /// sink. The count is exact unless the time budget stops the walk.
     #[allow(clippy::too_many_arguments)]
-    fn phrase_groups_walk(&self, searcher: &Searcher, key: String, groups: Vec<Vec<Sets>>, filters: &SearchFilters, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<Walked> {
+    fn phrase_groups_walk(&self, searcher: &Searcher, key: String, groups: Vec<Vec<Sets>>, filters: &SearchFilters, limit: usize, offset: usize, cross: impl FnOnce() -> Option<CrossStream>) -> Result<Walked> {
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
         let filter_query = self.filter_query(filters);
@@ -2579,7 +2622,7 @@ impl SearchEngine {
         let limits = if self.exact_counts() { WalkLimits::exact() } else { WalkLimits::budgeted(self.config.walk_budget_ms) };
         let w = self.walks.window(key, offset, limit, limits, || -> Result<Walker> {
             let searcher = searcher.clone();
-            let merge = CrossMerge::new(&searcher, fields, cross);
+            let merge = CrossMerge::new(&searcher, fields, cross());
             Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                 let mut co = 0usize;
                 if groups.len() == 1 {
@@ -2624,7 +2667,7 @@ impl SearchEngine {
     /// (total hits, result window, was_capped) for a compound phrase given
     /// its per-slot triple sets, through the walk cache.
     #[allow(clippy::too_many_arguments)]
-    fn phrase_positional_core(&self, searcher: &Searcher, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<Walked> {
+    fn phrase_positional_core(&self, searcher: &Searcher, key: String, sets: Vec<Vec<u32>>, filters: &SearchFilters, limit: usize, offset: usize, cross: impl FnOnce() -> Option<CrossStream>) -> Result<Walked> {
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
         let threshold = self.config.wildcard_expansion_threshold;
@@ -2635,7 +2678,7 @@ impl SearchEngine {
         let fields = self.fields;
         let w = self.walks.window(key, offset, limit, self.walk_limits(), || -> Result<Walker> {
             let searcher = searcher.clone();
-            let merge = CrossMerge::new(&searcher, fields, cross);
+            let merge = CrossMerge::new(&searcher, fields, cross());
             if !wide {
                 Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                     let matcher = crate::positional::phrase_matcher();
@@ -2729,7 +2772,7 @@ impl SearchEngine {
     /// `tokens` postings as a cached, capped walk.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
-    fn proximity_positional(&self, searcher: &Searcher, key: String, slots: Vec<Vec<u32>>, filter_query: Option<Box<dyn Query>>, distances: Vec<u32>, ordered: bool, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+    fn proximity_positional(&self, searcher: &Searcher, key: String, slots: Vec<Vec<u32>>, filter_query: Option<Box<dyn Query>>, distances: Vec<u32>, ordered: bool, limit: usize, offset: usize, cross: impl FnOnce() -> Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
         let mut stats = ProximityStats { path: "positional-walk", set1_size: slots[0].len(), set2_size: slots[1].len(), ..Default::default() };
         let key_for_memo = key.clone();
         let tokens = self.fields.tokens.expect("compound index");
@@ -2738,7 +2781,7 @@ impl SearchEngine {
         let t0 = std::time::Instant::now();
         let w = self.walks.window(key, offset, limit, self.walk_limits(), || -> Result<Walker> {
             let searcher = searcher.clone();
-            let merge = CrossMerge::new(&searcher, fields, cross);
+            let merge = CrossMerge::new(&searcher, fields, cross());
             Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                 let matcher = crate::positional::chain_matcher(distances, ordered);
                 let sets = slots;
@@ -2836,7 +2879,7 @@ impl SearchEngine {
     /// in reading order and measure the distance on the forward index, as a
     /// cached, capped walk.
     #[allow(clippy::too_many_arguments)]
-    fn proximity_forward(&self, searcher: &Searcher, key: String, query: Box<dyn Query>, sets: Vec<Sets>, and_sets: Vec<Vec<HashSet<u32>>>, distances: Vec<u32>, ordered: bool, limit: usize, offset: usize, cross: Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
+    fn proximity_forward(&self, searcher: &Searcher, key: String, query: Box<dyn Query>, sets: Vec<Sets>, and_sets: Vec<Vec<HashSet<u32>>>, distances: Vec<u32>, ordered: bool, limit: usize, offset: usize, cross: impl FnOnce() -> Option<CrossStream>) -> Result<(Vec<SearchResult>, usize, bool, ProximityStats)> {
         let mut stats = ProximityStats { path: "forward-walk", ..Default::default() };
         let hashed: Vec<Vec<HashSet<u32>>> = sets.iter().map(|s| Self::hash_sets(s)).collect();
         stats.set1_size = hashed[0].iter().map(|s| s.len()).sum();
@@ -2904,6 +2947,11 @@ impl SearchEngine {
     }
 
     pub fn name_search(&self, patterns_by_form: &[Vec<String>], filters: &SearchFilters, limit: usize, offset: usize) -> Result<SearchResults> {
+        let r = self.name_search_inner(patterns_by_form, filters, limit, offset)?;
+        Ok(self.finish(r))
+    }
+
+    fn name_search_inner(&self, patterns_by_form: &[Vec<String>], filters: &SearchFilters, limit: usize, offset: usize) -> Result<SearchResults> {
         let start = std::time::Instant::now();
         let empty = || SearchResults {
             query: String::new(),
@@ -2996,7 +3044,7 @@ impl SearchEngine {
         {
             let groups: Vec<Vec<Sets>> = form_retrieval.remove(0).into_iter().map(|sets| vec![sets]).collect();
             let key = self.walk_key("name", &patterns_by_form, filters);
-            let w = self.phrase_groups_walk(&searcher, key, groups, filters, limit, offset, cross_for())?;
+            let w = self.phrase_groups_walk(&searcher, key, groups, filters, limit, offset, &cross_for)?;
             let mut results = w.results;
             let first_form_len = patterns_by_form.first().map(|p| p.len()).unwrap_or(0);
             let sets: Vec<Sets> = pattern_terms.iter().take(first_form_len).map(|t| self.highlight_sets(t)).collect();
@@ -3050,7 +3098,7 @@ impl SearchEngine {
                 Some(positions)
             });
             let key = self.walk_key("name", &patterns_by_form, filters);
-            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross_for())?;
+            let w = self.verified_window(&searcher, key.clone(), final_query, limit, offset, verify, cross_for)?;
             let results = self.walk_window_results(&searcher, &key, offset, limit, &w)?;
             return Ok(SearchResults {
                 query: query_display,
@@ -3154,6 +3202,18 @@ impl SearchEngine {
     /// verified on the forward index. Highlights are token membership in the
     /// slot's triple set, from the forward index.
     pub fn wildcard_search_with_cache(
+        &self,
+        query: &str,
+        filters: &SearchFilters,
+        limit: usize,
+        offset: usize,
+        cache: Option<&TokenCache>,
+    ) -> Result<SearchResults> {
+        let r = self.wildcard_search_with_cache_inner(query, filters, limit, offset, cache)?;
+        Ok(self.finish(r))
+    }
+
+    fn wildcard_search_with_cache_inner(
         &self,
         query: &str,
         filters: &SearchFilters,
@@ -3304,8 +3364,7 @@ impl SearchEngine {
             eprintln!("[wildcard] path=walk sizes={:?} trie_nodes={} threshold={}", sizes, states, self.config.wildcard_expansion_threshold);
         }
         let key = self.walk_key("wildcard", &normalized, filters);
-        let cross = cross_for();
-        self.phrase_positional_core(searcher, key, sets, filters, limit, offset, cross)
+        self.phrase_positional_core(searcher, key, sets.clone(), filters, limit, offset, || self.cross_stream_phrase(&sets, filters))
     }
 
     /// Exact highlight positions for a wildcard query on one page.
