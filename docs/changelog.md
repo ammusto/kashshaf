@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.8.1] — 2026-09-21
+
+**Faster under load.** Searches no longer queue behind one another, faster.
+
 ## [0.8.0] — 2026-09-21
 
 **Proximity.** Chain up to three terms, each with its own distance. Require order. Add up to two terms the page must also contain, highlighted in a second colour.
