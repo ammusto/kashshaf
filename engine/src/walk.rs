@@ -115,6 +115,15 @@ impl WalkLimits {
         Self { max_hits: None, budget: Some(Duration::from_millis(budget_ms)) }
     }
 
+    /// No hit cap, but the window is served as soon as it is verified and
+    /// the inline allowance has passed, as a capped walk's is; the walk
+    /// runs on to its exact end (or the budget) and the count arrives
+    /// through the walk's status. A million-hit phrase then holds the
+    /// request for 150 ms, not a second and a half.
+    pub fn streaming(budget_ms: u64) -> Self {
+        Self { max_hits: Some(usize::MAX), budget: Some(Duration::from_millis(budget_ms)) }
+    }
+
     pub fn is_exact(&self) -> bool {
         self.max_hits.is_none() && self.budget.is_none()
     }

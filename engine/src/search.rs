@@ -2640,7 +2640,9 @@ impl SearchEngine {
         let filter_query = self.filter_query(filters);
         let pos_cap = self.config.result_highlight_cap.max(50);
         let fields = self.fields;
-        let limits = if self.exact_counts() { WalkLimits::exact() } else { WalkLimits::budgeted(self.config.walk_budget_ms) };
+        // The window is served once verified (plus the inline allowance);
+        // the count keeps growing to its exact end behind `/search/status`.
+        let limits = if self.exact_counts() { WalkLimits::exact() } else { WalkLimits::streaming(self.config.walk_budget_ms) };
         let w = self.walks.window(key, offset, limit, limits, || -> Result<Walker> {
             let searcher = searcher.clone();
             let merge = CrossMerge::new(&searcher, fields, cross());

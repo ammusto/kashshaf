@@ -336,92 +336,110 @@ async fn simple_search(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SimpleSearchQuery>,
 ) -> Result<Json<SearchResults>, ApiError> {
-    let mode = params.mode.unwrap_or(SearchMode::Lemma);
-    let limit = clamp_limit(params.limit);
-    let offset = params.offset.unwrap_or(0);
-    let filters = SearchFilters { book_ids: parse_book_ids(params.book_ids), ..Default::default() };
-    state
-        .search_engine
-        .search(&params.q, mode, &filters, limit, offset)
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let mode = params.mode.unwrap_or(SearchMode::Lemma);
+        let limit = clamp_limit(params.limit);
+        let offset = params.offset.unwrap_or(0);
+        let filters = SearchFilters { book_ids: parse_book_ids(params.book_ids), ..Default::default() };
+        state
+            .search_engine
+            .search(&params.q, mode, &filters, limit, offset)
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn combined_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CombinedSearchRequest>,
 ) -> Result<Json<SearchResults>, ApiError> {
-    let filters = req.filters.unwrap_or_default();
-    state
-        .search_engine
-        .combined_search(&req.and_terms, &req.or_terms, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let filters = req.filters.unwrap_or_default();
+        state
+            .search_engine
+            .combined_search(&req.and_terms, &req.or_terms, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn search_variants(
     State(state): State<Arc<AppState>>,
     Json(req): Json<VariantsRequest>,
 ) -> Result<Json<VariantsResponse>, ApiError> {
-    let mode = req.mode.unwrap_or_default();
-    if mode == SearchMode::Surface {
-        return Err(bad_request("variants are only available for lemma and root searches"));
-    }
-    let filters = req.filters.unwrap_or_default();
-    compute_variants(&state.search_engine, &state.token_cache, &req.query, mode, &filters)
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let mode = req.mode.unwrap_or_default();
+        if mode == SearchMode::Surface {
+            return Err(bad_request("variants are only available for lemma and root searches"));
+        }
+        let filters = req.filters.unwrap_or_default();
+        compute_variants(&state.search_engine, &state.token_cache, &req.query, mode, &filters)
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn proximity_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ProximitySearchRequest>,
 ) -> Result<Json<SearchResults>, ApiError> {
-    let (q, filters, limit, offset) = req.query()?;
-    let filters = filters.unwrap_or_default();
-    state
-        .search_engine
-        .proximity_chain_search(&q, &filters, clamp_limit(limit), offset.unwrap_or(0))
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let (q, filters, limit, offset) = req.query()?;
+        let filters = filters.unwrap_or_default();
+        state
+            .search_engine
+            .proximity_chain_search(&q, &filters, clamp_limit(limit), offset.unwrap_or(0))
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn name_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NameSearchRequest>,
 ) -> Result<Json<SearchResults>, ApiError> {
-    let filters = req.filters.unwrap_or_default();
-    let patterns_by_form: Vec<Vec<String>> = req
-        .forms
-        .into_iter()
-        .map(|f| if f.expand { kashshaf_engine::expand_name_patterns(&f.patterns) } else { f.patterns })
-        .collect();
-    state
-        .search_engine
-        .name_search(&patterns_by_form, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let filters = req.filters.unwrap_or_default();
+        let patterns_by_form: Vec<Vec<String>> = req
+            .forms
+            .into_iter()
+            .map(|f| if f.expand { kashshaf_engine::expand_name_patterns(&f.patterns) } else { f.patterns })
+            .collect();
+        state
+            .search_engine
+            .name_search(&patterns_by_form, &filters, clamp_limit(req.limit), req.offset.unwrap_or(0))
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn wildcard_search(
     State(state): State<Arc<AppState>>,
     Query(params): Query<WildcardSearchQuery>,
 ) -> Result<Json<SearchResults>, ApiError> {
-    if let Err(e) = kashshaf_engine::validate_wildcard_query(&params.q, SearchMode::Surface, state.search_engine.wildcard_grammar()) {
-        return Err(bad_request(e.message));
-    }
-    let filters = SearchFilters { book_ids: parse_book_ids(params.book_ids), ..Default::default() };
-    state
-        .search_engine
-        .wildcard_search_with_cache(
-            &params.q,
-            &filters,
-            clamp_limit(params.limit),
-            params.offset.unwrap_or(0),
-            Some(state.token_cache.as_ref()),
-        )
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        if let Err(e) = kashshaf_engine::validate_wildcard_query(&params.q, SearchMode::Surface, state.search_engine.wildcard_grammar()) {
+            return Err(bad_request(e.message));
+        }
+        let filters = SearchFilters { book_ids: parse_book_ids(params.book_ids), ..Default::default() };
+        state
+            .search_engine
+            .wildcard_search_with_cache(
+                &params.q,
+                &filters,
+                clamp_limit(params.limit),
+                params.offset.unwrap_or(0),
+                Some(state.token_cache.as_ref()),
+            )
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 /// `/page` with `include=tokens` and/or highlight terms: the page, its
@@ -521,8 +539,11 @@ async fn get_page(
     State(state): State<Arc<AppState>>,
     Query(pairs): Query<Vec<(String, String)>>,
 ) -> Result<axum::response::Response, ApiError> {
-    let p = page_params(&pairs)?;
-    page_response(&state, p)
+    blocking(&state, move |state| {
+        let p = page_params(&pairs)?;
+        page_response(&state, p)
+    })
+    .await
 }
 
 /// `POST /page` with the same parameters as a JSON body: the client's guard
@@ -548,16 +569,19 @@ async fn post_page(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PageBody>,
 ) -> Result<axum::response::Response, ApiError> {
-    let p = PageParams {
-        id: body.id,
-        part_index: body.part_index,
-        page_id: body.page_id,
-        tokens: body.include.iter().any(|x| x == "tokens"),
-        terms: body.terms.into_iter().filter(|t| !t.query.trim().is_empty()).collect(),
-        and_terms: body.and_terms.into_iter().filter(|t| !t.query.trim().is_empty()).collect(),
-        names: body.names,
-    };
-    page_response(&state, p)
+    blocking(&state, move |state| {
+        let p = PageParams {
+            id: body.id,
+            part_index: body.part_index,
+            page_id: body.page_id,
+            tokens: body.include.iter().any(|x| x == "tokens"),
+            terms: body.terms.into_iter().filter(|t| !t.query.trim().is_empty()).collect(),
+            and_terms: body.and_terms.into_iter().filter(|t| !t.query.trim().is_empty()).collect(),
+            names: body.names,
+        };
+        page_response(&state, p)
+    })
+    .await
 }
 
 fn page_response(state: &AppState, p: PageParams) -> Result<axum::response::Response, ApiError> {
@@ -596,23 +620,29 @@ async fn get_page_by_label(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PageByLabelQuery>,
 ) -> Result<Json<Option<SearchResult>>, ApiError> {
-    state
-        .search_engine
-        .get_page_by_label(params.id, &params.part_label, &params.page_number)
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        state
+            .search_engine
+            .get_page_by_label(params.id, &params.part_label, &params.page_number)
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn get_page_tokens(
     State(state): State<Arc<AppState>>,
     Query(params): Query<TokensQuery>,
 ) -> Result<Json<Vec<Token>>, ApiError> {
-    let key = PageKey::new(params.id, params.part_index, params.page_id);
-    state
-        .token_cache
-        .get(&key)
-        .map(|tokens| Json((*tokens).clone()))
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let key = PageKey::new(params.id, params.part_index, params.page_id);
+        state
+            .token_cache
+            .get(&key)
+            .map(|tokens| Json((*tokens).clone()))
+            .map_err(internal)
+    })
+    .await
 }
 
 /// A bare array, as it has always been: a 0.6.0 client reads this route on
@@ -623,47 +653,59 @@ async fn get_match_positions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MatchPositionsQuery>,
 ) -> Result<Json<Vec<u32>>, ApiError> {
-    let mode = params.mode.unwrap_or(SearchMode::Lemma);
-    state
-        .search_engine
-        .get_match_positions(params.id, params.part_index, params.page_id, &params.q, mode)
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let mode = params.mode.unwrap_or(SearchMode::Lemma);
+        state
+            .search_engine
+            .get_match_positions(params.id, params.part_index, params.page_id, &params.q, mode)
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn get_page_with_matches(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MatchPositionsQuery>,
 ) -> Result<Json<Option<PageWithMatches>>, ApiError> {
-    let mode = params.mode.unwrap_or(SearchMode::Lemma);
-    state
-        .search_engine
-        .get_page_with_matches(params.id, params.part_index, params.page_id, &params.q, mode)
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let mode = params.mode.unwrap_or(SearchMode::Lemma);
+        state
+            .search_engine
+            .get_page_with_matches(params.id, params.part_index, params.page_id, &params.q, mode)
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn get_match_positions_combined(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MatchPositionsCombinedRequest>,
 ) -> Result<Json<Vec<u32>>, ApiError> {
-    state
-        .search_engine
-        .get_match_positions_combined(req.id, req.part_index, req.page_id, &req.terms)
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        state
+            .search_engine
+            .get_match_positions_combined(req.id, req.part_index, req.page_id, &req.terms)
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 async fn get_name_match_positions(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NameMatchPositionsRequest>,
 ) -> Result<Json<Vec<u32>>, ApiError> {
-    let patterns = if req.expand { kashshaf_engine::expand_name_patterns(&req.patterns) } else { req.patterns };
-    state
-        .search_engine
-        .get_name_match_positions(req.id, req.part_index, req.page_id, &patterns)
-        .map(Json)
-        .map_err(internal)
+    blocking(&state, move |state| {
+        let patterns = if req.expand { kashshaf_engine::expand_name_patterns(&req.patterns) } else { req.patterns };
+        state
+            .search_engine
+            .get_name_match_positions(req.id, req.part_index, req.page_id, &patterns)
+            .map(Json)
+            .map_err(internal)
+    })
+    .await
 }
 
 /// `GET /book/{id}/pages` - the book's spine in reading order: one entry per
@@ -674,7 +716,10 @@ async fn get_book_pages(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(id): axum::extract::Path<u64>,
 ) -> Result<Json<Vec<kashshaf_engine::PageEntry>>, ApiError> {
-    state.search_engine.book_pages(id).map(Json).map_err(internal)
+    blocking(&state, move |state| {
+        state.search_engine.book_pages(id).map(Json).map_err(internal)
+    })
+    .await
 }
 
 /// `GET /book/{id}/toc` - the book's table of contents as a tree (Lab spec
@@ -684,78 +729,119 @@ async fn get_book_toc(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(id): axum::extract::Path<u64>,
 ) -> Result<Json<Vec<kashshaf_engine::TocNode>>, ApiError> {
-    let toc = state.toc.as_ref().ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse { error: "this server's corpus has no toc.db".to_string() }),
-        )
-    })?;
-    Ok(Json(toc.tree(id).map_err(internal)?))
+    blocking(&state, move |state| {
+        let toc = state.toc.as_ref().ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse { error: "this server's corpus has no toc.db".to_string() }),
+            )
+        })?;
+        Ok(Json(toc.tree(id).map_err(internal)?))
+    })
+    .await
 }
 
 async fn get_all_books(State(state): State<Arc<AppState>>) -> Result<Json<Vec<BookMetadata>>, ApiError> {
-    let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
-                    original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json
-             FROM books ORDER BY death_ah ASC NULLS LAST, id ASC",
-        )
-        .map_err(internal)?;
-    let books = stmt
-        .query_map([], |row| {
-            Ok(BookMetadata {
-                id: row.get(0)?,
-                corpus: row.get(1)?,
-                title: row.get(2)?,
-                author_id: row.get(3)?,
-                death_ah: row.get(4)?,
-                century_ah: row.get(5)?,
-                genre_id: row.get(6)?,
-                page_count: row.get(7)?,
-                token_count: row.get(8)?,
-                original_id: row.get(9)?,
-                paginated: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
-                tags: row.get(11)?,
-                book_meta: row.get(12)?,
-                author_meta: row.get(13)?,
-                in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
-                parts: row.get(15)?,
-                metadata_json: row.get(16)?,
-                citation_json: row.get(17)?,
+    blocking(&state, move |state| {
+        let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
+                        original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json
+                 FROM books ORDER BY death_ah ASC NULLS LAST, id ASC",
+            )
+            .map_err(internal)?;
+        let books = stmt
+            .query_map([], |row| {
+                Ok(BookMetadata {
+                    id: row.get(0)?,
+                    corpus: row.get(1)?,
+                    title: row.get(2)?,
+                    author_id: row.get(3)?,
+                    death_ah: row.get(4)?,
+                    century_ah: row.get(5)?,
+                    genre_id: row.get(6)?,
+                    page_count: row.get(7)?,
+                    token_count: row.get(8)?,
+                    original_id: row.get(9)?,
+                    paginated: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
+                    tags: row.get(11)?,
+                    book_meta: row.get(12)?,
+                    author_meta: row.get(13)?,
+                    in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
+                    parts: row.get(15)?,
+                    metadata_json: row.get(16)?,
+                    citation_json: row.get(17)?,
+                })
             })
-        })
-        .map_err(internal)?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(Json(books))
+            .map_err(internal)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(Json(books))
+    })
+    .await
 }
 
 async fn get_all_authors(State(state): State<Arc<AppState>>) -> Result<Json<Vec<(i64, String)>>, ApiError> {
-    let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
-    let mut stmt = conn.prepare("SELECT id, author FROM authors ORDER BY id").map_err(internal)?;
-    let authors = stmt
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
-        .map_err(internal)?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(Json(authors))
+    blocking(&state, move |state| {
+        let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
+        let mut stmt = conn.prepare("SELECT id, author FROM authors ORDER BY id").map_err(internal)?;
+        let authors = stmt
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+            .map_err(internal)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(Json(authors))
+    })
+    .await
 }
 
 async fn get_all_genres(State(state): State<Arc<AppState>>) -> Result<Json<Vec<(i64, String)>>, ApiError> {
-    let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
-    let mut stmt = conn.prepare("SELECT id, genre FROM genres ORDER BY id").map_err(internal)?;
-    let genres = stmt
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
-        .map_err(internal)?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(Json(genres))
+    blocking(&state, move |state| {
+        let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
+        let mut stmt = conn.prepare("SELECT id, genre FROM genres ORDER BY id").map_err(internal)?;
+        let genres = stmt
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+            .map_err(internal)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(Json(genres))
+    })
+    .await
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Engine calls are synchronous and can hold a thread for a second or
+/// more (a wide walk's window, a cold page); on tokio's worker threads,
+/// one per core, eight of them pinned the whole runtime and a page bundle
+/// costing the engine under a millisecond waited seconds behind them
+/// (dev-docs/LOAD_TEST_2026-09-21.md). Every engine call runs on the
+/// blocking pool instead, sized to `KASHSHAF_BLOCKING_THREADS` (default
+/// twice the cores), so the workers only ever parse, serialise and wait.
+fn main() -> anyhow::Result<()> {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let blocking = std::env::var("KASHSHAF_BLOCKING_THREADS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or(cores * 2);
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(cores)
+        .max_blocking_threads(blocking)
+        .thread_name("kashshaf-api")
+        .build()?
+        .block_on(async_main(blocking))
+}
+
+/// Run an engine call off the runtime's workers, on the blocking pool.
+async fn blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce(&AppState) -> Result<T, ApiError> + Send + 'static,
+{
+    let st = state.clone();
+    tokio::task::spawn_blocking(move || f(&st)).await.map_err(|e| internal(format!("blocking task: {e}")))?
+}
+
+async fn async_main(blocking_threads: usize) -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+    tracing::info!("blocking pool: {} threads", blocking_threads);
 
     let data_dir = PathBuf::from(std::env::var("KASHSHAF_DATA_DIR").unwrap_or_else(|_| "/opt/kashshaf/data".to_string()));
     let bind = std::env::var("KASHSHAF_BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
