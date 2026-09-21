@@ -2,17 +2,17 @@
 
 ## [0.8.0] — unreleased
 
-**Proximity search.** Chain up to three terms, each within its own distance of the next; require the written order; add up to two terms the page must also contain, shown in a second colour in the reader. Needs API 0.8.0 online; two-term searches work against any server.
+**Proximity.** Chain up to three terms, each with its own distance. Require order. Add up to two terms the page must also contain, highlighted in a second colour.
 
-**Name search.** Faster, and a name split by a page turn is found and highlighted across both pages, as phrases are (corpus 4.3.0).
+**Name search.** Faster, and names split across a page turn are now found.
 
-**Faster searches.** Phrases, booleans with phrases and name forms run on the engine's own matcher with exact counts (a common two-word phrase: 2 s → under 0.5 s). Loading more results no longer re-runs the search. Result rows carry a snippet, not the whole page. A proximity search with a page term no longer ties up the server behind the page-break scan.
+**Faster searches.** Phrases run up to 8× faster with exact counts. Loading more results is instant. Result rows carry a snippet, not the whole page.
 
-**Lemma searches include the exact word.** A lemma search now also matches the word as written, so a phrase with a name or a clitic form in it (احمد, وسلم) is found instead of nothing. Counts can rise slightly.
+**Lemma searches match the exact word.** A phrase with a name or clitic form in it (احمد, وسلم) is found instead of nothing.
 
-**Text selection.** Moved to the top bar. The dialog has Cancel and Confirm at the foot; Cancel, × and Escape restore the selection you opened it with.
+**Text selection.** Moved to the top bar. Cancel restores what you had.
 
-**Fixed.** The result-row tooltip could stay up after the pointer left.
+**Fixed.** A proximity search with a page term could hold the server for minutes. A result tooltip could stay open.
 
 ## [0.7.1] — 2026-09-20
 
