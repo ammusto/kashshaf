@@ -19,6 +19,7 @@ function renderToolbar(selectedTextsCount: number) {
       onCollections={() => {}}
       onHelp={() => {}}
       onBugReport={() => {}}
+      onAbout={() => {}}
       onSelectTexts={onSelectTexts}
       selectedTextsCount={selectedTextsCount}
       onSaveCollection={selectedTextsCount > 0 ? onSaveCollection : undefined}

@@ -14,6 +14,8 @@ interface ToolbarProps {
   helpActive?: boolean;
   /** Opens the bug report dialog. */
   onBugReport: () => void;
+  /** Opens the About dialog. */
+  onAbout: () => void;
   /** Opens the text selection dialog. */
   onSelectTexts: () => void;
   /** How many texts the searches are confined to; 0 is all of them. */
@@ -38,6 +40,7 @@ export function Toolbar({
   onHelp,
   helpActive,
   onBugReport,
+  onAbout,
   onSelectTexts,
   selectedTextsCount,
   onSaveCollection,
@@ -322,6 +325,13 @@ export function Toolbar({
                      bg-app-surface-variant text-app-text-primary hover:bg-app-accent-light"
         >
           Bug?
+        </button>
+        <button
+          onClick={onAbout}
+          className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
+                     bg-app-surface-variant text-app-text-primary hover:bg-app-accent-light"
+        >
+          About
         </button>
 
         <div className="w-px h-5 bg-app-border-medium mx-1" aria-hidden="true" />

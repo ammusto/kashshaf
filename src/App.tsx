@@ -21,6 +21,7 @@ import { DraggableSplitter, UpdateBanner } from './components/ui';
 import {
   TextSelectionModal,
   BugReportModal,
+  AboutModal,
   MetadataBrowser,
   SavedSearchesModal,
   SearchHistoryModal,
@@ -96,6 +97,7 @@ function App() {
   const [savedSearchesModalOpen, setSavedSearchesModalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [bugOpen, setBugOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   /** The desktop's OS and version, fetched when the bug dialog first opens. */
   const [osInfo, setOsInfo] = useState<string | null>(null);
   const appVersion: string = import.meta.env.VITE_APP_VERSION ?? 'dev';
@@ -606,6 +608,7 @@ function App() {
           onHelp={() => setHelpOpen(!helpOpen)}
           helpActive={helpOpen}
           onBugReport={openBugReport}
+          onAbout={() => setAboutOpen(true)}
           onSelectTexts={() => {
             setTextSelectionMode('select');
             setTextSelectionModalOpen(true);
@@ -731,6 +734,15 @@ function App() {
               },
               { context: activeTab?.searchContext ?? null, selectedTexts: selectedBookIds.size }
             )}
+          />
+        )}
+
+        {aboutOpen && (
+          <AboutModal
+            onClose={() => setAboutOpen(false)}
+            version={appVersion}
+            target={isWebTarget() ? 'web' : 'desktop'}
+            corpusVersion={isWebTarget() ? null : corpusStatus?.local_version ?? null}
           />
         )}
 
