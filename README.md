@@ -33,6 +33,10 @@ Morphological analysis uses CAMeL Tools with the MSA database. Archaic vocabular
 
 Windows, macOS (Intel and Apple Silicon), Linux (AppImage, deb).
 
+## Reporting a problem
+
+Press **Bug?** in the top bar. Open a GitHub issue with the details prefilled, or e-mail antonio@kashshaf.com with the subject `[Bug] Kashshāf Issue`; copy the details block from the dialog into either. **About** shows the version and corpus. Settings hold two preferences: fold the search sidebar on a search, and show the table of contents when a book opens.
+
 ## Development
 
 Node 20+, stable Rust, and Tauri's platform prerequisites.

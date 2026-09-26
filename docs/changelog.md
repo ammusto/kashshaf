@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.2] — unreleased
+
+**Bug? and About.** Report a problem from the top bar, by GitHub issue or e-mail, with the app's details ready to copy. About shows the version and corpus.
+
+**Settings.** Whether a search folds the sidebar, and whether a book opens with its table of contents, are now preferences (both on by default), in Kashshaf and in Lab.
+
 ## [0.8.1] — 2026-09-21
 
 **Faster under load.** Searches no longer queue behind one another, faster.

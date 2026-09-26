@@ -25,6 +25,8 @@ interface ReaderPanelProps {
   clickedMatches?: ClickedMatches | null;
   /** The running search, as what every fetched page is asked to highlight. */
   highlight?: HighlightRequest | null;
+  /** Opening a book from a result shows the contents pane, the first time (a preference; default on). */
+  autoShowToc?: boolean;
   /** Told where the reader is, so the tab remembers it. */
   onActivePage?: (entry: PageEntry) => void;
   /** Jumping when the book has no spine. Returns false if there is no such page. */
@@ -54,6 +56,7 @@ export function ReaderPanel({
   anchor,
   clickedMatches,
   highlight = null,
+  autoShowToc = true,
   onActivePage,
   onNavigateToLabel,
   remote = false,
@@ -87,7 +90,7 @@ export function ReaderPanel({
   // A book loaded from a result click opens the pane, the first time in the
   // session; after that it stays as the user left it.
   useEffect(() => {
-    if (bookId !== null && clickedMatches) tocPane.openedFromResult();
+    if (bookId !== null && clickedMatches && autoShowToc) tocPane.openedFromResult();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, clickedMatches?.part_index, clickedMatches?.page_id]);
 

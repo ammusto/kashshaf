@@ -3,6 +3,7 @@ import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement, 
 import type { CombinedSearchQuery, ProximitySearchQuery } from './types/search';
 import { describeProximityQuery, normalizeProximityQuery } from './utils/proximityQuery';
 import { buildDetails, describeUserAgent } from './utils/bugReport';
+import { useUiSettings } from './utils/uiSettings';
 import type { Collection } from './types/collections';
 import { MAX_RESULTS } from './constants/search';
 import { useSearchTabsContext } from './contexts/SearchTabsContext';
@@ -97,6 +98,12 @@ function App() {
   const [savedSearchesModalOpen, setSavedSearchesModalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [bugOpen, setBugOpen] = useState(false);
+  const { settings: uiSettings, set: setUiSetting } = useUiSettings();
+  /** A search folds the sidebar, if that is the preference. */
+  const foldForSearch = useCallback(() => {
+    if (uiSettings.autoCollapseSidebar) sidebar.collapseForSearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiSettings.autoCollapseSidebar]);
   const [aboutOpen, setAboutOpen] = useState(false);
   /** The desktop's OS and version, fetched when the bug dialog first opens. */
   const [osInfo, setOsInfo] = useState<string | null>(null);
@@ -609,6 +616,8 @@ function App() {
           helpActive={helpOpen}
           onBugReport={openBugReport}
           onAbout={() => setAboutOpen(true)}
+          uiSettings={uiSettings}
+          onUiSettingChange={setUiSetting}
           onSelectTexts={() => {
             setTextSelectionMode('select');
             setTextSelectionModalOpen(true);
@@ -625,15 +634,15 @@ function App() {
           isOpen={sidebarOpen}
           onToggle={sidebar.toggle}
           onSearch={(q) => {
-            sidebar.collapseForSearch();
+            foldForSearch();
             return handleSearch(q);
           }}
           onProximitySearch={(q) => {
-            sidebar.collapseForSearch();
+            foldForSearch();
             return handleProximitySearch(q);
           }}
           onNameSearch={() => {
-            sidebar.collapseForSearch();
+            foldForSearch();
             void handleNameSearch();
           }}
           loading={activeTab?.loading ?? false}
@@ -671,6 +680,7 @@ function App() {
                     anchor={readerAnchor}
                     clickedMatches={activeTab?.clickedMatches ?? null}
                     highlight={highlight}
+                    autoShowToc={uiSettings.autoShowToc}
                     onActivePage={handleActivePage}
                     onNavigateToLabel={handleNavigateToLabel}
                     remote={mode === 'online' || isWebTarget()}

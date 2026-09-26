@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useOperatingMode } from '../../contexts/OperatingModeContext';
 import type { DataDirInfo } from '../../types';
+import { isDesktopTarget } from '../../utils/platform';
+import type { UiSettings } from '../../utils/uiSettings';
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B';
@@ -14,6 +16,9 @@ interface SettingsModalProps {
   onClose: () => void;
   /** Online mode: the exact-counts toggle is hidden (it only applies to local data). */
   isOnlineMode: boolean;
+  /** The behaviour preferences, and their setter (persisted by the caller). */
+  ui: UiSettings;
+  onUiChange: (name: keyof UiSettings, value: boolean) => void;
 }
 
 /**
@@ -22,7 +27,7 @@ interface SettingsModalProps {
  * stopping at the engine's verified-hit cap. Offline mode only; applied to
  * the running engine at once and persisted in user_settings.exact_counts.
  */
-export function SettingsModal({ onClose, isOnlineMode }: SettingsModalProps) {
+export function SettingsModal({ onClose, isOnlineMode, ui, onUiChange }: SettingsModalProps) {
   const { capabilities, refreshCapabilities } = useOperatingMode();
   const [exactCounts, setExactCounts] = useState<boolean>(capabilities?.exact_counts ?? false);
   const [saving, setSaving] = useState(false);
@@ -30,8 +35,9 @@ export function SettingsModal({ onClose, isOnlineMode }: SettingsModalProps) {
   const [dirInfo, setDirInfo] = useState<DataDirInfo | null>(null);
   const [dirError, setDirError] = useState<string | null>(null);
 
-  // "Where is my corpus": the same resolution the download uses.
+  // "Where is my corpus": the same resolution the download uses (desktop only).
   useEffect(() => {
+    if (!isDesktopTarget()) return;
     let cancelled = false;
     import('../../api/tauri')
       .then(({ getDataDirectoryInfo }) => getDataDirectoryInfo())
@@ -79,6 +85,36 @@ export function SettingsModal({ onClose, isOnlineMode }: SettingsModalProps) {
         </div>
 
         <div className="px-6 py-6 space-y-4">
+          <div className="space-y-3" data-testid="ui-settings">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={ui.autoCollapseSidebar}
+                onChange={(e) => onUiChange('autoCollapseSidebar', e.target.checked)}
+                data-testid="setting-auto-collapse"
+              />
+              <span>
+                <span className="block text-sm font-medium text-app-text-primary">Auto-collapse search sidebar on search</span>
+                <span className="block text-xs text-app-text-secondary mt-1">A search folds the sidebar so the results and the reader take the width; Ctrl+B brings it back.</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={ui.autoShowToc}
+                onChange={(e) => onUiChange('autoShowToc', e.target.checked)}
+                data-testid="setting-auto-toc"
+              />
+              <span>
+                <span className="block text-sm font-medium text-app-text-primary">Auto-show table of contents</span>
+                <span className="block text-xs text-app-text-secondary mt-1">Opening a book from a result shows its contents pane, the first time in a session; Ctrl+T toggles it.</span>
+              </span>
+            </label>
+          </div>
+
+          {isDesktopTarget() && (
           <div className="rounded-lg border border-app-border-light p-3 text-sm space-y-1">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -114,6 +150,7 @@ export function SettingsModal({ onClose, isOnlineMode }: SettingsModalProps) {
               Holds the corpus database and index, and settings.db (history, saved searches, collections).
             </div>
           </div>
+          )}
 
           {isOnlineMode ? (
             <p className="text-sm text-app-text-secondary">

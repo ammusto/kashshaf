@@ -19,6 +19,7 @@ import { searchApi, toTerms, type Hit, type SearchInput, type SearchResults } fr
 import { selectedText, tokenRangeOfSelection } from '../../api/selection';
 import { Reader, type Mark } from '../Reader';
 import { TocPane } from './TocPane';
+import { readUiSettings } from '../../api/uiSettings';
 import { ErrorBoundary } from '@kashshaf/shared';
 import { SearchForm } from './SearchForm';
 import { ResultRow } from './ResultRow';
@@ -158,7 +159,9 @@ export function ReadPanel({
   const [rows, setRows] = useState<TocRow[]>([]);
   const [tocError, setTocError] = useState<string | null>(null);
   const [tocLoading, setTocLoading] = useState(false);
-  const [tocOpen, setTocOpen] = useState(showTocDefault);
+  // The preferences: fold the rail on a search, open the contents pane with the book.
+  const uiSettings = readUiSettings();
+  const [tocOpen, setTocOpen] = useState(showTocDefault && uiSettings.autoShowToc);
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -193,6 +196,7 @@ export function ReadPanel({
     });
   }, []);
   const foldRailForSearch = useCallback(() => {
+    if (!readUiSettings().autoCollapseSidebar) return;
     railOpen = false;
     setRailShown(false);
   }, []);

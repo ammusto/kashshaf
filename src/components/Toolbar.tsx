@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import type { AppUpdateStatus } from '../types';
 import { getAppSetting, setAppSetting } from '../utils/storage';
+import { UI_SETTING_DEFAULTS, type UiSettings } from '../utils/uiSettings';
+import { SettingsModal as WebSettingsModal } from './modals/SettingsModal';
 
 // Setting key for "do not show again" preference
 const SETTING_SKIP_APP_UPDATE_PROMPT = 'skip_app_update_prompt';
@@ -16,6 +18,9 @@ interface ToolbarProps {
   onBugReport: () => void;
   /** Opens the About dialog. */
   onAbout: () => void;
+  /** The behaviour preferences shown in Settings, and their setter. */
+  uiSettings?: UiSettings;
+  onUiSettingChange?: (name: keyof UiSettings, value: boolean) => void;
   /** Opens the text selection dialog. */
   onSelectTexts: () => void;
   /** How many texts the searches are confined to; 0 is all of them. */
@@ -41,6 +46,8 @@ export function Toolbar({
   helpActive,
   onBugReport,
   onAbout,
+  uiSettings = UI_SETTING_DEFAULTS,
+  onUiSettingChange = () => {},
   onSelectTexts,
   selectedTextsCount,
   onSaveCollection,
@@ -218,6 +225,8 @@ export function Toolbar({
   const [SettingsModal, setSettingsModal] = useState<React.ComponentType<{
     onClose: () => void;
     isOnlineMode: boolean;
+    ui: UiSettings;
+    onUiChange: (name: keyof UiSettings, value: boolean) => void;
   }> | null>(null);
 
   useEffect(() => {
@@ -333,6 +342,16 @@ export function Toolbar({
         >
           About
         </button>
+        {/* The desktop reaches Settings from its native menu; the web from here. */}
+        {isWebTarget && (
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
+                       bg-app-surface-variant text-app-text-primary hover:bg-app-accent-light"
+          >
+            Settings
+          </button>
+        )}
 
         <div className="w-px h-5 bg-app-border-medium mx-1" aria-hidden="true" />
 
@@ -432,9 +451,12 @@ export function Toolbar({
         </div>
       )}
 
-      {/* Delete Local Data Modal - desktop only */}
+      {/* Settings: the lazily loaded modal on the desktop, the same component on the web */}
       {!isWebTarget && showSettingsModal && SettingsModal && (
-        <SettingsModal onClose={() => setShowSettingsModal(false)} isOnlineMode={!!isOnlineMode} />
+        <SettingsModal onClose={() => setShowSettingsModal(false)} isOnlineMode={!!isOnlineMode} ui={uiSettings} onUiChange={onUiSettingChange} />
+      )}
+      {isWebTarget && showSettingsModal && (
+        <WebSettingsModal onClose={() => setShowSettingsModal(false)} isOnlineMode ui={uiSettings} onUiChange={onUiSettingChange} />
       )}
 
       {!isWebTarget && showDeleteDataModal && DeleteDataModal && (

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { labApi, rustErr, rustOk, type FreqStatus, type LabStatus, type Progress } from '../api/lab';
 import { workspaceApi } from '../api/workspace';
 import { useHeavyLimits } from '../api/settings';
+import { useUiSettings } from '../api/uiSettings';
 import { DEFAULT_HEAVY_LIMITS } from './ui/Running';
 
 /**
@@ -12,6 +13,32 @@ import { DEFAULT_HEAVY_LIMITS } from './ui/Running';
  * from the menu bar, not from the left rail, because it is about Lab and not
  * about the open text.
  */
+
+/** The two behaviour preferences Lab shares with Kashshaf. */
+function BehaviourSettings() {
+  const { settings, set } = useUiSettings();
+  return (
+    <section data-testid="behaviour-settings">
+      <h3 className="text-base font-semibold mb-2">Behaviour</h3>
+      <div className="space-y-2 text-sm">
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" className="mt-1" checked={settings.autoCollapseSidebar} onChange={(e) => set('autoCollapseSidebar', e.target.checked)} data-testid="setting-auto-collapse" />
+          <span>
+            <span className="block font-medium">Auto-collapse search sidebar on search</span>
+            <span className="block text-xs text-app-text-secondary">A search folds the search rail; Ctrl+B brings it back.</span>
+          </span>
+        </label>
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" className="mt-1" checked={settings.autoShowToc} onChange={(e) => set('autoShowToc', e.target.checked)} data-testid="setting-auto-toc" />
+          <span>
+            <span className="block font-medium">Auto-show table of contents</span>
+            <span className="block text-xs text-app-text-secondary">A book opens with its contents pane; Ctrl+T toggles it.</span>
+          </span>
+        </label>
+      </div>
+    </section>
+  );
+}
 
 export function SettingsPanel({ status }: { status: LabStatus | null }) {
   const [dirs, setDirs] = useState<Awaited<ReturnType<typeof labApi.dirs>> | null>(null);
@@ -64,6 +91,7 @@ export function SettingsPanel({ status }: { status: LabStatus | null }) {
         </div>
       </section>
 
+      <BehaviourSettings />
       <HeavyRunSettings />
       <FreqSnapshotSettings local={status.mode === 'local'} />
       <StopwordSettings />
