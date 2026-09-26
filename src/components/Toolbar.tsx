@@ -12,6 +12,8 @@ interface ToolbarProps {
   onCollections: () => void;
   onHelp: () => void;
   helpActive?: boolean;
+  /** Opens the bug report dialog. */
+  onBugReport: () => void;
   /** Opens the text selection dialog. */
   onSelectTexts: () => void;
   /** How many texts the searches are confined to; 0 is all of them. */
@@ -35,6 +37,7 @@ export function Toolbar({
   onCollections,
   onHelp,
   helpActive,
+  onBugReport,
   onSelectTexts,
   selectedTextsCount,
   onSaveCollection,
@@ -309,6 +312,16 @@ export function Toolbar({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           Help
+        </button>
+
+        {/* Bug report and About */}
+        <button
+          onClick={onBugReport}
+          title="Report a problem"
+          className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
+                     bg-app-surface-variant text-app-text-primary hover:bg-app-accent-light"
+        >
+          Bug?
         </button>
 
         <div className="w-px h-5 bg-app-border-medium mx-1" aria-hidden="true" />

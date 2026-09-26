@@ -89,6 +89,7 @@ fn main() {
             commands::cancel_corpus_download,
             commands::get_data_directory,
             commands::get_data_directory_info,
+            commands::get_os_info,
             commands::open_data_directory,
             commands::archive_old_corpus,
             commands::reload_app_state,

@@ -1376,6 +1376,20 @@ pub fn get_data_directory() -> Result<String, KashshafError> {
 /// and total space of its volume, and — when `required_bytes` is given —
 /// whether a download of that size fits with the 1 GB margin. The download
 /// and settings modals render this; the resolution logic stays in Rust.
+/// The operating system and its version, for a bug report's details block:
+/// "Windows 11 (10.0.26200)", "macOS 15.1", "Ubuntu 24.04".
+#[tauri::command]
+pub fn get_os_info() -> String {
+    let info = os_info::get();
+    let version = info.version().to_string();
+    let name = info.os_type().to_string();
+    match info.edition() {
+        Some(edition) if !edition.is_empty() && edition != name => format!("{edition} ({version})"),
+        _ if version.is_empty() || version == "Unknown" => name,
+        _ => format!("{name} {version}"),
+    }
+}
+
 #[tauri::command]
 pub fn get_data_directory_info(required_bytes: Option<u64>) -> Result<kashshaf_common::DataDirInfo, KashshafError> {
     kashshaf_common::data_dir_info(required_bytes).map_err(|e| KashshafError::Other(e.to_string()))

@@ -18,6 +18,7 @@ function renderToolbar(selectedTextsCount: number) {
       onSavedSearches={() => {}}
       onCollections={() => {}}
       onHelp={() => {}}
+      onBugReport={() => {}}
       onSelectTexts={onSelectTexts}
       selectedTextsCount={selectedTextsCount}
       onSaveCollection={selectedTextsCount > 0 ? onSaveCollection : undefined}

@@ -1,0 +1,39 @@
+name: Bug report
+description: Something in Kashshāf did not work as it should
+title: "Bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. The app's **Bug?** button prefills this form; from a browser, please fill the same details by hand.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what the app did.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: |
+        From the app's Bug? dialog (Copy), or by hand: app version; desktop or web; offline or online (desktop); corpus version or "not installed"; and the platform, the OS and its version on the desktop, the browser and its version plus the OS on the web.
+      render: text
+      placeholder: |
+        Kashshaf 0.8.1 desktop · offline · corpus 4.3.0 · Windows 11
+    validations:
+      required: true
+  - type: input
+    id: last-search
+    attributes:
+      label: Last search
+      description: The search that showed the problem, if one did — its mode, terms, distance, ordering, page terms, filters and the number of texts selected.
+      placeholder: "proximity, الله ~15 قال, ordered, page term النبي, 3 texts selected"

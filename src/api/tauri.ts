@@ -498,6 +498,11 @@ export async function cancelCorpusDownload(): Promise<void> {
  * Resolved corpus directory, its writability and the free space on its
  * volume; pass the pending download size to get `enough_space`.
  */
+/** The operating system and its version, as the desktop knows it. */
+export async function getOsInfo(): Promise<string> {
+  return invoke('get_os_info');
+}
+
 export async function getDataDirectoryInfo(requiredBytes?: number): Promise<DataDirInfo> {
   return invoke('get_data_directory_info', { requiredBytes: requiredBytes ?? null });
 }

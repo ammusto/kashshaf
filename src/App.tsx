@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } fro
 import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement, PageEntry } from './types';
 import type { CombinedSearchQuery, ProximitySearchQuery } from './types/search';
 import { describeProximityQuery, normalizeProximityQuery } from './utils/proximityQuery';
+import { buildDetails, describeUserAgent } from './utils/bugReport';
 import type { Collection } from './types/collections';
 import { MAX_RESULTS } from './constants/search';
 import { useSearchTabsContext } from './contexts/SearchTabsContext';
@@ -19,6 +20,7 @@ import { ReaderPanel, ResultsPanel, HelpPanel } from './components/panels';
 import { DraggableSplitter, UpdateBanner } from './components/ui';
 import {
   TextSelectionModal,
+  BugReportModal,
   MetadataBrowser,
   SavedSearchesModal,
   SearchHistoryModal,
@@ -93,6 +95,19 @@ function App() {
   const [searchHistoryModalOpen, setSearchHistoryModalOpen] = useState(false);
   const [savedSearchesModalOpen, setSavedSearchesModalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [bugOpen, setBugOpen] = useState(false);
+  /** The desktop's OS and version, fetched when the bug dialog first opens. */
+  const [osInfo, setOsInfo] = useState<string | null>(null);
+  const appVersion: string = import.meta.env.VITE_APP_VERSION ?? 'dev';
+  const openBugReport = useCallback(() => {
+    if (!isWebTarget() && osInfo === null) {
+      import('./api/tauri')
+        .then((m) => m.getOsInfo())
+        .then(setOsInfo)
+        .catch(() => setOsInfo(describeUserAgent(navigator.userAgent)));
+    }
+    setBugOpen(true);
+  }, [osInfo]);
   const [stats, setStats] = useState<{ indexed_pages: number; total_books: number } | null>(null);
 
   // Collections state
@@ -590,6 +605,7 @@ function App() {
           onCollections={handleOpenCollectionsModal}
           onHelp={() => setHelpOpen(!helpOpen)}
           helpActive={helpOpen}
+          onBugReport={openBugReport}
           onSelectTexts={() => {
             setTextSelectionMode('select');
             setTextSelectionModalOpen(true);
@@ -700,6 +716,22 @@ function App() {
 
         {textBrowserOpen && (
           <MetadataBrowser onClose={() => setTextBrowserOpen(false)} />
+        )}
+
+        {bugOpen && (
+          <BugReportModal
+            onClose={() => setBugOpen(false)}
+            details={buildDetails(
+              {
+                version: appVersion,
+                target: isWebTarget() ? 'web' : 'desktop',
+                mode: isWebTarget() ? undefined : mode === 'online' ? 'online' : 'offline',
+                corpusVersion: isWebTarget() ? undefined : corpusStatus?.local_version ?? null,
+                platform: isWebTarget() ? describeUserAgent(navigator.userAgent) : osInfo ?? 'resolving the OS…',
+              },
+              { context: activeTab?.searchContext ?? null, selectedTexts: selectedBookIds.size }
+            )}
+          />
         )}
 
         <SearchHistoryModal
