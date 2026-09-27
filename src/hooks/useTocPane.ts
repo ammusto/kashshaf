@@ -46,6 +46,8 @@ export interface TocPane {
   close: () => void;
   /** A book was just loaded from a result click: the first time, open. */
   openedFromResult: () => void;
+  /** The user asked to read a text: open, whatever the session's state. */
+  openExplicitly: () => void;
   width: number;
   setWidth: (w: number) => void;
 }
@@ -73,6 +75,7 @@ export function useTocPane(): TocPane {
     // Only the session's first: after that the user's own state stands.
     if (openMemory === null) setOpenRemembered(true);
   }, [setOpenRemembered]);
+  const openExplicitly = useCallback(() => setOpenRemembered(true), [setOpenRemembered]);
 
   const setWidth = useCallback((w: number) => {
     const clamped = clampTocWidth(w);
@@ -94,5 +97,5 @@ export function useTocPane(): TocPane {
     return () => window.removeEventListener('keydown', onKey);
   }, [toggle]);
 
-  return { open, toggle, close, openedFromResult, width, setWidth };
+  return { open, toggle, close, openedFromResult, openExplicitly, width, setWidth };
 }

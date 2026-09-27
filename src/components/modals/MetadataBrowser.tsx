@@ -9,6 +9,8 @@ import { normalizeArabicForSearch } from '@kashshaf/shared';
 
 interface MetadataBrowserProps {
   onClose: () => void;
+  /** The detail view's Open Text: read this text in the search view. */
+  onOpenText?: (book: BookMetadata) => void;
 }
 
 type BrowserTab = 'texts' | 'authors';
@@ -26,7 +28,7 @@ interface AuthorInfo {
 
 const ROW_HEIGHT = 64;
 
-export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
+export function MetadataBrowser({ onClose, onOpenText }: MetadataBrowserProps) {
   const { books: allBooks, genres, authorsMap, genresMap, loading } = useBooks();
 
   // Tab state
@@ -431,6 +433,7 @@ export function MetadataBrowser({ onClose }: MetadataBrowserProps) {
         book={selectedBook}
         onBack={handleBack}
         onClose={onClose}
+        onOpenText={onOpenText}
         authorsMap={authorsMap}
         genresMap={genresMap}
       />
@@ -1321,6 +1324,7 @@ export function BookDetailView({
   onBack,
   backLabel = 'Back to List',
   onClose,
+  onOpenText,
   authorsMap,
   genresMap,
 }: {
@@ -1331,6 +1335,8 @@ export function BookDetailView({
   backLabel?: string;
   /** When omitted, the close (×) button is hidden. */
   onClose?: () => void;
+  /** When given, an Open Text button reads this text in the search view. */
+  onOpenText?: (book: BookMetadata) => void;
   authorsMap: Map<number, string>;
   genresMap: Map<number, string>;
 }) {
@@ -1352,6 +1358,16 @@ export function BookDetailView({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
             <span className="font-medium">{backLabel}</span>
+          </button>
+        )}
+        {onOpenText && (
+          <button
+            type="button"
+            onClick={() => onOpenText(book)}
+            className="px-4 py-2 bg-app-accent text-white rounded-lg font-medium text-sm
+                     hover:bg-app-accent-hover transition-colors shadow-sm"
+          >
+            Open Text
           </button>
         )}
         <div className="flex-1" />

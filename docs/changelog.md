@@ -6,6 +6,8 @@
 
 **Settings.** Whether a search folds the sidebar, and whether a book opens with its table of contents, are now preferences (both on by default), in Kashshaf and in Lab.
 
+**Open Text.** Browse Texts → a text → Open Text reads it from its first page, with the contents pane open and the results pane folded down; your selection and results stay.
+
 ## [0.8.1] — 2026-09-21
 
 **Faster under load.** Searches no longer queue behind one another, faster.

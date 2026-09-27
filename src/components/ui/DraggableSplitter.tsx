@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 
+/** The reader's share of the height: what a drag may reach. */
+export const SPLITTER_MIN_RATIO = 0.2;
+/** At this ratio the results pane is at its minimum draggable height. */
+export const SPLITTER_MAX_RATIO = 0.8;
+
 interface DraggableSplitterProps {
   ratio: number;
   onDrag: (ratio: number) => void;
@@ -46,8 +51,8 @@ export function DraggableSplitter({ ratio, onDrag }: DraggableSplitterProps) {
       const deltaRatio = deltaY / dragInfo.containerHeight;
       const newRatio = dragInfo.startRatio + deltaRatio;
 
-      // Constrain to reasonable bounds (20% - 80%)
-      if (newRatio > 0.2 && newRatio < 0.8) {
+      // Constrain to the named bounds.
+      if (newRatio > SPLITTER_MIN_RATIO && newRatio < SPLITTER_MAX_RATIO) {
         onDrag(newRatio);
       }
     };
@@ -69,6 +74,7 @@ export function DraggableSplitter({ ratio, onDrag }: DraggableSplitterProps) {
   return (
     <div
       ref={splitterRef}
+      data-testid="splitter"
       onMouseDown={handleMouseDown}
       className={`
         h-1.5 cursor-row-resize transition-colors flex-shrink-0 relative group mb-2

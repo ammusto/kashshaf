@@ -27,6 +27,8 @@ interface ReaderPanelProps {
   highlight?: HighlightRequest | null;
   /** Opening a book from a result shows the contents pane, the first time (a preference; default on). */
   autoShowToc?: boolean;
+  /** Counts up when the user opens a text for reading: the contents pane opens, whatever the session's state. */
+  tocOpenRequest?: number;
   /** Told where the reader is, so the tab remembers it. */
   onActivePage?: (entry: PageEntry) => void;
   /** Jumping when the book has no spine. Returns false if there is no such page. */
@@ -57,6 +59,7 @@ export function ReaderPanel({
   clickedMatches,
   highlight = null,
   autoShowToc = true,
+  tocOpenRequest = 0,
   onActivePage,
   onNavigateToLabel,
   remote = false,
@@ -93,6 +96,11 @@ export function ReaderPanel({
     if (bookId !== null && clickedMatches && autoShowToc) tocPane.openedFromResult();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, clickedMatches?.part_index, clickedMatches?.page_id]);
+  // Open Text asked for the pane: it opens regardless of the preference.
+  useEffect(() => {
+    if (tocOpenRequest > 0) tocPane.openExplicitly();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tocOpenRequest]);
 
   // With both sidebars open the reader takes what remains, and must not fall
   // below a readable minimum: if it would, the contents pane yields.

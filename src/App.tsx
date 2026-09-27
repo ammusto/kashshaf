@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
-import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement, PageEntry } from './types';
+import type { SearchHistoryEntry, SavedSearchEntry, CorpusStatus, Announcement, PageEntry, BookMetadata } from './types';
 import type { CombinedSearchQuery, ProximitySearchQuery } from './types/search';
 import { describeProximityQuery, normalizeProximityQuery } from './utils/proximityQuery';
 import { buildDetails, describeUserAgent } from './utils/bugReport';
@@ -18,7 +18,7 @@ import { useSidebarForSearch } from './hooks/useSidebarForSearch';
 import { useSearchForm } from './contexts/SearchFormContext';
 import { Sidebar } from './components/Sidebar';
 import { ReaderPanel, ResultsPanel, HelpPanel } from './components/panels';
-import { DraggableSplitter, UpdateBanner } from './components/ui';
+import { DraggableSplitter, UpdateBanner, Toast, SPLITTER_MAX_RATIO } from './components/ui';
 import {
   TextSelectionModal,
   BugReportModal,
@@ -72,6 +72,7 @@ function App() {
     activeTab,
     setActiveTabId,
     closeTab,
+    createTab,
     updateTab,
   } = useSearchTabsContext();
 
@@ -553,6 +554,48 @@ function App() {
     setEditingCollection(undefined);
   }, []);
 
+  // --- Open Text and Search in Text
+  /** Counts up on each Open Text; the reader opens its contents pane on the change. */
+  const [tocOpenRequest, setTocOpenRequest] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  /**
+   * Read a text from the corpus browser: the active tab's reader goes to the
+   * book's first page in reading order, the contents pane opens, and the
+   * results pane drops to its minimum height. The tab's results and the text
+   * selection are left as they are; dragging the pane up shows them again.
+   */
+  const handleOpenText = useCallback(async (book: BookMetadata) => {
+    let first: PageEntry | undefined;
+    try {
+      first = (await api.listBookPages(book.id))[0];
+    } catch (err) {
+      console.error('Failed to list the pages of the text:', err);
+    }
+    if (!first) {
+      setNotice('This text has no pages to open.');
+      return;
+    }
+    let tabId = activeTabRef.current?.id;
+    if (!tabId) {
+      tabId = createTab({ label: book.title, fullQuery: book.title, tabType: 'terms', searchContext: { type: 'combined' } });
+      updateTab(tabId, { loading: false });
+    }
+    updateTab(tabId, {
+      errorMessage: '',
+      currentBookId: book.id,
+      currentPartIndex: first.part_index,
+      currentPageId: first.page_id,
+      clickedMatches: null,
+      currentPage: { bookId: book.id, meta: `${first.part_label}:${first.page_number}` },
+    });
+    setTocOpenRequest((n) => n + 1);
+    setSplitterRatio(SPLITTER_MAX_RATIO);
+    setTextBrowserOpen(false);
+    setHelpOpen(false);
+  }, [api, createTab, updateTab]);
+
+
   // Show loading screen while checking mode or corpus status
   if (modeLoading || (mode !== 'online' && checkingCorpus)) {
     return (
@@ -671,7 +714,7 @@ function App() {
                 onTabClose={closeTab}
               />
 
-              <div style={{ flex: splitterRatio }} className="overflow-hidden shadow-app-md bg-white mb-3 rounded-b-xl flex flex-col">
+              <div style={{ flex: splitterRatio }} data-testid="reader-pane" className="overflow-hidden shadow-app-md bg-white mb-3 rounded-b-xl flex flex-col">
                 {/* A fault in the reader shows a message here, not a white app. */}
                 <ErrorBoundary what="The reader" onError={(e) => console.error('reader failed', e)}>
                   <ReaderPanel
@@ -681,6 +724,7 @@ function App() {
                     clickedMatches={activeTab?.clickedMatches ?? null}
                     highlight={highlight}
                     autoShowToc={uiSettings.autoShowToc}
+                    tocOpenRequest={tocOpenRequest}
                     onActivePage={handleActivePage}
                     onNavigateToLabel={handleNavigateToLabel}
                     remote={mode === 'online' || isWebTarget()}
@@ -690,7 +734,7 @@ function App() {
 
               <DraggableSplitter ratio={splitterRatio} onDrag={setSplitterRatio} />
 
-              <div style={{ flex: 1 - splitterRatio }} className="overflow-hidden rounded-xl shadow-app-md">
+              <div style={{ flex: 1 - splitterRatio }} data-testid="results-pane" className="overflow-hidden rounded-xl shadow-app-md">
                 <ResultsPanel
                   results={activeTab?.searchResults ?? null}
                   description={
@@ -728,7 +772,7 @@ function App() {
         )}
 
         {textBrowserOpen && (
-          <MetadataBrowser onClose={() => setTextBrowserOpen(false)} />
+          <MetadataBrowser onClose={() => setTextBrowserOpen(false)} onOpenText={handleOpenText} />
         )}
 
         {bugOpen && (
@@ -746,6 +790,11 @@ function App() {
             )}
           />
         )}
+
+
+        {notice && <Toast message={notice} type="info" onClose={() => setNotice(null)} />}
+
+        {notice && <Toast message={notice} type="info" onClose={() => setNotice(null)} />}
 
         {aboutOpen && (
           <AboutModal
