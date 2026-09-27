@@ -29,6 +29,8 @@ interface ReaderPanelProps {
   autoShowToc?: boolean;
   /** Counts up when the user opens a text for reading: the contents pane opens, whatever the session's state. */
   tocOpenRequest?: number;
+  /** Search in Text, beside Cite: the book in the reader becomes (part of) the text selection. */
+  onSearchInText?: (bookId: number, title: string) => void;
   /** Told where the reader is, so the tab remembers it. */
   onActivePage?: (entry: PageEntry) => void;
   /** Jumping when the book has no spine. Returns false if there is no such page. */
@@ -60,6 +62,7 @@ export function ReaderPanel({
   highlight = null,
   autoShowToc = true,
   tocOpenRequest = 0,
+  onSearchInText,
   onActivePage,
   onNavigateToLabel,
   remote = false,
@@ -277,6 +280,19 @@ export function ReaderPanel({
         >
           Cite
         </button>
+        {onSearchInText && (
+          <button
+            type="button"
+            onClick={() => book && onSearchInText(book.id, book.title)}
+            disabled={!book}
+            className="px-3 py-2 bg-app-surface-variant rounded-md text-xs font-medium
+                       hover:bg-app-accent-light hover:text-app-accent transition-colors
+                       border border-app-border-light flex-shrink-0
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Search in Text
+          </button>
+        )}
         <button
           type="button"
           onClick={() => book && setShowBookDetail(true)}

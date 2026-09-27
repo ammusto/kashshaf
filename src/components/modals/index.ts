@@ -11,3 +11,4 @@ export { AnnouncementsModal } from './AnnouncementsModal';
 export { SettingsModal } from './SettingsModal';
 export { BugReportModal } from './BugReportModal';
 export { AboutModal } from './AboutModal';
+export { SearchInTextModal } from './SearchInTextModal';

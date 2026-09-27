@@ -9,12 +9,15 @@ import { installLayout, installResizeObserver, type FakeLayout, withPageBundle }
 import App from './App';
 
 /**
- * Open Text, through the whole app.
+ * Open Text and Search in Text, through the whole app.
  *
  * Open Text (corpus browser → detail view) mounts the reader at the book's
  * first page in reading order with the contents pane open and the results
  * pane at its minimum height; the selection and the loaded results stay,
- * and dragging the pane back up shows the results.
+ * and dragging the pane back up shows the results. Search in Text with no
+ * selection sets this text and asks nothing; with a selection it asks, and
+ * each answer does what it says, a text already selected is not added twice,
+ * and the top bar's count follows every change.
  */
 
 const BOOKS = [
@@ -130,6 +133,9 @@ const readerTitle = () => within(screen.getByTestId('reader-pane')).getByTitle('
 describe('Open Text', () => {
   it('reads the text from its first page with the contents pane open and the results pane at its minimum, keeping the selection and results', async () => {
     await boot();
+    // A selection to keep: this text (no selection → set, no modal).
+    fireEvent.click(screen.getByRole('button', { name: 'Search in Text' }));
+    expect(status()).toHaveTextContent('Searching: 1 Texts');
     // The pane opened with the result; close it, so Open Text is seen to open it.
     await waitFor(() => expect(screen.queryByTestId('toc-pane')).toBeInTheDocument());
     fireEvent.keyDown(window, { key: 't', ctrlKey: true });
@@ -151,7 +157,7 @@ describe('Open Text', () => {
     expect(screen.queryByRole('button', { name: 'Open Text' })).not.toBeInTheDocument();
     expect(api.combinedSearch).toHaveBeenCalledTimes(1);
     // The selection and the loaded results are as they were.
-    expect(status()).toHaveTextContent('Searching: All Texts');
+    expect(status()).toHaveTextContent('Searching: 1 Texts');
     expect(resultRows().length).toBe(2);
 
     // Dragging the pane back up shows what was there.
@@ -165,3 +171,47 @@ describe('Open Text', () => {
   });
 });
 
+describe('Search in Text', () => {
+  it('with no selection sets this text and asks nothing; with one, each answer does what it says and the count follows', async () => {
+    await boot();
+    expect(status()).toHaveTextContent('Searching: All Texts');
+
+    // No selection: set, no modal.
+    fireEvent.click(screen.getByRole('button', { name: 'Search in Text' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(status()).toHaveTextContent('Searching: 1 Texts');
+
+    // Another text in the reader, with a selection: the question.
+    await openText('كتاب ثمانية');
+    await waitFor(() => expect(readerTitle()).toHaveTextContent('كتاب ثمانية'));
+    fireEvent.click(screen.getByRole('button', { name: 'Search in Text' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Add this text to your current selection');
+
+    // Add to Selection: two texts.
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Selection' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(status()).toHaveTextContent('Searching: 2 Texts');
+    expect(screen.getByText('Added to your selection. Searching 2 texts.')).toBeInTheDocument();
+
+    // Adding it again: not duplicated, and said so.
+    fireEvent.click(screen.getByRole('button', { name: 'Search in Text' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Selection' }));
+    expect(status()).toHaveTextContent('Searching: 2 Texts');
+    expect(screen.getByText('This text is already in your selection. Searching 2 texts.')).toBeInTheDocument();
+
+    // Cancel: nothing changes.
+    fireEvent.click(screen.getByRole('button', { name: 'Search in Text' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(status()).toHaveTextContent('Searching: 2 Texts');
+
+    // Clear Selection: this text alone.
+    fireEvent.click(screen.getByRole('button', { name: 'Search in Text' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Selection' }));
+    expect(status()).toHaveTextContent('Searching: 1 Texts');
+    expect(screen.getByText('Selection cleared. Searching this text only.')).toBeInTheDocument();
+
+    // No search was run by any of it.
+    expect(api.combinedSearch).toHaveBeenCalledTimes(1);
+  });
+});

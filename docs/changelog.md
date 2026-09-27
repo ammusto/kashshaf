@@ -8,6 +8,8 @@
 
 **Open Text.** Browse Texts → a text → Open Text reads it from its first page, with the contents pane open and the results pane folded down; your selection and results stay.
 
+**Search in Text.** Beside Cite in the reader. With no texts selected, this text becomes the selection; with a selection, choose to add this text or search it alone.
+
 ## [0.8.1] — 2026-09-21
 
 **Faster under load.** Searches no longer queue behind one another, faster.

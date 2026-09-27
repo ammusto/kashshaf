@@ -23,6 +23,7 @@ import {
   TextSelectionModal,
   BugReportModal,
   AboutModal,
+  SearchInTextModal,
   MetadataBrowser,
   SavedSearchesModal,
   SearchHistoryModal,
@@ -557,6 +558,8 @@ function App() {
   // --- Open Text and Search in Text
   /** Counts up on each Open Text; the reader opens its contents pane on the change. */
   const [tocOpenRequest, setTocOpenRequest] = useState(0);
+  /** The book a Search in Text is asking about, while its modal is up. */
+  const [searchInTextBook, setSearchInTextBook] = useState<{ id: number; title: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   /**
@@ -595,6 +598,35 @@ function App() {
     setHelpOpen(false);
   }, [api, createTab, updateTab]);
 
+  /** Search in Text: with no selection, this text becomes it; otherwise ask. */
+  const handleSearchInText = useCallback((bookId: number, title: string) => {
+    if (selectedBookIds.size === 0) {
+      setSelectedBookIds(new Set([bookId]));
+      return;
+    }
+    setSearchInTextBook({ id: bookId, title });
+  }, [selectedBookIds]);
+
+  const handleAddToSelection = useCallback(() => {
+    if (!searchInTextBook) return;
+    const { id } = searchInTextBook;
+    setSearchInTextBook(null);
+    if (selectedBookIds.has(id)) {
+      setNotice(`This text is already in your selection. Searching ${selectedBookIds.size.toLocaleString()} texts.`);
+      return;
+    }
+    const next = new Set(selectedBookIds);
+    next.add(id);
+    setSelectedBookIds(next);
+    setNotice(`Added to your selection. Searching ${next.size.toLocaleString()} texts.`);
+  }, [searchInTextBook, selectedBookIds]);
+
+  const handleClearToText = useCallback(() => {
+    if (!searchInTextBook) return;
+    setSelectedBookIds(new Set([searchInTextBook.id]));
+    setSearchInTextBook(null);
+    setNotice('Selection cleared. Searching this text only.');
+  }, [searchInTextBook]);
 
   // Show loading screen while checking mode or corpus status
   if (modeLoading || (mode !== 'online' && checkingCorpus)) {
@@ -725,6 +757,7 @@ function App() {
                     highlight={highlight}
                     autoShowToc={uiSettings.autoShowToc}
                     tocOpenRequest={tocOpenRequest}
+                    onSearchInText={handleSearchInText}
                     onActivePage={handleActivePage}
                     onNavigateToLabel={handleNavigateToLabel}
                     remote={mode === 'online' || isWebTarget()}
@@ -791,8 +824,14 @@ function App() {
           />
         )}
 
-
-        {notice && <Toast message={notice} type="info" onClose={() => setNotice(null)} />}
+        {searchInTextBook && (
+          <SearchInTextModal
+            bookTitle={searchInTextBook.title}
+            onAdd={handleAddToSelection}
+            onClear={handleClearToText}
+            onClose={() => setSearchInTextBook(null)}
+          />
+        )}
 
         {notice && <Toast message={notice} type="info" onClose={() => setNotice(null)} />}
 
