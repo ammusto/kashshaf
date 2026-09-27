@@ -1,6 +1,10 @@
 # Changelog
 
-## [0.8.2] — unreleased
+## [0.8.3] — 2026-09-27
+
+**Reader Mode.** You can now select a text and enter "Reader" mode along with the ability to search the currently open text.
+
+## [0.8.2] — 2026-09-26
 
 **Bug? and About.** Report a problem from the top bar, by GitHub issue or e-mail, with the app's details ready to copy. About shows the version and corpus.
 
