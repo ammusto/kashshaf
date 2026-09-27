@@ -49,8 +49,10 @@ function OverviewTab() {
           <li>Use the <strong>sidebar</strong> on the left to enter search queries</li>
           <li>Switch between <strong>Terms</strong> and <strong>Names</strong> modes using the tabs</li>
           <li>Results appear in the bottom panel; click any result to view the full page above</li>
-          <li>Use <strong>Browse Texts</strong> in the toolbar to explore the corpus metadata</li>
-          <li>Filter searches to specific texts using <strong>Select Texts</strong></li>
+          <li>The sidebar folds away when you search; <strong>Ctrl+B</strong> brings it back with your query intact (Settings can turn the folding off)</li>
+          <li><strong>Browse Texts</strong> in the top bar opens the corpus metadata</li>
+          <li><strong>Select Texts</strong> in the top bar limits every search to chosen texts; "Searching:" beside it shows how many</li>
+          <li><strong>Bug?</strong> reports a problem, <strong>About</strong> shows the version and corpus</li>
         </ul>
       </Section>
 
@@ -69,20 +71,27 @@ function TermSearchTab() {
     <div className="space-y-4">
       <Section title="Term Search">
         <p className="text-app-text-secondary leading-relaxed">
-          Term search finds pages containing your query terms. You can search by surface form,
-          lemma, or root, and combine multiple terms with Boolean operators.
+          Term search finds pages containing your terms. Each term has its own mode (surface, lemma, or root)
+          and its own "Ignore clitics" switch, and terms can be combined with AND and OR.
+        </p>
+      </Section>
+
+      <Section title="Phrases">
+        <p className="text-app-text-secondary leading-relaxed">
+          Several words in one box are a phrase: the words must be adjacent, in that order. Phrases work in
+          every mode, so the lemma phrase "ولي الله" also matches "أولياء الله". A phrase split by a page turn
+          is still found and is highlighted on both pages.
         </p>
       </Section>
 
       <Section title="Boolean Search (AND/OR)">
         <p className="text-app-text-secondary leading-relaxed mb-2">
-          Combine multiple search terms using AND and OR logic:
+          The <strong>AND</strong> and <strong>OR</strong> tabs hold two lists of terms, up to three each:
         </p>
         <ul className="list-disc list-inside text-app-text-secondary space-y-2">
           <li><strong>AND terms:</strong> All AND terms must appear on the same page</li>
           <li><strong>OR terms:</strong> At least one OR term must match (in addition to all AND terms)</li>
-          <li>Click <strong>+ Add Term</strong> to add more search inputs</li>
-          <li>Use the dropdown to switch between AND and OR for each term</li>
+          <li><strong>+ Add search term</strong> adds a row to the current tab; <strong>Reset Search</strong> clears the form</li>
         </ul>
         <div className="mt-3 p-3 bg-app-surface-variant rounded-lg">
           <p className="text-sm font-medium text-app-text-primary mb-2">Example:</p>
@@ -106,10 +115,10 @@ function TermSearchTab() {
           Find two or three terms that appear near each other, each within a distance of the next:
         </p>
         <ul className="list-disc list-inside text-app-text-secondary space-y-2">
-          <li>Enter two terms and the maximum token distance between them; "Add term" chains a third, with its own distance</li>
+          <li>Enter two terms and the maximum token distance between them (1 to 100); <strong>+ Add Proximity Term</strong> chains a third, with its own distance</li>
           <li>Distance is measured in tokens (words), not characters</li>
-          <li>"Ordered" requires the terms in the order written; otherwise any order counts</li>
-          <li>"Add page term" names a term (up to two) the page must also contain, anywhere; the reader shows it in a second colour</li>
+          <li><strong>Ordered</strong> requires the terms in the order written; otherwise any order counts</li>
+          <li><strong>+ Add AND Term</strong> names a term (up to two, under "Also on the page") the page must also contain, anywhere; the reader shows it in a second colour</li>
           <li>Each term can use a different search mode (surface, lemma, root)</li>
           <li>A chain split across a page break is found, and attributed to the page holding more of it</li>
         </ul>
@@ -137,9 +146,10 @@ function NameSearchTab() {
 
       <Section title="Name Components">
         <ul className="list-disc list-inside text-app-text-secondary space-y-2">
-          <li><strong>Kunya (كنية):</strong> Patronymic like "أبو منصور" - can add multiple</li>
+          <li><strong>Kunya / laqab (كنية/لقب):</strong> "أبو منصور", "شمس الدين"; <strong>+ Add Laqab</strong> for more than one</li>
           <li><strong>Nasab (نسب):</strong> Lineage chain like "معمر بن أحمد بن زياد"</li>
-          <li><strong>Nisba (نسبة):</strong> Attributive names like "الأصبهاني" or "الصوفي" - can add multiple</li>
+          <li><strong>Nisba (نسبة):</strong> Attributive names like "الأصبهاني" or "الصوفي"; <strong>+ Add Nisba</strong> for more than one</li>
+          <li><strong>Shuhra (شهرة):</strong> The name a person is known by, via <strong>+ Add Shuhra</strong></li>
         </ul>
       </Section>
 
@@ -149,19 +159,13 @@ function NameSearchTab() {
         </p>
         <ul className="list-disc list-inside text-app-text-secondary space-y-2">
           <li>Different grammatical cases for kunya (أبو/أبا/أبي)</li>
-          <li>Combinations with and without "ابن" connectors</li>
-          <li>Various orderings of nasab and nisba elements</li>
+          <li>Nasab with and without "ابن" connectors, in one- and two-part lengths</li>
+          <li>Combinations of kunya, nasab and nisba, chosen with the "Include" switches (kunya + nisba, kunya + 1st nasab, 1-part nasab, 1-part nasab + nisba, 2-part nasab)</li>
           <li>Proclitic variants (و، ف، etc.) on the first word</li>
         </ul>
         <p className="text-app-text-secondary leading-relaxed mt-2">
-          The generated patterns are shown below the form so you can see exactly what will be searched.
-        </p>
-      </Section>
-
-      <Section title="Multiple Name Forms">
-        <p className="text-app-text-secondary leading-relaxed">
-          Click <strong>+ Add Name Form</strong> to search for multiple different people in the same query.
-          Results will include pages mentioning any of the specified names.
+          The generated patterns are shown below the form so you can see exactly what will be searched. One name
+          is searched at a time; the results panel can list the variants found and re-run any one of them.
         </p>
       </Section>
     </div>
@@ -294,16 +298,17 @@ function FeaturesTab() {
           <li>View all texts in the corpus with their metadata</li>
           <li>Filter by author, death date, genre, and title</li>
           <li>Sort by any column</li>
-          <li>Export filtered or complete metadata to CSV</li>
+          <li>Copy a citation in Chicago or MLA style</li>
+          <li>Export filtered or complete metadata to CSV or Excel</li>
           <li>See token and page counts for each text</li>
         </ul>
       </Section>
 
       <Section title="Text Selection">
         <p className="text-app-text-secondary leading-relaxed">
-          Click <strong>Select Texts</strong> in the sidebar to limit your searches to specific texts.
-          This is useful for focused research on particular authors, time periods, or genres.
-          The filter persists across searches until you clear it.
+          Click <strong>Select Texts</strong> in the top bar to limit your searches to specific texts,
+          authors, time periods, or genres. "Searching:" beside it shows how many texts are selected.
+          The selection persists across searches until you clear it; Cancel restores what you had.
         </p>
       </Section>
 
@@ -332,22 +337,35 @@ function FeaturesTab() {
           Export your search results for external analysis:
         </p>
         <ul className="list-disc list-inside text-app-text-secondary space-y-1">
-          <li><strong>Term/Name search:</strong> Click the export button in the results panel header</li>
-          <li>Exports include metadata, page references, and matched text</li>
-          <li>Results are saved as CSV files you can open in Excel or other tools</li>
+          <li>Click the export button in the results panel header</li>
+          <li>Up to 2,000 rows, as CSV or Excel, with metadata, volume and page, and the matched text</li>
         </ul>
       </Section>
 
-      <Section title="Search History">
+      <Section title="History and Saved Searches">
+        <ul className="list-disc list-inside text-app-text-secondary space-y-1">
+          <li><strong>History</strong> in the top bar lists past searches with their text selection; click one to run it again</li>
+          <li><strong>Saved</strong> keeps the searches you have marked</li>
+          <li>Delete entries you no longer need</li>
+        </ul>
+      </Section>
+
+      <Section title="Settings">
         <p className="text-app-text-secondary leading-relaxed mb-2">
-          Your searches are automatically saved for quick access later:
+          Menu → Settings:
         </p>
         <ul className="list-disc list-inside text-app-text-secondary space-y-1">
-          <li>Click <strong>Search History</strong> in the toolbar to view history</li>
-          <li>Searches are saved with their text filters</li>
-          <li>Click any saved search to re-run it instantly</li>
-          <li>Delete searches you no longer need</li>
+          <li><strong>Auto-collapse search sidebar on search</strong> and <strong>Auto-show table of contents</strong>, both on by default</li>
+          <li><strong>Exact counts</strong> (local data only): searches that would stop at 20,000 verified hits run to the end</li>
+          <li>Where the corpus lives on disk</li>
         </ul>
+      </Section>
+
+      <Section title="Reporting a Problem">
+        <p className="text-app-text-secondary leading-relaxed">
+          <strong>Bug?</strong> in the top bar opens a GitHub issue with the details prefilled, or shows the
+          address to write to and a details block to copy. The application sends nothing unless you use it.
+        </p>
       </Section>
 
       <Section title="Token Information">
