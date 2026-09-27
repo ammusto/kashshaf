@@ -55,8 +55,15 @@ fi
 if [ "$WITH_NGINX" -eq 1 ]; then
   echo "== nginx site"
   SITE=/etc/nginx/sites-available/api.kashshaf.com
+  # /robots.txt for the API host (the site aliases it).
+  install -d -m 755 /var/www/api-robots
+  printf 'User-agent: *\nDisallow: /\n' > /var/www/api-robots/robots.txt
   CERT=/etc/letsencrypt/live/api.kashshaf.com/fullchain.pem
-  ln -sfn "$SITE" /etc/nginx/sites-enabled/api.kashshaf.com
+  # Enable it once: the live box links it as sites-enabled/kashshaf-api, and a
+  # second link to the same file would load the site twice (nginx -t fails).
+  if ! find /etc/nginx/sites-enabled -lname "$SITE" | grep -q .; then
+    ln -sfn "$SITE" /etc/nginx/sites-enabled/api.kashshaf.com
+  fi
   if [ ! -f "$CERT" ]; then
     # No certificate yet: the TLS server block would fail nginx -t (missing
     # ssl_certificate files). Install the site without it, get the

@@ -96,6 +96,44 @@ whose `If-None-Match` matches the ETag (`"<corpus_version>-<book_id>"`) is
 answered 304 before either cap is consulted. `/health` reports
 `"bulk_tokens": true` so Lab can tell an old server from a broken one.
 
+## nginx on the box: which file is live, applying a change, the catch-all
+
+**The live file.** The enabled site is `/etc/nginx/sites-enabled/kashshaf-api`,
+a symlink to `/etc/nginx/sites-available/api.kashshaf.com`. The repo's copy is
+`nginx-api.kashshaf.com.conf`. The enabled name matches neither the repo
+filename nor the domain. Editing a file in `sites-available` whose name
+matches the domain is not enough on its own: what nginx loads is whatever
+`sites-enabled` links to. Check, and confirm the change is in the loaded
+config:
+
+```
+ls -la /etc/nginx/sites-enabled/
+sudo nginx -T | grep kashshaf_reader     # or any line from your change
+```
+
+`install.sh` links the site as `sites-enabled/api.kashshaf.com` and will not
+add a second link if one already points at the target.
+
+**Applying a change.** Copy the repo file over the symlink's target, test,
+reload, then wait before testing: a reload is asynchronous, and a request
+sent at once can be answered by an old worker, which looks exactly like the
+change not working.
+
+```
+sudo cp api/deploy/nginx-api.kashshaf.com.conf "$(readlink -f /etc/nginx/sites-enabled/kashshaf-api)"
+sudo nginx -t
+sudo systemctl reload nginx
+sleep 3
+sudo nginx -T | grep <something from your change>
+```
+
+**The catch-all.** `sites-enabled/default` has its 443 listeners commented
+out, so the `api.kashshaf.com` block is the only HTTPS server on the box and
+answers every HTTPS request whatever the `Host` header. That is why the error
+log shows scanner requests with foreign hostnames against
+`server: api.kashshaf.com`. `/robots.txt` on this host is served from
+`/var/www/api-robots/robots.txt` (`Disallow: /`), which `install.sh` writes.
+
 ## Rollback by hand
 
 ```
