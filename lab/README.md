@@ -1,6 +1,6 @@
 # Kashshaf Lab
 
-A desktop application for studying one premodern Arabic text against the
+A desktop application for studying one  Arabic text against the
 Kashshaf corpus. In development; not released.
 
 ## Build

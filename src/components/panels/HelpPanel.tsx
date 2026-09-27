@@ -38,7 +38,7 @@ function OverviewTab() {
     <div className="space-y-4">
       <Section title="al-Kashshāf Overview">
         <p className="text-app-text-secondary leading-relaxed">
-          al-Kashshāf is a research environment for exploring medieval Arabic texts. It provides powerful
+          al-Kashshāf is a research environment for exploring Arabic texts. It provides powerful
           search capabilities across a large corpus of classical Arabic literature, with morphological
           analysis and flexible query options.
         </p>
