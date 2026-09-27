@@ -1,6 +1,6 @@
 # Kashshāf
 
-Desktop application for searching  Arabic texts (pre-1930) with token-level morphological data. Features and documentation at [kashshaf.com](https://www.kashshaf.com/).
+Desktop application for searching  Arabic texts (pre-1930) with token-level morphological data. Currently in testing. Features and documentation at [kashshaf.com](https://www.kashshaf.com/).
 
 ## Features
 
@@ -74,7 +74,7 @@ sources → canonical JSON → clean → CAMeL BERT morphology → corpus.db + T
 3. **Analyse**: CAMeL Tools with BERT disambiguation assigns surface, lemma, root, POS, features, and clitics to every token.
 4. **Build**: token definitions deduplicated into a triple table; page token streams stored as compressed id blobs; a single-segment Tantivy index in reading order; table of contents and frequency tables as sidecars.
 
-Pipeline code and metadata are in the separate `kashshaf-data` repository.
+Pipeline code and metadata will be available at launch.
 
 ### Files
 
