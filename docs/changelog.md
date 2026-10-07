@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.8.4] — unreleased
+## [0.8.4] — 2026-10-7
 
-**Lighter start.** The web app and desktop online mode load a catalogue of eight fields per text instead of every text's full record (40 MB before; 1.2 MB, 230 KB compressed). A text's full record is fetched when its detail view or citation opens; the metadata export fetches its extra columns in one request. The catalogue itself is published beside the corpus and fetched once per corpus version; the API still answers when it is absent.
+**Lighter start.** The web app and desktop online mode load a catalogue of eight fields per text instead of every text's full record (40 MB before; 1.2 MB, 230 KB compressed).
 
 ## [0.8.3] — 2026-09-27
 
