@@ -8,6 +8,7 @@ by `.github/workflows/release.yml` (with `dry_run: false`).
 |---|---|
 | `kashshaf-api.service` | systemd unit: user `kashshaf`, `ExecStart=/opt/kashshaf/api/bin/current`, environment (below); `ProtectSystem=full` and no `ReadOnlyPaths=` because the data directory is a symlink (see "Corpus layout") |
 | `nginx-api.kashshaf.com.conf` | reverse proxy with TLS, two `limit_req` zones per IP — 10 req/s burst 30 in `location /` (searches), 60 req/s burst 120 in the `/page*`, `/book/{id}/pages` and `/book/{id}/toc` location (the reader); `/health` has none, which is how nginx exempts a location — and a JSON 429 that carries the CORS headers and `Retry-After` (`add_header … always`), so a browser sees a 429 rather than a CORS failure. The `ssl_certificate` lines are live and point at certbot's paths, so the file passes `nginx -t` wherever the certificate exists; the TLS `server` block sits between `begin/end tls server` markers so `install.sh` can leave it out until certbot has run |
+| `nginx-gzip.conf` | http-level compression, installed as `/etc/nginx/conf.d/kashshaf-gzip.conf`: `gzip_types application/json …`, `gzip_proxied any`, level 6, `gzip_vary`. Without it the distro `nginx.conf` compresses `text/html` only and nothing proxied, so `/books` left as 39.9 MB (see "Compression" below) |
 | `install.sh` | one-time setup: packages, user, directories, sudoers rule, unit, optional nginx + certbot. Without a certificate it installs the port-80 site only, runs `certbot certonly --nginx`, then installs the full site; with one it installs the full site directly |
 | `switch_release.sh` | run by the workflow over SSH: repoint `bin/current`, restart, wait for `/health.version` and `warm_cache == complete`, smoke test, roll back on failure, keep three binaries |
 | `smoke.sh` | the post-deploy checks (also run from the runner against the public URL) |
@@ -133,6 +134,37 @@ answers every HTTPS request whatever the `Host` header. That is why the error
 log shows scanner requests with foreign hostnames against
 `server: api.kashshaf.com`. `/robots.txt` on this host is served from
 `/var/www/api-robots/robots.txt` (`Disallow: /`), which `install.sh` writes.
+
+## Compression: a conf.d drop-in, not the site file
+
+The distro `/etc/nginx/nginx.conf` has `gzip on;` in its `http` block but
+`gzip_types` and `gzip_proxied` commented out (lines 48-53). The defaults are
+`text/html` only and `gzip_proxied off`, so a JSON response from `proxy_pass`
+has never been compressed: `/books` went out as 39,891,666 bytes. The fix is
+http-level, so it does not belong in the site file; `nginx.conf` line 59
+includes `conf.d/*.conf` inside `http`, which is where the repo's
+`nginx-gzip.conf` goes.
+
+Apply (the repo file is the source of truth; nothing in `nginx.conf` or the
+site file changes):
+
+```
+sudo cp api/deploy/nginx-gzip.conf /etc/nginx/conf.d/kashshaf-gzip.conf
+sudo nginx -t
+sudo systemctl reload nginx
+sleep 3
+sudo nginx -T | grep -n "gzip_proxied\|gzip_types"     # the drop-in is in the loaded config
+```
+
+Check from anywhere (expect `content-encoding: gzip` and about 3.8 MB):
+
+```
+curl -s -o /dev/null -D - -w 'bytes %{size_download}\n' -H 'Accept-Encoding: gzip' https://api.kashshaf.com/books | grep -iE 'content-encoding|^bytes'
+```
+
+The site file (`sites-enabled/kashshaf-api` → `sites-available/api.kashshaf.com`)
+matches `nginx-api.kashshaf.com.conf` in the repo as of 2026-10-07 (checked by
+diff over SSH). `nginx.conf` itself is the distro file and is not in the repo.
 
 ## Rollback by hand
 

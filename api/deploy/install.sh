@@ -54,6 +54,8 @@ fi
 
 if [ "$WITH_NGINX" -eq 1 ]; then
   echo "== nginx site"
+  # http-level gzip for JSON (nginx.conf leaves gzip_types/gzip_proxied off).
+  install -m 644 "$HERE/nginx-gzip.conf" /etc/nginx/conf.d/kashshaf-gzip.conf
   SITE=/etc/nginx/sites-available/api.kashshaf.com
   # /robots.txt for the API host (the site aliases it).
   install -d -m 755 /var/www/api-robots
