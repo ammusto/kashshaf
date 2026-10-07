@@ -5,7 +5,7 @@
  * Base URL: https://api.kashshaf.com
  */
 
-import type { SearchAPI, CombinedSearchQuery, SearchTerm, NameSearchForm } from './index';
+import type { SearchAPI, CombinedSearchQuery, SearchTerm, NameSearchForm, BookExportFields } from './index';
 import type { ProximitySearchQuery, ProximityTerm } from '../types/search';
 import type {
   SearchMode,
@@ -16,7 +16,8 @@ import type {
   Token,
   EngineCapabilities,
   WildcardGrammar,
-  WalkStatus,
+  WalkStatus,
+
   PageEntry,
   TocNode,
 } from '../types';
@@ -489,6 +490,18 @@ export class OnlineAPI implements SearchAPI {
 
   async getAllBooks(): Promise<BookMetadata[]> {
     return fetchAPI<BookMetadata[]>('/books');
+  }
+
+  async getBook(id: number): Promise<BookMetadata | null> {
+    const res = await fetch(`${API_BASE_URL}/book/${id}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Book ${id}: HTTP ${res.status}`);
+    return (await res.json()) as BookMetadata;
+  }
+
+  async getExportFields(ids: number[]): Promise<BookExportFields[]> {
+    if (ids.length === 0) return [];
+    return fetchAPI<BookExportFields[]>('/books/citations', { method: 'POST', body: JSON.stringify({ ids }) });
   }
 
   async getAuthors(): Promise<[number, string][]> {

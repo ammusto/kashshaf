@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useMemo, ReactNode, useCallback } from 'react';
 import type { BookMetadata } from '../types';
 import type { SearchAPI } from '../api';
+import { fetchFullBook, isLightRow } from '../utils/catalog';
 
 interface BooksContextValue {
   /** All books loaded at startup */
@@ -21,6 +22,8 @@ interface BooksContextValue {
   error: string | null;
   /** Reload books data (useful after mode change) */
   reload: () => Promise<void>;
+  /** The API the catalogue came from, for the on-open fetches. */
+  api: SearchAPI;
 }
 
 const BooksContext = createContext<BooksContextValue | null>(null);
@@ -48,8 +51,9 @@ export function BooksProvider({ children, api }: BooksProviderProps) {
         api.getAuthors(),
         api.getGenres(),
       ]);
-      // Filter to only show books that are in the corpus (in_corpus = 1)
-      const inCorpusBooks = booksData.filter(book => book.in_corpus !== false && book.in_corpus != null);
+      // The light catalogue (online) is in-corpus only and carries no
+      // in_corpus field; the desktop's full rows carry it and may say false.
+      const inCorpusBooks = booksData.filter(book => book.in_corpus !== false);
       console.log(`[BooksContext] Loaded ${booksData.length} total books (${inCorpusBooks.length} in corpus), ${authorsData.length} authors, ${genresData.length} genres`);
       setBooks(inCorpusBooks);
       setAuthors(authorsData);
@@ -105,6 +109,7 @@ export function BooksProvider({ children, api }: BooksProviderProps) {
     loading,
     error,
     reload: loadData,
+    api,
   };
 
   return (
@@ -120,4 +125,32 @@ export function useBooks(): BooksContextValue {
     throw new Error('useBooks must be used within a BooksProvider');
   }
   return context;
+}
+
+/**
+ * The full row of a book from the catalogue: the light row at once, the
+ * fetched row when it arrives (once per book per session). A desktop
+ * offline row is already full and is returned as is.
+ */
+export function useFullBook(book: BookMetadata | null | undefined): BookMetadata | null {
+  const { api } = useBooks();
+  const [full, setFull] = useState<BookMetadata | null>(null);
+  const light = !!book && isLightRow(book);
+  useEffect(() => {
+    if (!book || !light) {
+      setFull(null);
+      return;
+    }
+    let cancelled = false;
+    fetchFullBook(api, book)
+      .then((row) => {
+        if (!cancelled && row) setFull(row);
+      })
+      .catch((err) => console.warn('book detail failed:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [api, book, light]);
+  if (!book) return null;
+  return full && full.id === book.id ? full : book;
 }

@@ -277,6 +277,41 @@ struct BookMetadata {
     citation_json: Option<String>,
 }
 
+/// One row of the light catalogue: what the search form, the filters, the
+/// browse table and the result rows need, for in-corpus books only. The
+/// rest of the row is `GET /book/:id` (one book) or `POST /books/citations`
+/// (the export's columns for many). 0.8.2: `/books` was the full row for
+/// every book, 39.9 MB uncompressed, on every load of the web app.
+#[derive(Serialize)]
+struct BookSummary {
+    id: i64,
+    title: String,
+    author_id: Option<i64>,
+    death_ah: Option<i64>,
+    genre_id: Option<i64>,
+    page_count: Option<i64>,
+    token_count: Option<i64>,
+    parts: Option<i64>,
+}
+
+/// The columns the metadata export writes beyond the catalogue.
+#[derive(Serialize)]
+struct BookExportFields {
+    id: i64,
+    citation_json: Option<String>,
+    paginated: Option<bool>,
+    corpus: Option<String>,
+    original_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct IdsRequest {
+    ids: Vec<i64>,
+}
+
+/// More ids than the corpus has books is a mistake, not an export.
+const MAX_EXPORT_IDS: usize = 10_000;
+
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
@@ -741,43 +776,122 @@ async fn get_book_toc(
     .await
 }
 
-async fn get_all_books(State(state): State<Arc<AppState>>) -> Result<Json<Vec<BookMetadata>>, ApiError> {
+const BOOK_COLUMNS: &str = "id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
+    original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json";
+
+fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<BookMetadata> {
+    Ok(BookMetadata {
+        id: row.get(0)?,
+        corpus: row.get(1)?,
+        title: row.get(2)?,
+        author_id: row.get(3)?,
+        death_ah: row.get(4)?,
+        century_ah: row.get(5)?,
+        genre_id: row.get(6)?,
+        page_count: row.get(7)?,
+        token_count: row.get(8)?,
+        original_id: row.get(9)?,
+        paginated: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
+        tags: row.get(11)?,
+        book_meta: row.get(12)?,
+        author_meta: row.get(13)?,
+        in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
+        parts: row.get(15)?,
+        metadata_json: row.get(16)?,
+        citation_json: row.get(17)?,
+    })
+}
+
+/// The light catalogue: eight fields, in-corpus books only, in death-year order.
+async fn get_all_books(State(state): State<Arc<AppState>>) -> Result<Json<Vec<BookSummary>>, ApiError> {
     blocking(&state, move |state| {
         let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count,
-                        original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json
-                 FROM books ORDER BY death_ah ASC NULLS LAST, id ASC",
+                "SELECT id, title, author_id, death_ah, genre_id, page_count, token_count, parts
+                 FROM books WHERE COALESCE(in_corpus, 1) = 1
+                 ORDER BY death_ah ASC NULLS LAST, id ASC",
             )
             .map_err(internal)?;
         let books = stmt
             .query_map([], |row| {
-                Ok(BookMetadata {
+                Ok(BookSummary {
                     id: row.get(0)?,
-                    corpus: row.get(1)?,
-                    title: row.get(2)?,
-                    author_id: row.get(3)?,
-                    death_ah: row.get(4)?,
-                    century_ah: row.get(5)?,
-                    genre_id: row.get(6)?,
-                    page_count: row.get(7)?,
-                    token_count: row.get(8)?,
-                    original_id: row.get(9)?,
-                    paginated: row.get::<_, Option<i64>>(10)?.map(|v| v != 0),
-                    tags: row.get(11)?,
-                    book_meta: row.get(12)?,
-                    author_meta: row.get(13)?,
-                    in_corpus: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
-                    parts: row.get(15)?,
-                    metadata_json: row.get(16)?,
-                    citation_json: row.get(17)?,
+                    title: row.get(1)?,
+                    author_id: row.get(2)?,
+                    death_ah: row.get(3)?,
+                    genre_id: row.get(4)?,
+                    page_count: row.get(5)?,
+                    token_count: row.get(6)?,
+                    parts: row.get(7)?,
                 })
             })
             .map_err(internal)?
             .filter_map(|r| r.ok())
             .collect();
         Ok(Json(books))
+    })
+    .await
+}
+
+/// One book's full row, for the detail view and the citation. 404 for an id
+/// the corpus does not have (an excluded book included: it is not searchable).
+async fn get_book(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<BookMetadata>, ApiError> {
+    blocking(&state, move |state| {
+        let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
+        let sql = format!("SELECT {BOOK_COLUMNS} FROM books WHERE id = ?1 AND COALESCE(in_corpus, 1) = 1");
+        match conn.query_row(&sql, [id], row_to_book) {
+            Ok(book) => Ok(Json(book)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse { error: format!("no book {id} in this corpus") }),
+            )),
+            Err(e) => Err(internal(e)),
+        }
+    })
+    .await
+}
+
+/// The export's columns for many books in one request: `citation_json`,
+/// `paginated`, `corpus`, `original_id` for the given ids, in id order.
+/// Ids the corpus does not have are left out. One request covers a
+/// full-corpus export (7,199 ids, ~36 KB of body; ~3.5 MB back, ~0.4 MB
+/// gzipped). The ids go in as one JSON array parameter through json_each,
+/// so the count is not limited by SQLite's variable cap.
+async fn get_books_citations(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<IdsRequest>,
+) -> Result<Json<Vec<BookExportFields>>, ApiError> {
+    if req.ids.len() > MAX_EXPORT_IDS {
+        return Err(bad_request(format!("at most {MAX_EXPORT_IDS} ids per request")));
+    }
+    blocking(&state, move |state| {
+        let conn = rusqlite::Connection::open(&state.metadata_db_path).map_err(internal)?;
+        let ids = serde_json::to_string(&req.ids).map_err(internal)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, citation_json, paginated, corpus, original_id FROM books
+                 WHERE id IN (SELECT value FROM json_each(?1)) AND COALESCE(in_corpus, 1) = 1
+                 ORDER BY id",
+            )
+            .map_err(internal)?;
+        let rows = stmt
+            .query_map([ids], |row| {
+                Ok(BookExportFields {
+                    id: row.get(0)?,
+                    citation_json: row.get(1)?,
+                    paginated: row.get::<_, Option<i64>>(2)?.map(|v| v != 0),
+                    corpus: row.get(3)?,
+                    original_id: row.get(4)?,
+                })
+            })
+            .map_err(internal)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(Json(rows))
     })
     .await
 }
@@ -969,6 +1083,8 @@ async fn async_main(blocking_threads: usize) -> anyhow::Result<()> {
         .route("/search/variants", post(search_variants))
         .route("/search/wildcard", get(wildcard_search))
         .route("/books", get(get_all_books))
+        .route("/books/citations", post(get_books_citations))
+        .route("/book/:id", get(get_book))
         .route("/authors", get(get_all_authors))
         .route("/genres", get(get_all_genres));
     let reader = Router::new()

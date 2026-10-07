@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { PageBundle, PageBundleRequest, SearchTerm } from './index';
+import type { PageBundle, PageBundleRequest, SearchTerm, BookExportFields } from './index';
 import type { ProximitySearchQuery, ProximityTerm } from '../types/search';
 import type {
   SearchMode,
@@ -16,7 +16,8 @@ import type {
   CorpusStatus,
   EngineCapabilities,
   WalkStatus,
-  DataDirInfo,
+  DataDirInfo,
+
   PageEntry,
   TocNode,
 } from '../types';
@@ -129,6 +130,11 @@ export async function listBooks(
 
 export async function getBook(id: number): Promise<BookMetadata | null> {
   return invoke('get_book', { id });
+}
+
+/** The export's columns beyond the catalogue, for many books at once. */
+export async function getCitations(ids: number[]): Promise<BookExportFields[]> {
+  return invoke('get_citations', { ids });
 }
 
 export interface ListBooksFilteredParams {

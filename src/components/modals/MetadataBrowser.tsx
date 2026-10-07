@@ -1,8 +1,9 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { BookMetadata } from '../../types';
-import { useBooks } from '../../contexts/BooksContext';
+import { useBooks, useFullBook } from '../../contexts/BooksContext';
 import { exportBooks, exportAuthors, type ExportFormat } from '../../utils/exportData';
+import { withExportFields } from '../../utils/catalog';
 import { CitationBlock } from '../shared/CitationBlock';
 import { InfoTooltip } from '../ui';
 import { normalizeArabicForSearch } from '@kashshaf/shared';
@@ -29,7 +30,7 @@ interface AuthorInfo {
 const ROW_HEIGHT = 64;
 
 export function MetadataBrowser({ onClose, onOpenText }: MetadataBrowserProps) {
-  const { books: allBooks, genres, authorsMap, genresMap, loading } = useBooks();
+  const { books: allBooks, genres, authorsMap, genresMap, loading, api } = useBooks();
 
   // Tab state
   const [activeTab, setActiveTab] = useState<BrowserTab>('texts');
@@ -369,7 +370,9 @@ export function MetadataBrowser({ onClose, onOpenText }: MetadataBrowserProps) {
     setExportDropdownOpen(false);
     try {
       if (activeTab === 'texts') {
-        await exportBooks(filteredBooks, format, authorsMap, genresMap);
+        // The catalogue rows are light: the citation and source columns
+        // come in one request for every book being exported.
+        await exportBooks(await withExportFields(api, filteredBooks), format, authorsMap, genresMap);
       } else {
         await exportAuthors(filteredAuthors, format);
       }
@@ -1320,7 +1323,7 @@ function parseJsonArray(jsonStr?: string): string[] {
 
 // Book detail view
 export function BookDetailView({
-  book,
+  book: bookProp,
   onBack,
   backLabel = 'Back to List',
   onClose,
@@ -1340,6 +1343,9 @@ export function BookDetailView({
   authorsMap: Map<number, string>;
   genresMap: Map<number, string>;
 }) {
+  // The light row is shown at once; the full row (tags, metadata,
+  // citation) fills in when it arrives.
+  const book = useFullBook(bookProp) ?? bookProp;
   const tags = parseJsonArray(book.tags);
   const authorName = book.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
   const genreName = book.genre_id !== undefined ? genresMap.get(book.genre_id) : undefined;

@@ -44,6 +44,7 @@ const api = withPageBundle({
   getMatchPositionsCombined: vi.fn(async () => [0]),
   getNameMatchPositions: vi.fn(async () => []),
   getAllBooks: vi.fn(async () => BOOKS),
+  getBook: vi.fn(async () => null),
   getAuthors: vi.fn(async () => [[1, 'مؤلف']]),
   getGenres: vi.fn(async () => []),
 } as unknown as SearchAPI);

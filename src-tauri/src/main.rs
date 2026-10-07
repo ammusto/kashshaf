@@ -52,6 +52,7 @@ fn main() {
             commands::list_books_filtered,
             commands::search_authors,
             commands::get_book,
+            commands::get_citations,
             commands::get_genres,
             commands::get_authors,
             commands::get_centuries,

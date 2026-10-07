@@ -66,6 +66,7 @@ function makeApi() {
     getNameMatchPositions: vi.fn(async () => []),
     getPageByLabel: vi.fn(async () => null),
     getAllBooks: vi.fn(async () => [{ id: 7, title: 'كتاب', author_id: 1, parts: 2, in_corpus: true }]),
+    getBook: vi.fn(async () => null),
     getAuthors: vi.fn(async () => [[1, 'مؤلف']]),
     getGenres: vi.fn(async () => []),
   } as unknown as SearchAPI);

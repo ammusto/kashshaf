@@ -5,7 +5,7 @@ import type { PageEntry, Token, TocNode } from '../../types';
 import type { SearchAPI } from '../../api';
 import { TokenPopup, entryForPage } from '@kashshaf/shared';
 import { Toast } from '../ui';
-import { useBooks } from '../../contexts/BooksContext';
+import { useBooks, useFullBook } from '../../contexts/BooksContext';
 import { CitationBlock } from '../shared/CitationBlock';
 import { BookDetailView } from '../modals/MetadataBrowser';
 import { usePageStack, type PageAnchor } from '../../hooks/usePageStack';
@@ -122,6 +122,8 @@ export function ReaderPanel({
   const tocShown = tocPane.open && !tocYields;
 
   const book = bookId !== null ? booksMap.get(bookId) : null;
+  // The citation needs the full row; fetched when the Cite modal is open.
+  const bookForCite = useFullBook(showCite ? book : null);
   const title = book?.title ?? (bookId !== null ? `Book ${bookId}` : '');
   const author = book?.author_id !== undefined ? authorsMap.get(book.author_id) : undefined;
   // Prefer the spine, which knows how many parts the book really has; fall
@@ -449,7 +451,7 @@ export function ReaderPanel({
               {/* The citation follows the page in view, not the page that was
                   clicked: scrolling on and citing gives the page you are
                   reading. */}
-              <CitationBlock book={book} volume={citeVolume} page={citePageNumber} withPageRef={true} />
+              <CitationBlock book={bookForCite ?? book} volume={citeVolume} page={citePageNumber} withPageRef={true} />
             </div>
           </div>
         </div>

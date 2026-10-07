@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.8.4] — unreleased
+
+**Lighter start.** The web app and desktop online mode load a catalogue of eight fields per text instead of every text's full record (40 MB before; 1.2 MB, 230 KB compressed). A text's full record is fetched when its detail view or citation opens; the metadata export fetches its extra columns in one request.
+
 ## [0.8.3] — 2026-09-27
 
 **Reader Mode.** You can now select a text and enter "Reader" mode along with the ability to search the currently open text.

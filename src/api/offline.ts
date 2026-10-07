@@ -4,7 +4,7 @@
  * Uses Tauri commands to access local corpus data.
  */
 
-import type { SearchAPI, CombinedSearchQuery, SearchTerm, NameSearchForm, PageBundle, PageBundleRequest } from './index';
+import type { SearchAPI, CombinedSearchQuery, SearchTerm, NameSearchForm, PageBundle, PageBundleRequest, BookExportFields } from './index';
 import type { ProximitySearchQuery } from '../types/search';
 import type {
   SearchMode,
@@ -14,7 +14,8 @@ import type {
   SearchResult,
   Token,
   EngineCapabilities,
-  WalkStatus,
+  WalkStatus,
+
   PageEntry,
   TocNode,
 } from '../types';
@@ -154,6 +155,15 @@ export class OfflineAPI implements SearchAPI {
 
   async getAllBooks(): Promise<BookMetadata[]> {
     return tauri.getAllBooks();
+  }
+
+  async getBook(id: number): Promise<BookMetadata | null> {
+    return tauri.getBook(id);
+  }
+
+  async getExportFields(ids: number[]): Promise<BookExportFields[]> {
+    if (ids.length === 0) return [];
+    return tauri.getCitations(ids);
   }
 
   async getAuthors(): Promise<[number, string][]> {

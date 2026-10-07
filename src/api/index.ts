@@ -13,7 +13,8 @@ import type {
   SearchResult,
   Token,
   EngineCapabilities,
-  WalkStatus,
+  WalkStatus,
+
   PageEntry,
   TocNode,
 } from '../types';
@@ -235,9 +236,27 @@ export interface SearchAPI {
   getWalkStatus(key: string): Promise<WalkStatus | null>;
 
   // Metadata operations
+  /**
+   * The catalogue. Online: the light rows (id, title, author_id, death_ah,
+   * genre_id, page_count, token_count, parts) for in-corpus books. Offline:
+   * full rows from metadata.db, a superset.
+   */
   getAllBooks(): Promise<BookMetadata[]>;
+  /** One book's full row, or null if the corpus has no such book. */
+  getBook(id: number): Promise<BookMetadata | null>;
+  /** The export's columns beyond the catalogue, for many books in one call. */
+  getExportFields(ids: number[]): Promise<BookExportFields[]>;
   getAuthors(): Promise<[number, string][]>;
   getGenres(): Promise<[number, string][]>;
+}
+
+/** What `getExportFields` returns per book. */
+export interface BookExportFields {
+  id: number;
+  citation_json?: string | null;
+  paginated?: boolean | null;
+  corpus?: string | null;
+  original_id?: string | null;
 }
 
 // Re-export for convenience

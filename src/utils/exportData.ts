@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import type { BookMetadata, SearchResult } from '../types';
+import { centuryOf } from './catalog';
 import { isWebTarget } from './platform';
 
 // BOM for UTF-8 Excel compatibility with Arabic
@@ -50,7 +51,7 @@ export function generateBooksCSV(
       escapeCSV(authorName),
       escapeCSV(book.author_id),
       escapeCSV(book.death_ah),
-      escapeCSV(book.century_ah),
+      escapeCSV(book.century_ah ?? centuryOf(book.death_ah)),
       escapeCSV(genreName),
       escapeCSV(book.genre_id),
       escapeCSV(book.page_count),
@@ -152,7 +153,7 @@ export function generateBooksXLSX(
       'Author': authorName ?? '',
       'Author ID': book.author_id ?? '',
       'Death Year (AH)': book.death_ah ?? '',
-      'Century (AH)': book.century_ah ?? '',
+      'Century (AH)': book.century_ah ?? centuryOf(book.death_ah) ?? '',
       'Genre': genreName ?? '',
       'Genre ID': book.genre_id ?? '',
       'Page Count': book.page_count ?? '',

@@ -53,6 +53,16 @@ pub struct BookMetadata {
     pub citation_json: Option<String>,  // Structured citation data for MLA/Chicago formatting
 }
 
+/// What the metadata export needs beyond the light catalogue.
+#[derive(Debug, Clone, Serialize)]
+pub struct BookExportFields {
+    pub id: i64,
+    pub citation_json: Option<String>,
+    pub paginated: Option<bool>,
+    pub corpus: Option<String>,
+    pub original_id: Option<String>,
+}
+
 const BOOK_COLUMNS: &str = "id, corpus, title, author_id, death_ah, century_ah, genre_id, page_count, token_count, original_id, paginated, tags, book_meta, author_meta, in_corpus, parts, metadata_json, citation_json";
 
 fn row_to_book(row: &Row) -> rusqlite::Result<BookMetadata> {
@@ -288,6 +298,40 @@ pub fn get_all_books(
         .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
 
     Ok(books)
+}
+
+/// The export's columns for many books: the desktop twin of the API's
+/// `POST /books/citations`, so the metadata export is one call on both hosts.
+#[tauri::command]
+pub fn get_citations(
+    state: State<'_, ManagedAppState>,
+    ids: Vec<i64>,
+) -> Result<Vec<BookExportFields>, KashshafError> {
+    let app_state = require_state(&state)?;
+    let conn = app_state
+        .get_metadata_db_connection()
+        .map_err(|e: anyhow::Error| KashshafError::Database(e.to_string()))?;
+    let json = serde_json::to_string(&ids).map_err(|e| KashshafError::Database(e.to_string()))?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, citation_json, paginated, corpus, original_id FROM books
+             WHERE id IN (SELECT value FROM json_each(?1)) ORDER BY id",
+        )
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+    let rows = stmt
+        .query_map([json], |row| {
+            Ok(BookExportFields {
+                id: row.get(0)?,
+                citation_json: row.get(1)?,
+                paginated: row.get::<_, Option<i64>>(2)?.map(|v| v != 0),
+                corpus: row.get(3)?,
+                original_id: row.get(4)?,
+            })
+        })
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e: rusqlite::Error| KashshafError::Database(e.to_string()))?;
+    Ok(rows)
 }
 
 #[tauri::command]
