@@ -30,6 +30,11 @@ import type { PageBundle, PageBundleRequest } from './index';
 // VITE_API_URL at build time points a web build at another server, as the
 // rate-limit test does with a local API.
 const API_BASE_URL = getApiBaseUrl();
+/** Where publish_corpus.py puts the catalogue, beside stats.json. */
+export const CDN_URL = 'https://cdn.kashshaf.com';
+export function catalogUrl(corpusVersion: string): string {
+  return `${CDN_URL}/catalog/${corpusVersion}/books.json`;
+}
 
 // Proclitics for clitic expansion in surface mode
 const PROCLITICS = ['و', 'ف', 'ب', 'ل', 'ك'];
@@ -488,8 +493,31 @@ export class OnlineAPI implements SearchAPI {
     });
   }
 
+  /**
+   * The light catalogue. First the published file on the CDN,
+   * `catalog/<corpus_version>/books.json`, immutable and so fetched once per
+   * corpus by a browser; the version comes from `/health`. If the file is
+   * missing for this version, or anything else goes wrong, the API's
+   * `/books` answers the same rows.
+   */
   async getAllBooks(): Promise<BookMetadata[]> {
-    return fetchAPI<BookMetadata[]>('/books');
+    const fromCdn = await this.fetchCatalogFromCdn();
+    return fromCdn ?? fetchAPI<BookMetadata[]>('/books');
+  }
+
+  private async fetchCatalogFromCdn(): Promise<BookMetadata[] | null> {
+    try {
+      const health = await fetchAPI<{ corpus_version?: string }>('/health');
+      const version = health.corpus_version;
+      if (!version || !/^[A-Za-z0-9._-]+$/.test(version)) return null;
+      const res = await fetch(catalogUrl(version), { headers: { accept: 'application/json' } });
+      if (!res.ok) return null;
+      const rows = (await res.json()) as unknown;
+      return Array.isArray(rows) ? (rows as BookMetadata[]) : null;
+    } catch (err) {
+      console.warn('catalogue from the CDN unavailable, using the API:', err);
+      return null;
+    }
   }
 
   async getBook(id: number): Promise<BookMetadata | null> {
