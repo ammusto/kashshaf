@@ -22,6 +22,7 @@ import type {
   TocNode,
 } from '../types';
 import { stripPunctuation } from '@kashshaf/shared';
+import { buildCombinedRequest } from '../utils/combinedRequest';
 
 export async function search(
   query: string,
@@ -263,23 +264,6 @@ export interface CombinedSearchQuery {
   orInputs: SearchInput[];
 }
 
-const PROCLITICS = ['و', 'ف', 'ب', 'ل', 'ك'];
-
-function expandWithClitics(query: string): string[] {
-  const sanitized = stripPunctuation(query);
-  const words = sanitized.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [sanitized];
-
-  if (words.length === 1) {
-    const word = words[0];
-    return [word, ...PROCLITICS.map(p => p + word)];
-  }
-
-  const [first, ...rest] = words;
-  const restJoined = rest.join(' ');
-  const base = words.join(' ');
-  return [base, ...PROCLITICS.map(p => `${p}${first} ${restJoined}`)];
-}
 
 export async function combinedSearch(
   combined: CombinedSearchQuery,
@@ -287,31 +271,7 @@ export async function combinedSearch(
   limit: number,
   offset: number
 ): Promise<SearchResults> {
-  const andTerms: Array<{ query: string; mode: string }> = [];
-  const orTerms: Array<{ query: string; mode: string }> = [];
-
-  for (const inp of combined.andInputs) {
-    if (inp.mode === 'surface' && inp.cliticToggle) {
-      // expandWithClitics already sanitizes
-      for (const variant of expandWithClitics(inp.query)) {
-        orTerms.push({ query: variant, mode: 'surface' });
-      }
-    } else {
-      andTerms.push({ query: stripPunctuation(inp.query), mode: inp.mode });
-    }
-  }
-
-  for (const inp of combined.orInputs) {
-    if (inp.mode === 'surface' && inp.cliticToggle) {
-      // expandWithClitics already sanitizes
-      for (const variant of expandWithClitics(inp.query)) {
-        orTerms.push({ query: variant, mode: 'surface' });
-      }
-    } else {
-      orTerms.push({ query: stripPunctuation(inp.query), mode: inp.mode });
-    }
-  }
-
+  const { and_terms: andTerms, or_terms: orTerms } = buildCombinedRequest(combined);
   return invoke('combined_search', { andTerms, orTerms, filters, limit, offset });
 }
 

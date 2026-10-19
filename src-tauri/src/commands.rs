@@ -679,8 +679,8 @@ pub async fn proximity_search(
                 return Err(KashshafError::Search("a proximity search needs terms and distances".to_string()));
             };
             kashshaf_engine::ProximityQuery::pair(
-                &SearchTerm { query: term1, mode: token_field_to_search_mode(field1.unwrap_or(TokenField::Surface)) },
-                &SearchTerm { query: term2, mode: token_field_to_search_mode(field2.unwrap_or(TokenField::Surface)) },
+                &SearchTerm { query: term1, mode: token_field_to_search_mode(field1.unwrap_or(TokenField::Surface)), clitics: false },
+                &SearchTerm { query: term2, mode: token_field_to_search_mode(field2.unwrap_or(TokenField::Surface)), clitics: false },
                 distance,
             )
         }

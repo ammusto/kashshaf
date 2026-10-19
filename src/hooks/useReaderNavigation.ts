@@ -4,6 +4,7 @@ import type { SearchResult, SearchMode } from '../types';
 import type { SearchAPI, SearchTerm } from '../api';
 import type { SearchContext } from '../types/search';
 import { useSearchTabsContext } from '../contexts/SearchTabsContext';
+import { buildCombinedRequest } from '../utils/combinedRequest';
 
 export interface UseReaderNavigationOptions {
   api: SearchAPI;
@@ -27,16 +28,10 @@ export function pageTermsOf(context: SearchContext): SearchTerm[] {
 export function getSearchTermsFromContext(context: SearchContext): SearchTerm[] | null {
   if (context.type === 'combined' && context.combinedQuery) {
     const terms: SearchTerm[] = [];
-    for (const inp of context.combinedQuery.andInputs) {
-      if (inp.query.trim()) {
-        terms.push({ query: inp.query, mode: inp.mode });
-      }
-    }
-    for (const inp of context.combinedQuery.orInputs) {
-      if (inp.query.trim()) {
-        terms.push({ query: inp.query, mode: inp.mode });
-      }
-    }
+    // The same terms the search sent, clitic flag included, so a proclitic
+    // form on the page is highlighted like the bare word.
+    const req = buildCombinedRequest(context.combinedQuery);
+    terms.push(...req.and_terms, ...req.or_terms);
     return terms.length > 0 ? terms : null;
   }
 

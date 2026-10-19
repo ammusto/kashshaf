@@ -439,6 +439,7 @@ impl BookSource for LocalSource {
                 "root" => SearchMode::Root,
                 _ => SearchMode::Surface,
             },
+            clitics: false,
         };
         let and: Vec<SearchTerm> = and_terms.iter().map(to_term).collect();
         let or: Vec<SearchTerm> = or_terms.iter().map(to_term).collect();

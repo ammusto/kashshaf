@@ -25,7 +25,7 @@ export function highlightRequestOf(context: SearchContext | null): HighlightRequ
   }
   const terms = getSearchTermsFromContext(context);
   if (!terms || terms.length === 0) return null;
-  const show = (ts: SearchTerm[]) => ts.map((t) => `${t.mode}:${t.query}`).join('|');
+  const show = (ts: SearchTerm[]) => ts.map((t) => `${t.mode}${t.clitics ? '+c' : ''}:${t.query}`).join('|');
   const pageTerms = pageTermsOf(context);
   if (pageTerms.length > 0) {
     return { key: `${context.type}|${show(terms)}|page:${show(pageTerms)}`, terms, pageTerms };

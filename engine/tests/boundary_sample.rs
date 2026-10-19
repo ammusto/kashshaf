@@ -47,7 +47,7 @@ fn surfaces(s: &Sample, key: PageKey) -> Vec<String> {
 }
 
 fn term(q: &str) -> SearchTerm {
-    SearchTerm { query: q.to_string(), mode: SearchMode::Surface }
+    SearchTerm { query: q.to_string(), mode: SearchMode::Surface, clitics: false }
 }
 
 fn one_book(id: u64) -> SearchFilters {

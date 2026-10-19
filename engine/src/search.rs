@@ -186,6 +186,14 @@ pub fn parse_wildcard_query(query: &str) -> WildcardQueryInfo {
 pub struct SearchTerm {
     pub query: String,
     pub mode: SearchMode,
+    /// Surface mode: the word, or its first word, also matches with a
+    /// proclitic (و ف ب ل ك) attached. The engine expands it, so an AND
+    /// term stays an AND term with six alternatives in its slot. Absent in
+    /// a request = false (clients before 0.8.4 expanded on their side, which
+    /// turned a toggled AND term into OR terms: two toggled AND terms became
+    /// "any form of either", ~30,000 pages for a pair that shares 13).
+    #[serde(default)]
+    pub clitics: bool,
 }
 
 /// A proximity search: up to three terms in a chain, each link with its
@@ -1516,12 +1524,32 @@ impl SearchEngine {
     }
 
     /// Resolve each word of a term to its triple-id set.
+    /// The surface forms a word stands for when the term's clitics flag is
+    /// on: itself and the five with a proclitic in front.
+    pub fn proclitic_forms(word: &str) -> Vec<String> {
+        let mut out = Vec::with_capacity(1 + crate::names::PROCLITICS.len());
+        out.push(word.to_string());
+        for p in crate::names::PROCLITICS {
+            out.push(format!("{p}{word}"));
+        }
+        out
+    }
+
     fn term_sets(&self, term: &SearchTerm) -> Sets {
         let _t = crate::probe::timer("term_sets");
         let t = self.triples();
         self.term_words(term)
             .iter()
-            .map(|w| match term.mode {
+            .enumerate()
+            .map(|(i, w)| match term.mode {
+                // Clitics on: the first word's slot is the union of its six
+                // forms, so an AND term stays one slot with alternatives.
+                SearchMode::Surface if term.clitics && i == 0 => {
+                    let mut v: Vec<u32> = Self::proclitic_forms(w).iter().flat_map(|f| t.triples_for_surface(f)).collect();
+                    v.sort_unstable();
+                    v.dedup();
+                    v
+                }
                 SearchMode::Surface => t.triples_for_surface(w),
                 // A lemma slot is the lemma's triples and the typed word's
                 // own surface triples: a lemma search always matches the
@@ -1615,6 +1643,17 @@ impl SearchEngine {
         match self.kind {
             IndexKind::ThreeField => {
                 let words = self.term_words(term);
+                if term.mode == SearchMode::Surface && term.clitics && !words.is_empty() {
+                    // One slot, six alternatives: a Should over the six forms.
+                    let mut should: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(6);
+                    for first in Self::proclitic_forms(&words[0]) {
+                        let mut ws = words.clone();
+                        ws[0] = first;
+                        let text = ws.join(" ");
+                        should.push((Occur::Should, self.text_query(self.field_for(term.mode), &ws, &text, slop)?));
+                    }
+                    return Ok(Plan { query: Box::new(BooleanQuery::new(should)), verify: None });
+                }
                 Ok(Plan {
                     query: self.text_query(self.field_for(term.mode), &words, &Self::normalize_for(term.mode, &term.query), slop)?,
                     verify: None,
@@ -1938,7 +1977,7 @@ impl SearchEngine {
     /// the positional path is refused rather than approximated.
     pub fn phrase_hits(&self, query: &str, mode: SearchMode, slop: u32, filters: &SearchFilters) -> Result<(Vec<(u64, u64, u64)>, usize)> {
         let searcher = self.reader.searcher();
-        let term = SearchTerm { query: query.to_string(), mode };
+        let term = SearchTerm { query: query.to_string(), mode, clitics: false };
         let plan = self.build_term_plan_slop(&term, slop)?;
         if plan.verify.is_some() {
             return Err(anyhow::anyhow!("phrase too wide for a slop search"));
@@ -1951,7 +1990,7 @@ impl SearchEngine {
     /// Enumerate every matching page hit for a query, unscored and unpaginated.
     pub fn collect_all_hits(&self, query: &str, mode: SearchMode, filters: &SearchFilters) -> Result<(Vec<(u64, u64, u64)>, usize)> {
         let searcher = self.reader.searcher();
-        let term = SearchTerm { query: query.to_string(), mode };
+        let term = SearchTerm { query: query.to_string(), mode, clitics: false };
         let text_query = self.build_term_query(&term)?;
         let final_query = self.with_filters(text_query, filters);
         let (triples, count_total) = searcher.search(&*final_query, &(AllDocsCollector, Count))?;
@@ -1960,7 +1999,7 @@ impl SearchEngine {
 
     pub fn search(&self, query: &str, mode: SearchMode, filters: &SearchFilters, limit: usize, offset: usize) -> Result<SearchResults> {
         let start = std::time::Instant::now();
-        let term = SearchTerm { query: query.to_string(), mode };
+        let term = SearchTerm { query: query.to_string(), mode, clitics: false };
         let mut r = self.combined_search(std::slice::from_ref(&term), &[], filters, limit, offset)?;
         r.query = query.to_string();
         r.mode = mode;
@@ -2104,7 +2143,7 @@ impl SearchEngine {
     }
 
     pub fn get_match_positions(&self, id: u64, part_index: u64, page_id: u64, query: &str, mode: SearchMode) -> Result<Vec<u32>> {
-        let term = SearchTerm { query: query.to_string(), mode };
+        let term = SearchTerm { query: query.to_string(), mode, clitics: false };
         let cap = self.config.page_highlight_cap;
         match self.kind {
             IndexKind::Compound => {
@@ -2944,7 +2983,7 @@ impl SearchEngine {
     fn name_retrieval_sets(&self, patterns: &[String]) -> Vec<Sets> {
         let mut groups: Vec<(Vec<String>, Sets)> = Vec::new();
         for p in crate::names::minimal_patterns(patterns) {
-            let term = SearchTerm { query: p.clone(), mode: SearchMode::Surface };
+            let term = SearchTerm { query: p.clone(), mode: SearchMode::Surface, clitics: false };
             let w = self.term_words(&term);
             if w.is_empty() {
                 continue;
@@ -3010,7 +3049,7 @@ impl SearchEngine {
                 }
                 IndexKind::ThreeField => {
                     for pattern in crate::names::minimal_patterns(patterns) {
-                        let term = SearchTerm { query: pattern, mode: SearchMode::Surface };
+                        let term = SearchTerm { query: pattern, mode: SearchMode::Surface, clitics: false };
                         if self.term_words(&term).is_empty() {
                             continue;
                         }
@@ -3021,7 +3060,7 @@ impl SearchEngine {
                 }
             }
             for pattern in patterns {
-                let term = SearchTerm { query: pattern.clone(), mode: SearchMode::Surface };
+                let term = SearchTerm { query: pattern.clone(), mode: SearchMode::Surface, clitics: false };
                 if self.term_words(&term).is_empty() {
                     continue;
                 }
@@ -3182,7 +3221,7 @@ impl SearchEngine {
                 let key = PageKey::new(id, part_index, page_id);
                 let sets: Vec<Sets> = patterns
                     .iter()
-                    .map(|p| self.highlight_sets(&SearchTerm { query: p.clone(), mode: SearchMode::Surface }))
+                    .map(|p| self.highlight_sets(&SearchTerm { query: p.clone(), mode: SearchMode::Surface, clitics: false }))
                     .collect();
                 let mut m = self.forward_highlights(&[key], &sets, usize::MAX)?;
                 Ok(m.remove(&key).unwrap_or_default())

@@ -26,7 +26,7 @@ const LIMIT: usize = 250;
 const RUNS: usize = 3;
 
 fn term(q: &str, mode: SearchMode) -> SearchTerm {
-    SearchTerm { query: q.to_string(), mode }
+    SearchTerm { query: q.to_string(), mode, clitics: false }
 }
 fn s(q: &str) -> SearchTerm {
     term(q, SearchMode::Surface)

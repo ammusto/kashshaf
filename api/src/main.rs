@@ -526,6 +526,8 @@ fn page_params(pairs: &[(String, String)]) -> Result<PageParams, ApiError> {
     let mut modes: Vec<SearchMode> = Vec::new();
     let mut and_queries: Vec<String> = Vec::new();
     let mut and_modes: Vec<SearchMode> = Vec::new();
+    let mut clitics: Vec<bool> = Vec::new();
+    let mut and_clitics: Vec<bool> = Vec::new();
     let mut names: Vec<String> = Vec::new();
     let bad = |what: &str, v: &str| bad_request(format!("{what}: {v:?}"));
     let mode_of = |v: &str| -> Result<SearchMode, ApiError> {
@@ -546,19 +548,26 @@ fn page_params(pairs: &[(String, String)]) -> Result<PageParams, ApiError> {
             "mode" => modes.push(mode_of(v)?),
             "and_q" => and_queries.push(v.clone()),
             "and_mode" => and_modes.push(mode_of(v)?),
+            // One per q / and_q, in order; "1" is on. Absent = off.
+            "clitics" => clitics.push(v == "1" || v == "true"),
+            "and_clitics" => and_clitics.push(v == "1" || v == "true"),
             "name" => names.push(v.clone()),
             _ => {}
         }
     }
-    let pair_up = |qs: Vec<String>, ms: &[SearchMode]| -> Vec<SearchTerm> {
+    let pair_up = |qs: Vec<String>, ms: &[SearchMode], cs: &[bool]| -> Vec<SearchTerm> {
         qs.into_iter()
             .enumerate()
             .filter(|(_, q)| !q.trim().is_empty())
-            .map(|(i, query)| SearchTerm { query, mode: ms.get(i).copied().unwrap_or(SearchMode::Lemma) })
+            .map(|(i, query)| SearchTerm {
+                query,
+                mode: ms.get(i).copied().unwrap_or(SearchMode::Lemma),
+                clitics: cs.get(i).copied().unwrap_or(false),
+            })
             .collect()
     };
-    let terms = pair_up(queries, &modes);
-    let and_terms = pair_up(and_queries, &and_modes);
+    let terms = pair_up(queries, &modes, &clitics);
+    let and_terms = pair_up(and_queries, &and_modes, &and_clitics);
     Ok(PageParams {
         id: id.ok_or_else(|| bad_request("id is required"))?,
         part_index,
@@ -1230,7 +1239,7 @@ mod proximity_request_tests {
     use super::*;
 
     fn term(q: &str) -> SearchTerm {
-        SearchTerm { query: q.to_string(), mode: SearchMode::Surface }
+        SearchTerm { query: q.to_string(), mode: SearchMode::Surface, clitics: false }
     }
 
     #[test]
@@ -1286,6 +1295,6 @@ mod proximity_request_tests {
         let p = page_params(&pairs).unwrap();
         assert_eq!(p.terms.len(), 2);
         assert_eq!(p.terms[1].mode, SearchMode::Root);
-        assert_eq!(p.and_terms, vec![SearchTerm { query: "x".into(), mode: SearchMode::Lemma }]);
+        assert_eq!(p.and_terms, vec![SearchTerm { query: "x".into(), mode: SearchMode::Lemma, clitics: false }]);
     }
 }

@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     let mut engine = SearchEngine::open_with_corpus(&dir.join("tantivy_index"), Some(&db), config)?;
     engine.set_token_cache(Arc::new(TokenCache::new(db, 100_000)?));
     println!("boundary index: {}", engine.has_boundary_index());
-    let term = |q: &str| SearchTerm { query: q.to_string(), mode: SearchMode::Surface };
+    let term = |q: &str| SearchTerm { query: q.to_string(), mode: SearchMode::Surface, clitics: false };
     let filters = SearchFilters::default();
 
     let t = Instant::now();

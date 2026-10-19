@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     engine.set_token_cache(Arc::new(TokenCache::new(db, 100_000)?));
     println!("boundary index: {}", engine.has_boundary_index());
     let filters = SearchFilters::default();
-    let term = |q: &str, mode: SearchMode| SearchTerm { query: q.to_string(), mode };
+    let term = |q: &str, mode: SearchMode| SearchTerm { query: q.to_string(), mode, clitics: false };
 
     for round in 1..=rounds {
         // Every round is a cold walk, as the smoke's is.

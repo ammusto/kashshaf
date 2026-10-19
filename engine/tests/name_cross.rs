@@ -46,7 +46,7 @@ fn plain(w: &str) -> bool {
 }
 
 fn term(q: &str) -> SearchTerm {
-    SearchTerm { query: q.to_string(), mode: SearchMode::Surface }
+    SearchTerm { query: q.to_string(), mode: SearchMode::Surface, clitics: false }
 }
 
 fn one_book(id: u64) -> SearchFilters {

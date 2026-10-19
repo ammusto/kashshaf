@@ -51,7 +51,7 @@ fn open() -> Option<Sample> {
 }
 
 fn surface(q: &str) -> SearchTerm {
-    SearchTerm { query: q.to_string(), mode: SearchMode::Surface }
+    SearchTerm { query: q.to_string(), mode: SearchMode::Surface, clitics: false }
 }
 
 fn plain(w: &str) -> bool {

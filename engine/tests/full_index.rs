@@ -30,8 +30,8 @@ fn inline_allowance_settles_the_first_page() {
         eprintln!("KASHSHAF_FULL_DIR not set: skipped");
         return;
     };
-    let t1 = SearchTerm { query: "الله".into(), mode: SearchMode::Surface };
-    let t2 = SearchTerm { query: "عرف".into(), mode: SearchMode::Root };
+    let t1 = SearchTerm { query: "الله".into(), mode: SearchMode::Surface, clitics: false };
+    let t2 = SearchTerm { query: "عرف".into(), mode: SearchMode::Root, clitics: false };
     let filters = SearchFilters::default();
     // Warm the postings once (cold-cache disk reads are not the subject).
     let _ = engine.proximity_search(&t1, &t2, 10, &filters, 250, 0).unwrap();

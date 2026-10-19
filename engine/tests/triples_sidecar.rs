@@ -316,8 +316,8 @@ fn searches_return_the_same_hits_either_way() {
         assert_eq!(keys_of(&a), keys_of(&b), "wildcard {:?}: rows or highlights", query);
         compared += 1;
     }
-    let t1 = SearchTerm { query: "الله".into(), mode: SearchMode::Surface };
-    let t2 = SearchTerm { query: "قال".into(), mode: SearchMode::Lemma };
+    let t1 = SearchTerm { query: "الله".into(), mode: SearchMode::Surface, clitics: false };
+    let t2 = SearchTerm { query: "قال".into(), mode: SearchMode::Lemma, clitics: false };
     let a = sql.proximity_search(&t1, &t2, 10, &f, 50, 0).expect("sql proximity");
     let b = side.proximity_search(&t1, &t2, 10, &f, 50, 0).expect("sidecar proximity");
     assert_eq!(a.total_hits, b.total_hits, "proximity total_hits");

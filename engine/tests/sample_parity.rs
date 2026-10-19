@@ -141,7 +141,7 @@ fn pages_are_identical_from_cache_and_fresh_walk() {
     let filters = SearchFilters::default();
     let limit = 250;
     // Wildcard phrase with a wide slot (hybrid walk) and a proximity walk.
-    let prox = (SearchTerm { query: "الله".into(), mode: SearchMode::Surface }, SearchTerm { query: "قال".into(), mode: SearchMode::Lemma });
+    let prox = (SearchTerm { query: "الله".into(), mode: SearchMode::Surface, clitics: false }, SearchTerm { query: "قال".into(), mode: SearchMode::Lemma, clitics: false });
     let run_wc = |offset: usize| s.engine.wildcard_search("ابن ال*", &filters, limit, offset).unwrap();
     let run_px = |offset: usize| s.engine.proximity_search(&prox.0, &prox.1, 10, &filters, limit, offset).unwrap();
 
@@ -179,8 +179,8 @@ fn exact_and_capped_share_the_same_prefix() {
         return;
     };
     let filters = SearchFilters::default();
-    let t1 = SearchTerm { query: "الله".into(), mode: SearchMode::Surface };
-    let t2 = SearchTerm { query: "قال".into(), mode: SearchMode::Lemma };
+    let t1 = SearchTerm { query: "الله".into(), mode: SearchMode::Surface, clitics: false };
+    let t2 = SearchTerm { query: "قال".into(), mode: SearchMode::Lemma, clitics: false };
 
     s.engine.set_exact_counts(true);
     let exact1 = s.engine.proximity_search(&t1, &t2, 10, &filters, 250, 0).unwrap();

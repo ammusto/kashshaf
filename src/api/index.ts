@@ -59,6 +59,8 @@ export interface PageBundle {
 export interface SearchTerm {
   query: string;
   mode: SearchMode;
+  /** Surface mode: the first word also matches with a proclitic (و ف ب ل ك); the engine expands it inside this term's slot. */
+  clitics?: boolean;
 }
 
 /**

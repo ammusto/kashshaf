@@ -18,7 +18,7 @@ fn open() -> Option<SearchEngine> {
 }
 
 fn t(q: &str, mode: SearchMode) -> SearchTerm {
-    SearchTerm { query: q.to_string(), mode }
+    SearchTerm { query: q.to_string(), mode, clitics: false }
 }
 
 fn shape(r: &SearchResults) -> (usize, Vec<(u64, u64, u64, bool, Vec<u32>)>) {

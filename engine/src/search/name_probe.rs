@@ -98,7 +98,7 @@ impl SearchEngine {
 
     /// The slot sets of each pattern, one list per pattern.
     pub fn probe_sets(&self, patterns: &[String]) -> Vec<Sets> {
-        patterns.iter().map(|p| self.term_sets(&SearchTerm { query: p.clone(), mode: SearchMode::Surface })).collect()
+        patterns.iter().map(|p| self.term_sets(&SearchTerm { query: p.clone(), mode: SearchMode::Surface, clitics: false })).collect()
     }
 
     /// (a) One list per displayed pattern: the expansions of a displayed
@@ -111,7 +111,7 @@ impl SearchEngine {
             if w.is_empty() {
                 continue;
             }
-            let sets = self.term_sets(&SearchTerm { query: p.clone(), mode: SearchMode::Surface });
+            let sets = self.term_sets(&SearchTerm { query: p.clone(), mode: SearchMode::Surface, clitics: false });
             let tail: Vec<String> = w[1..].to_vec();
             if let Some((_, g)) = groups.iter_mut().find(|(t, g)| *t == tail && g.len() == sets.len()) {
                 g[0].extend(sets[0].iter().copied());
@@ -164,7 +164,7 @@ impl SearchEngine {
         let searcher = self.reader.searcher();
         let mut out = Vec::with_capacity(patterns.len());
         for p in patterns {
-            let term = SearchTerm { query: p.clone(), mode: SearchMode::Surface };
+            let term = SearchTerm { query: p.clone(), mode: SearchMode::Surface, clitics: false };
             let plan = self.build_term_plan(&term)?;
             let t = Instant::now();
             let n = searcher.search(&*plan.query, &Count)?;

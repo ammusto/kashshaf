@@ -22,6 +22,7 @@ import type {
   TocNode,
 } from '../types';
 import { stripPunctuation } from '@kashshaf/shared';
+import { buildCombinedRequest } from '../utils/combinedRequest';
 import { getApiBaseUrl } from '../utils/platform';
 import { noteRateLimited, retryAfterMs, waitIfThrottled } from './rateLimit';
 import { expandDisplayPatterns } from '../utils/namePatterns';
@@ -34,25 +35,6 @@ const API_BASE_URL = getApiBaseUrl();
 export const CDN_URL = 'https://cdn.kashshaf.com';
 export function catalogUrl(corpusVersion: string): string {
   return `${CDN_URL}/catalog/${corpusVersion}/books.json`;
-}
-
-// Proclitics for clitic expansion in surface mode
-const PROCLITICS = ['و', 'ف', 'ب', 'ل', 'ك'];
-
-function expandWithClitics(query: string): string[] {
-  const sanitized = stripPunctuation(query);
-  const words = sanitized.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [sanitized];
-
-  if (words.length === 1) {
-    const word = words[0];
-    return [word, ...PROCLITICS.map(p => p + word)];
-  }
-
-  const [first, ...rest] = words;
-  const restJoined = rest.join(' ');
-  const base = words.join(' ');
-  return [base, ...PROCLITICS.map(p => `${p}${first} ${restJoined}`)];
 }
 
 /** How many times a rate-limited request is sent again before giving up. */
@@ -147,31 +129,7 @@ export class OnlineAPI implements SearchAPI {
     limit: number,
     offset: number
   ): Promise<SearchResults> {
-    // Process inputs similar to the offline implementation
-    const andTerms: Array<{ query: string; mode: string }> = [];
-    const orTerms: Array<{ query: string; mode: string }> = [];
-
-    for (const inp of combined.andInputs) {
-      if (inp.mode === 'surface' && inp.cliticToggle) {
-        // expandWithClitics already sanitizes
-        for (const variant of expandWithClitics(inp.query)) {
-          orTerms.push({ query: variant, mode: 'surface' });
-        }
-      } else {
-        andTerms.push({ query: stripPunctuation(inp.query), mode: inp.mode });
-      }
-    }
-
-    for (const inp of combined.orInputs) {
-      if (inp.mode === 'surface' && inp.cliticToggle) {
-        // expandWithClitics already sanitizes
-        for (const variant of expandWithClitics(inp.query)) {
-          orTerms.push({ query: variant, mode: 'surface' });
-        }
-      } else {
-        orTerms.push({ query: stripPunctuation(inp.query), mode: inp.mode });
-      }
-    }
+    const { and_terms: andTerms, or_terms: orTerms } = buildCombinedRequest(combined);
 
     return fetchAPI<SearchResults>('/search/combined', {
       method: 'POST',
@@ -332,10 +290,12 @@ export class OnlineAPI implements SearchAPI {
     for (const t of request.terms ?? []) {
       params.append('q', t.query);
       params.append('mode', t.mode);
+      params.append('clitics', t.clitics ? '1' : '0');
     }
     for (const t of request.pageTerms ?? []) {
       params.append('and_q', t.query);
       params.append('and_mode', t.mode);
+      params.append('and_clitics', t.clitics ? '1' : '0');
     }
     for (const n of request.namePatterns ?? []) params.append('name', n);
 
