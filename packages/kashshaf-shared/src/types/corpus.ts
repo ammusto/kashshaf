@@ -7,7 +7,7 @@ import type { SecondarySpan } from '../utils/crossPage';
  * `BookMetadata` from `metadata.db`, and `CorpusStatus`/`DownloadProgress`
  * from `kashshaf-common`. Changing one without the other breaks the bridge in
  * whichever app was not updated, so they live in one place
- * (dev-docs/KASHSHAF_LAB_SPEC.md §2.2).
+ * (kashshaf-lab/dev-docs/KASHSHAF_LAB_SPEC.md §2.2).
  */
 
 // ---------------------------------------------------------------- tokens ---

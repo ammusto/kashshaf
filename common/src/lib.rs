@@ -1,8 +1,8 @@
 //! Code shared by the Kashshaf desktop app (`src-tauri`) and Kashshaf Lab
-//! (`lab/src-tauri`): where the data lives, what the corpus manifests mean,
+//! (the `kashshaf-lab` repository, beside this one): where the data lives, what the corpus manifests mean,
 //! how the corpus is downloaded, and how a settings database is opened.
 //!
-//! See `dev-docs/KASHSHAF_LAB_SPEC.md` §2.2. Nothing here knows about Tauri,
+//! See `kashshaf-lab/dev-docs/KASHSHAF_LAB_SPEC.md` §2.2. Nothing here knows about Tauri,
 //! so both backends and the tests can use it directly.
 
 pub mod data_dir;

@@ -80,7 +80,7 @@ of 30. The two limiters' 429 bodies differ (`retry in 0 s` from the app,
 
 ## `/book/{id}/tokens` is exempt too, and carries its own caps
 
-The bulk token fetch for Kashshaf Lab (`dev-docs/KASHSHAF_LAB_SPEC.md` §5.1)
+The bulk token fetch for Kashshaf Lab (its spec, `kashshaf-lab/dev-docs/KASHSHAF_LAB_SPEC.md` §5.1)
 sends a whole book as one zstd-compressed NDJSON body. One legitimate call
 would burn most of a client's burst of 30, so it bypasses the per-request
 limiter at both layers the same way `/health` does:

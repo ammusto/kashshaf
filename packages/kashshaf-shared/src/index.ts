@@ -1,6 +1,7 @@
 /**
  * `@kashshaf/shared` — code used by both the Kashshaf and the Kashshaf Lab
- * frontends (dev-docs/KASHSHAF_LAB_SPEC.md §2.2).
+ * frontends (Lab lives in the sibling `kashshaf-lab` repository and resolves this
+ * package by path; its spec is kashshaf-lab/dev-docs/KASHSHAF_LAB_SPEC.md §2.2).
  *
  * Resolved by a path alias in each app's `vite.config.ts` / `vitest.config.ts`
  * / `tsconfig.json`; there is no build step and no publish. Anything added

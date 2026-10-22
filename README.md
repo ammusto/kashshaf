@@ -47,7 +47,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-The workspace also contains `api/` (the server), `engine/` (shared search), and `lab/` (Kashshaf Lab, in development).
+The workspace also contains `api/` (the server), `engine/` (shared search) and `common/` (data directory, manifests, download). Kashshaf Lab, which builds on the same crates, lives in its own repository, `kashshaf-lab`.
 
 ## Corpus
 
