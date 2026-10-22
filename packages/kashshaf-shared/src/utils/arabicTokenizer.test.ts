@@ -4,7 +4,7 @@ import { buildCharToTokenMap, getTokenCount, stripHtml } from './arabicTokenizer
 /**
  * The alignment contract (Lab spec §3.3): token `idx` as the pipeline and the
  * backends report it must equal the index this tokenizer produces for the same
- * page body. `lab/src-tauri/src/analysis/align.rs` is a port of the counting
+ * page body. `kashshaf-lab/src-tauri/src/analysis/align.rs` is a port of the counting
  * rules below and `verify_alignment` checks real pages against it; these cases
  * are the shared fixtures, so a change on either side fails on both.
  */
