@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.8.5] — unreleased
+## [0.8.5] — 2026-10-22
 
-**Fixed.** "Ignore clitics" on a Boolean AND term turned it into OR terms, so two toggled AND terms matched any form of either word (tens of thousands of pages instead of a dozen). The engine now expands the clitic forms inside the term's own slot, and the proclitic forms are highlighted in the reader too.
+**Fixed.** "Ignore clitics" on a Boolean AND term turned it into OR terms
 
 ## [0.8.4] — 2026-10-7
 

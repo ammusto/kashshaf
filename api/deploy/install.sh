@@ -98,6 +98,6 @@ fi
 
 echo "== done"
 echo "   data dir: /opt/kashshaf/data -> data-<version>/  (corpus.db, metadata.db, triples.bin, tantivy_index/)"
-echo "             e.g. rclone copy r2:<bucket>/corpus/4.0.0/ /opt/kashshaf/data-4.0.0/ && ln -sfn data-4.0.0 /opt/kashshaf/data"
+echo "             e.g. rclone copy r2:kashshaf-data/corpus/4.0.0/ /opt/kashshaf/data-4.0.0/ && ln -sfn data-4.0.0 /opt/kashshaf/data"
 echo "   unit:     systemctl status kashshaf-api"
 echo "   deploy:   Actions -> Release -> run workflow (dry_run=false) or only_api=true for a redeploy"

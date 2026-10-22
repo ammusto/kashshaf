@@ -178,8 +178,8 @@ curl -s http://127.0.0.1:3000/health | jq .version
 
 ```
 sudo bash api/deploy/install.sh --with-nginx --with-certbot
-sudo -u kashshaf rclone copy r2:<bucket>/corpus/4.0.0/ /opt/kashshaf/data-4.0.0/   # or scp
-sudo ln -sfn data-4.0.0 /opt/kashshaf/data
+sudo -u kashshaf rclone copy r2:kashshaf-data/corpus/4.0.0/ /opt/kashshaf/data-4.0.0/   # or scp
+sudo ln -sfn /opt/kashshaf/data-4.0.0 /opt/kashshaf/data
 ```
 
 Then run the release workflow (or `only_api: true` for a tag that already exists).
@@ -187,28 +187,39 @@ Then run the release workflow (or `only_api: true` for a tag that already exists
 ## Corpus layout: `/opt/kashshaf/data` is a symlink
 
 `KASHSHAF_DATA_DIR=/opt/kashshaf/data` never points at a real directory. Each
-corpus version lives in its own directory beside it and `data` is a relative
-symlink to the live one:
+corpus version lives in its own directory beside it and `data` is a symlink to
+the live one (absolute on the live box since 4.3.0; relative works too):
 
 ```
 /opt/kashshaf/
 ├── api/…
-├── data -> data-4.0.0/
-├── data-4.0.0/   corpus.db  metadata.db  triples.bin  tantivy_index/
-└── data-3.0.0/   (previous, kept for rollback)
+├── data -> /opt/kashshaf/data-4.4.0
+├── data-4.4.0/   corpus.db  metadata.db  toc.db  triples.bin  *_freq.bin  tantivy_index/  boundary_index/
+└── data-4.3.0/   (previous, kept for rollback)
 ```
 
 Swapping corpora is therefore the same shape as a binary deploy: unpack the
 new version beside the old one, repoint the link, restart, and the old
-version stays for rollback.
+version stays for rollback. Do it only after `publish_corpus.py` has finished
+(kashshaf-data, BUILD_CORPUS.md §5): it writes the root manifest last, so that
+manifest naming the new version is the signal the files are all in R2. With
+`V` the new version and `OLD` the live one:
 
 ```
-sudo -u kashshaf rclone copy --checksum r2:<bucket>/corpus/4.1.0/ /opt/kashshaf/data-4.1.0/
-sudo ln -sfn data-4.1.0 /opt/kashshaf/data      # atomic: replaces the link, not the directory
+sudo -u kashshaf rclone cat r2:kashshaf-data/corpus_manifest.json | jq -r .corpus_version   # V
+sudo -u kashshaf rclone copy --checksum --progress r2:kashshaf-data/corpus/V/ /opt/kashshaf/data-V/
+sudo -u kashshaf rclone check r2:kashshaf-data/corpus/V/ /opt/kashshaf/data-V/ --one-way
+sudo ln -sfn /opt/kashshaf/data-V /opt/kashshaf/data      # atomic: replaces the link, not the directory
 sudo systemctl restart kashshaf-api
-curl -s http://127.0.0.1:3000/health | jq '{version, corpus_version, warm_cache}'
-# rollback: sudo ln -sfn data-4.0.0 /opt/kashshaf/data && sudo systemctl restart kashshaf-api
+curl -s http://127.0.0.1:3000/health | jq '{version, corpus_version, warm_cache}'   # until warm_cache = complete
+# rollback: sudo ln -sfn /opt/kashshaf/data-OLD /opt/kashshaf/data && sudo systemctl restart kashshaf-api
 ```
+
+`warm_cache` takes several minutes after a corpus swap, as the index, the
+boundary index and corpus.db are read once. The web app follows on its own: it
+reads `corpus_version` from `/health` and fetches `catalog/V/books.json` from
+the CDN. Delete corpus directories older than the rollback one when the new
+version has run cleanly; each is about 11 GB.
 
 **Why the unit has no `ReadOnlyPaths=/opt/kashshaf/data`.** systemd's
 `ReadOnlyPaths=` bind-mounts the given path into the service's mount
