@@ -2,7 +2,7 @@
 
 ## [0.8.6] — unreleased
 
-**Fixed.** The reader keeps every line break in a text. A break next to punctuation or a number was lost, which ran verse and lists together as prose: almost half the corpus's line breaks. Headings are set in the logo's dark green, so they read as headings without a line being added or taken away.
+**Fixed.** The reader keeps every line break in a text. A break next to punctuation or a number was lost, which ran verse and lists together as prose: almost half the corpus's line breaks. Headings are set in the logo's dark green. A blank line in the text is drawn as a single break.
 
 ## [0.8.5] — 2026-10-22
 

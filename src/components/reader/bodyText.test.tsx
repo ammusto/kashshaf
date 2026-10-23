@@ -100,6 +100,15 @@ describe('toRuns and groupRuns', () => {
     expect('text' in rest && rest.text).toBe('نص');
   });
 
+  it('draws a blank line before a heading as one break (a data residue, fixed in the corpus later)', () => {
+    const plain = 'نص.\n\nباب الزهد\nنص';
+    const map = buildCharToTokenMap(plain);
+    const groups = groupRuns(toRuns(plain, map, new Set(), new Set(), [{ start: 5, end: 14, id: 1, parent: 0 }]));
+    expect(groups.map((g) => ('runs' in g ? '<h>' : g.text))).toEqual(['نص', '.\n', '<h>', '\n', 'نص']);
+    // The map underneath is still that of the untouched string.
+    expect(getTokenCount(map)).toBe(4);
+  });
+
   it('without headings the runs are what they always were', () => {
     const runs = toRuns('ab cd', [0, 0, null, 1, 1], new Set([0, 1]), new Set([0, 1, 3, 4]));
     expect(runs).toEqual([

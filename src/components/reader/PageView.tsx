@@ -93,13 +93,16 @@ export function toRuns(
 /**
  * The runs grouped for rendering: consecutive runs of one heading become one
  * span, so the heading can be styled and found as a whole; everything else
- * stays as it is. Nothing is added or dropped from the display text.
+ * stays as it is, except that a run of two or more newlines is drawn as one.
+ * The corpus (4.4.0) puts a blank line before one heading in six, a layout
+ * residue to be fixed in the data; until then it is not drawn. The token map
+ * was built from the untouched string, so no index moves.
  */
 export function groupRuns(runs: Run[]): Array<{ heading: number; runs: Run[] } | Run> {
   const out: Array<{ heading: number; runs: Run[] } | Run> = [];
   for (const run of runs) {
     if (run.heading === undefined) {
-      out.push(run);
+      out.push(run.token === null && run.text.includes('\n\n') ? { ...run, text: run.text.replace(/\n{2,}/g, '\n') } : run);
       continue;
     }
     const last = out[out.length - 1];
