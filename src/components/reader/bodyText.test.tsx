@@ -55,17 +55,25 @@ describe('line breaks in the reader', () => {
     expect(new Set(indices).size).toBe(getTokenCount(buildCharToTokenMap(stripHtml(body))));
   });
 
-  it('draws a heading flush against the prose as its own block, with its words still clickable', () => {
+  it('draws a heading in its own colour, inline, with its words still clickable', () => {
     const body = '<title id=3 parent=0>باب الزهد</title>حدثنا أبو بكر';
     const { container } = mount(body, [0, 1, 2, 3].map((i) => tok(i, 'x')));
     const heading = container.querySelector('[data-heading="3"]') as HTMLElement;
     expect(heading).not.toBeNull();
-    expect(heading.className).toContain('block');
+    expect(heading.className).toBe('text-app-heading');
     expect(heading.textContent).toBe('باب الزهد');
     expect(heading.querySelectorAll('[data-token]')).toHaveLength(2);
     // The heading's last word and the prose's first word are one token in the
-    // contract (no separator is inserted); the block boundary is visual only.
+    // contract (no separator is inserted); the colour boundary is visual only.
     expect(container.querySelector('[data-token="1"]')?.textContent).toBe('الزهد');
+  });
+
+  it('a marker before a heading stays beside it: no break is added on either side', () => {
+    const body = '*<title id=3 parent=0>باب الزهد</title>\nحدثنا';
+    const { getByTestId } = mount(body, [0, 1, 2].map((i) => tok(i, 'x')));
+    // Exactly the stripped body: the star, the heading, then the one newline
+    // the corpus wrote, then the prose.
+    expect(getByTestId('page-text').textContent).toBe('*باب الزهد\nحدثنا');
   });
 });
 
@@ -81,13 +89,14 @@ describe('toRuns and groupRuns', () => {
     ]);
   });
 
-  it('groups a heading into one block and drops the one newline after it', () => {
+  it('groups a heading into one span and keeps the newline after it', () => {
     const plain = 'باب الزهد\nنص';
     const map = buildCharToTokenMap(plain);
     const groups = groupRuns(toRuns(plain, map, new Set(), new Set(), [{ start: 0, end: 9, id: 1, parent: 0 }]));
-    expect(groups).toHaveLength(2);
-    const [block, rest] = groups;
-    expect('runs' in block && block.runs.map((r) => r.text)).toEqual(['باب', ' ', 'الزهد']);
+    expect(groups).toHaveLength(3);
+    const [heading, gap, rest] = groups;
+    expect('runs' in heading && heading.runs.map((r) => r.text)).toEqual(['باب', ' ', 'الزهد']);
+    expect('text' in gap && gap.text).toBe('\n');
     expect('text' in rest && rest.text).toBe('نص');
   });
 

@@ -46,6 +46,8 @@
   --color-app-text-primary: #1A1A1A;
   --color-app-text-secondary: #666666;
   --color-app-text-tertiary: #999999;
+  /* Headings in the reader: the logo's dark green. */
+  --color-app-heading: #1F4A2B;
   --color-app-accent: #2C5F8D;
   --color-app-accent-hover: #1E4A6F;
   --color-app-accent-light: #E8F1F8;

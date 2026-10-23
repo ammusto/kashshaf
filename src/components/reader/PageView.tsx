@@ -12,10 +12,11 @@ import { readBody, buildCharToTokenMap, getHighlightRanges, type HeadingRange } 
  *
  * The text is rendered `white-space: pre-line`: the body's newlines (a
  * median of six a page in corpus 4.4.0, verse and lists above all) are line
- * breaks, and runs of spaces still collapse. A `<title>` heading is drawn as
- * a block in its own style, so a heading flush against the next word (as
- * the corpus writes them) gets its own line. Neither changes the string the
- * token map is built from.
+ * breaks, and runs of spaces still collapse. A `<title>` heading is drawn
+ * inline in its own colour and nothing else: the corpus puts a newline on
+ * either side of four headings in five, and where it does not (`*<title>`,
+ * a heading inside a sentence) the text must read as written. Neither
+ * changes the string the token map is built from.
  */
 
 interface PageViewProps {
@@ -91,28 +92,19 @@ export function toRuns(
 
 /**
  * The runs grouped for rendering: consecutive runs of one heading become one
- * block, everything else stays inline. A newline right after a heading is
- * dropped from the display (not from the map): the block already ends the
- * line, and keeping it would draw a blank one.
+ * span, so the heading can be styled and found as a whole; everything else
+ * stays as it is. Nothing is added or dropped from the display text.
  */
 export function groupRuns(runs: Run[]): Array<{ heading: number; runs: Run[] } | Run> {
   const out: Array<{ heading: number; runs: Run[] } | Run> = [];
-  let afterHeading = false;
   for (const run of runs) {
-    if (run.heading !== undefined) {
-      const last = out[out.length - 1];
-      if (last && 'runs' in last && last.heading === run.heading) last.runs.push(run);
-      else out.push({ heading: run.heading, runs: [run] });
-      afterHeading = true;
+    if (run.heading === undefined) {
+      out.push(run);
       continue;
     }
-    if (afterHeading && run.token === null && run.text.startsWith('\n')) {
-      const rest = run.text.slice(1);
-      if (rest) out.push({ ...run, text: rest });
-    } else {
-      out.push(run);
-    }
-    afterHeading = false;
+    const last = out[out.length - 1];
+    if (last && 'runs' in last && last.heading === run.heading) last.runs.push(run);
+    else out.push({ heading: run.heading, runs: [run] });
   }
   return out;
 }
@@ -246,7 +238,7 @@ export function PageView({
           >
             {groups.map((g, i) =>
               'runs' in g ? (
-                <span key={i} data-heading={g.heading} className="block font-bold text-[1.08em] mt-2 mb-1 text-app-text-secondary">
+                <span key={i} data-heading={g.heading} className="text-app-heading">
                   {g.runs.map((run, j) => renderRun(run, j, tokenByIdx, onWordClick))}
                 </span>
               ) : (
