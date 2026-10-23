@@ -2,7 +2,7 @@
 
 ## [0.8.6] — unreleased
 
-**Fixed.** The reader keeps every line break in a text. A break next to punctuation or a number was lost, which ran verse and lists together as prose: almost half the corpus's line breaks. Headings now stand on their own line, in bold, instead of running into the words after them.
+**Fixed.** The reader keeps every line break in a text. A break next to punctuation or a number was lost, which ran verse and lists together as prose: almost half the corpus's line breaks. Headings now stand on their own line, in bold grey, instead of running into the words after them.
 
 ## [0.8.5] — 2026-10-22
 

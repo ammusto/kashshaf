@@ -246,7 +246,7 @@ export function PageView({
           >
             {groups.map((g, i) =>
               'runs' in g ? (
-                <span key={i} data-heading={g.heading} className="block font-bold text-[1.08em] mt-2 mb-1">
+                <span key={i} data-heading={g.heading} className="block font-bold text-[1.08em] mt-2 mb-1 text-app-text-secondary">
                   {g.runs.map((run, j) => renderRun(run, j, tokenByIdx, onWordClick))}
                 </span>
               ) : (
