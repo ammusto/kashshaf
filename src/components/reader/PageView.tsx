@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { Token } from '../../types';
-import { stripHtml, buildCharToTokenMap, getHighlightRanges } from '@kashshaf/shared';
+import { readBody, buildCharToTokenMap, getHighlightRanges, type HeadingRange } from '@kashshaf/shared';
 
 /**
  * One page of the continuous reader.
@@ -9,6 +9,13 @@ import { stripHtml, buildCharToTokenMap, getHighlightRanges } from '@kashshaf/sh
  * alignment contract (Lab spec §3.3) and the reason the stack is a stack of
  * independent pages rather than one concatenated string: nothing here can
  * move a token index, because no page can see another page's text.
+ *
+ * The text is rendered `white-space: pre-line`: the body's newlines (a
+ * median of six a page in corpus 4.4.0, verse and lists above all) are line
+ * breaks, and runs of spaces still collapse. A `<title>` heading is drawn as
+ * a block in its own style, so a heading flush against the next word (as
+ * the corpus writes them) gets its own line. Neither changes the string the
+ * token map is built from.
  */
 
 interface PageViewProps {
@@ -41,31 +48,98 @@ interface Run {
   highlighted: boolean;
   /** A page-level term of a proximity search (and not part of the match). */
   secondary: boolean;
+  /** The id of the `<title>` heading this run is part of, when it is. */
+  heading?: number;
 }
 
-/** Split the display text into runs of constant token index and highlight state. */
+/**
+ * Split the display text into runs of constant token index, highlight state
+ * and heading. Passing no headings gives exactly the old behaviour.
+ */
 export function toRuns(
   plain: string,
   charToToken: (number | null)[],
   highlighted: Set<number>,
-  secondary: Set<number> = new Set()
+  secondary: Set<number> = new Set(),
+  headings: HeadingRange[] = []
 ): Run[] {
   const runs: Run[] = [];
   if (plain.length === 0) return runs;
   const state = (i: number) => (highlighted.has(i) ? 1 : secondary.has(i) ? 2 : 0);
+  // A heading id per character, so a boundary is a change like any other.
+  const headingAtChar: (number | undefined)[] = new Array(plain.length);
+  for (const h of headings) {
+    for (let i = h.start; i < h.end && i < plain.length; i++) headingAtChar[i] = h.id;
+  }
   let start = 0;
   for (let i = 1; i <= plain.length; i++) {
     const boundary =
       i === plain.length ||
       charToToken[i] !== charToToken[i - 1] ||
-      state(i) !== state(i - 1);
+      state(i) !== state(i - 1) ||
+      headingAtChar[i] !== headingAtChar[i - 1];
     if (boundary) {
       const s = state(start);
-      runs.push({ text: plain.slice(start, i), token: charToToken[start], highlighted: s === 1, secondary: s === 2 });
+      const run: Run = { text: plain.slice(start, i), token: charToToken[start], highlighted: s === 1, secondary: s === 2 };
+      if (headingAtChar[start] !== undefined) run.heading = headingAtChar[start];
+      runs.push(run);
       start = i;
     }
   }
   return runs;
+}
+
+/**
+ * The runs grouped for rendering: consecutive runs of one heading become one
+ * block, everything else stays inline. A newline right after a heading is
+ * dropped from the display (not from the map): the block already ends the
+ * line, and keeping it would draw a blank one.
+ */
+export function groupRuns(runs: Run[]): Array<{ heading: number; runs: Run[] } | Run> {
+  const out: Array<{ heading: number; runs: Run[] } | Run> = [];
+  let afterHeading = false;
+  for (const run of runs) {
+    if (run.heading !== undefined) {
+      const last = out[out.length - 1];
+      if (last && 'runs' in last && last.heading === run.heading) last.runs.push(run);
+      else out.push({ heading: run.heading, runs: [run] });
+      afterHeading = true;
+      continue;
+    }
+    if (afterHeading && run.token === null && run.text.startsWith('\n')) {
+      const rest = run.text.slice(1);
+      if (rest) out.push({ ...run, text: rest });
+    } else {
+      out.push(run);
+    }
+    afterHeading = false;
+  }
+  return out;
+}
+
+function renderRun(
+  run: Run,
+  key: number,
+  tokenByIdx: Map<number, Token>,
+  onWordClick: (e: React.MouseEvent, token: Token) => void
+) {
+  if (run.token === null) return <span key={key}>{run.text}</span>;
+  const token = tokenByIdx.get(run.token);
+  return (
+    <span
+      key={key}
+      data-token={run.token}
+      data-highlight={run.highlighted ? 'true' : run.secondary ? 'page' : undefined}
+      onClick={token ? (e) => onWordClick(e, token) : undefined}
+      // A highlight changes colour only. A weight or a border would reflow
+      // the line and change the page's height after it was measured, which
+      // moves everything below it.
+      className={`cursor-pointer rounded px-0.5 transition-colors duration-100
+        ${run.highlighted ? 'bg-red-100 text-red-700' : run.secondary ? 'bg-amber-100 text-amber-800' : 'hover:bg-app-accent-light'}`}
+    >
+      {run.text}
+    </span>
+  );
 }
 
 export function PageView({
@@ -90,8 +164,8 @@ export function PageView({
   const matchedKey = matched.join(',');
   const pageTermsKey = pageTerms ? pageTerms.join(',') : '';
 
-  const { runs, tokenByIdx } = useMemo(() => {
-    const plain = stripHtml(body);
+  const { runs, groups, tokenByIdx } = useMemo(() => {
+    const { plain, headings } = readBody(body);
     const charToToken = buildCharToTokenMap(plain);
     const matchedSet = new Set(matched);
     const highlighted = new Set<number>();
@@ -106,7 +180,8 @@ export function PageView({
     }
     const byIdx = new Map<number, Token>();
     for (const t of tokens) byIdx.set(t.idx, t);
-    return { runs: toRuns(plain, charToToken, highlighted, secondary), tokenByIdx: byIdx };
+    const runs = toRuns(plain, charToToken, highlighted, secondary, headings);
+    return { runs, groups: groupRuns(runs), tokenByIdx: byIdx };
     // The lists are read through their content keys.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [body, tokens, matchedKey, pageTermsKey]);
@@ -164,33 +239,20 @@ export function PageView({
           />
         )}
         <div className="px-10 pt-3 pb-8">
-          <div dir="rtl" className="text-xl leading-loose font-arabic text-app-text-primary select-text">
-            {runs.map((run, i) => {
-              if (run.token === null) {
-                return run.text === '\n' ? <br key={i} /> : <span key={i}>{run.text}</span>;
-              }
-              const token = tokenByIdx.get(run.token);
-              return (
-                <span
-                  key={i}
-                  data-token={run.token}
-                  data-highlight={run.highlighted ? 'true' : run.secondary ? 'page' : undefined}
-                  onClick={token ? (e) => onWordClick(e, token) : undefined}
-                  // A highlight changes colour only. A weight or a border
-                  // would reflow the line and change the page's height after
-                  // it was measured, which moves everything below it.
-                  className={`cursor-pointer rounded px-0.5 transition-colors duration-100
-                    ${run.highlighted
-                      ? 'bg-red-100 text-red-700'
-                      : run.secondary
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'hover:bg-app-accent-light'
-                    }`}
-                >
-                  {run.text}
+          <div
+            dir="rtl"
+            data-testid="page-text"
+            className="text-xl leading-loose font-arabic text-app-text-primary select-text whitespace-pre-line"
+          >
+            {groups.map((g, i) =>
+              'runs' in g ? (
+                <span key={i} data-heading={g.heading} className="block font-bold text-[1.08em] mt-2 mb-1">
+                  {g.runs.map((run, j) => renderRun(run, j, tokenByIdx, onWordClick))}
                 </span>
-              );
-            })}
+              ) : (
+                renderRun(g, i, tokenByIdx, onWordClick)
+              )
+            )}
           </div>
         </div>
         {/* And one that runs on to the next page: a mark at the bottom edge. */}

@@ -14,6 +14,8 @@ export * from './utils/arabicTokenizer';
 export * from './utils/arabicSearch';
 export * from './utils/sanitize';
 export * from './utils/citation';
+export { readBody, headingAt } from './utils/bodyText';
+export type { BodyText, HeadingRange } from './utils/bodyText';
 export { TokenPopup } from './components/TokenPopup';
 export type { TokenPopupProps } from './components/TokenPopup';
 export { TocTree, ancestorsOf, prune, flattenToc, entryForPage } from './components/TocTree';
