@@ -6,9 +6,11 @@
 
 **Selected result.** UI update to better show what search result you are looking at. Opening a result scrolls the reader to the highlighted match.
 
-**Contents.** Larger entry titles; the pane is dragged between 250 and 450 pixels and opens at 325.
+**Contents.** Larger text titles and moveable column.
 
-**Result details.** The card over a result's title reads right to left, is larger, and names the corpus source. Labels and values meet on one line.
+**Result details.** Result title tooltip cleaned.
+
+**Catalogue API update.** Updated API to fetch new books.json when metadata updated
 
 ## [0.8.6] — 2026-10-23
 
