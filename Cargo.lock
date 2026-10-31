@@ -2180,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "kashshaf"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "kashshaf-api"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "anyhow",
  "axum",
@@ -2230,7 +2230,7 @@ dependencies = [
 
 [[package]]
 name = "kashshaf-common"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2248,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "kashshaf-engine"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "anyhow",
  "lru",
