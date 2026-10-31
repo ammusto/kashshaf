@@ -4,7 +4,7 @@ import { MetadataTooltip, parseContent } from './Tooltip';
 
 /**
  * The metadata card reads right to left. The labels on the right end on one
- * vertical line and the values on the left start on it, " - " between: a
+ * vertical line and the values on the left start on it: a
  * label column sized to its widest label, labels set against its left edge,
  * values against the right edge of theirs.
  */
@@ -22,13 +22,13 @@ describe('metadata card', () => {
     const cells = [...grid.children] as HTMLElement[];
     const labels = cells.filter((_, i) => i % 2 === 0);
     const values = cells.filter((_, i) => i % 2 === 1);
-    expect(labels.map((el) => el.textContent)).toEqual(['Title -', 'Author -', 'Death -', 'Corpus Source -']);
+    expect(labels.map((el) => el.textContent)).toEqual(['Title', 'Author', 'Death', 'Corpus']);
     for (const el of labels) {
       expect(el.getAttribute('dir')).toBe('ltr');
       expect(el.className).toContain('text-left');
     }
     for (const el of values) expect(el.className).toContain('text-right');
-    expect(values.map((el) => el.textContent)).toEqual(['كتاب الأغاني', 'أبو الفرج الأصفهاني', '356 AH', 'Shamela']);
+    expect(values.map((el) => el.textContent)).toEqual(['كتاب الأغاني', 'أبو الفرج الأصفهاني', '356', 'Shamela']);
     expect(grid.textContent).not.toContain(':');
   });
 });

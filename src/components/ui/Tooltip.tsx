@@ -46,7 +46,7 @@ interface BaseTooltipProps {
   /**
    * The metadata card: the rows read right to left, the label at the start
    * of the line (the right) and the value to its left, meeting on one
-   * vertical line with " - " between; both a size up and the Arabic a size
+   * vertical line; both a size up and the Arabic a size
    * above that.
    */
   large?: boolean;
@@ -122,13 +122,13 @@ export function TooltipContent({ position, width = 200, large = false, ...props 
         // column on the right sized to its widest label, its text set
         // against the column's left edge, and the values on the left set
         // against the column's right edge, so every label ends and every
-        // value starts on the same line, "Title - كتاب".
+        // value starts on the same line.
         large ? (
-          <div className="grid grid-cols-[auto_1fr] gap-x-1.5 gap-y-2 items-baseline" dir="rtl">
+          <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-2 items-baseline" dir="rtl">
             {props.rows.map((row) => (
               <Fragment key={row.label}>
                 <span className="text-app-text-secondary text-sm text-left whitespace-nowrap" dir="ltr">
-                  {row.label} -
+                  {row.label}
                 </span>
                 <span dir={row.parseArabic ? 'rtl' : 'ltr'} className="text-app-text-primary text-base text-right min-w-0">
                   {row.value ? (row.parseArabic ? parseContent(row.value, 'font-arabic text-xl') : row.value) : '—'}
@@ -265,8 +265,8 @@ export function MetadataTooltip({
   const rows: TooltipRow[] = [
     { label: 'Title', value: book.title, parseArabic: true },
     { label: 'Author', value: authorName, parseArabic: true },
-    { label: 'Death', value: book.death_ah ? `${book.death_ah} AH` : undefined },
-    { label: 'Corpus Source', value: corpusSourceName(book.corpus) },
+    { label: 'Death', value: book.death_ah ? String(book.death_ah) : undefined },
+    { label: 'Corpus', value: corpusSourceName(book.corpus) },
   ];
 
   return <TooltipContent rows={rows} position={position} width={420} large />;
