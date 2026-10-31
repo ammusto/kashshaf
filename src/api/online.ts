@@ -36,6 +36,8 @@ export const CDN_URL = 'https://cdn.kashshaf.com';
 export function catalogUrl(corpusVersion: string): string {
   return `${CDN_URL}/catalog/${corpusVersion}/books.json`;
 }
+/** `/health.catalog`: the catalogue named by metadata.db's hash. */
+const KEYED_CATALOG = /^catalog\/[A-Za-z0-9._-]+\/books\.[0-9a-f]{12}\.json$/;
 
 /** How many times a rate-limited request is sent again before giving up. */
 const RATE_LIMIT_RETRIES = 3;
@@ -454,11 +456,12 @@ export class OnlineAPI implements SearchAPI {
   }
 
   /**
-   * The light catalogue. First the published file on the CDN,
-   * `catalog/<corpus_version>/books.json`, immutable and so fetched once per
-   * corpus by a browser; the version comes from `/health`. If the file is
-   * missing for this version, or anything else goes wrong, the API's
-   * `/books` answers the same rows.
+   * The light catalogue. First the published file on the CDN, immutable and
+   * so fetched once by a browser: `/health.catalog`,
+   * `catalog/<corpus_version>/books.<key>.json`, whose key is metadata.db's
+   * hash, so a metadata-only fix gets a new URL; from a server that does not
+   * report it, `catalog/<corpus_version>/books.json`. If the file is missing,
+   * or anything else goes wrong, the API's `/books` answers the same rows.
    */
   async getAllBooks(): Promise<BookMetadata[]> {
     const fromCdn = await this.fetchCatalogFromCdn();
@@ -467,10 +470,12 @@ export class OnlineAPI implements SearchAPI {
 
   private async fetchCatalogFromCdn(): Promise<BookMetadata[] | null> {
     try {
-      const health = await fetchAPI<{ corpus_version?: string }>('/health');
+      const health = await fetchAPI<{ corpus_version?: string; catalog?: string }>('/health');
       const version = health.corpus_version;
       if (!version || !/^[A-Za-z0-9._-]+$/.test(version)) return null;
-      const res = await fetch(catalogUrl(version), { headers: { accept: 'application/json' } });
+      const url =
+        health.catalog && KEYED_CATALOG.test(health.catalog) ? `${CDN_URL}/${health.catalog}` : catalogUrl(version);
+      const res = await fetch(url, { headers: { accept: 'application/json' } });
       if (!res.ok) return null;
       const rows = (await res.json()) as unknown;
       return Array.isArray(rows) ? (rows as BookMetadata[]) : null;

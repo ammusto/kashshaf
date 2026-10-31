@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OnlineAPI, catalogUrl } from './online';
 
 /**
- * The catalogue comes from the CDN, keyed by the corpus version /health
- * reports, and falls back to the API's /books when the file is absent for
+ * The catalogue comes from the CDN, at the keyed name /health reports or,
+ * from an older server, by its corpus version, and falls back to the API's
+ * /books when the file is absent for
  * that version (4.3.0 was published before the catalogue existed), when
  * the CDN fails, or when /health gives no version.
  */
@@ -44,6 +45,20 @@ describe('the catalogue', () => {
     expect(rows).toEqual(ROWS);
     expect(urls.some((u) => u === catalogUrl('4.4.0'))).toBe(true);
     expect(urls.some((u) => u.endsWith('/books'))).toBe(false);
+  });
+
+  it('comes from the file /health names by metadata.db hash, when it names one', async () => {
+    healthBody = { corpus_version: '4.4.0', catalog: 'catalog/4.4.0/books.33774ec4c0d9.json' };
+    expect(await api().getAllBooks()).toEqual(ROWS);
+    expect(urls).toContain('https://cdn.kashshaf.com/catalog/4.4.0/books.33774ec4c0d9.json');
+    expect(urls).not.toContain(catalogUrl('4.4.0'));
+  });
+
+  it('ignores a /health catalogue that is not a keyed catalogue path', async () => {
+    healthBody = { corpus_version: '4.4.0', catalog: '../../evil.json' };
+    expect(await api().getAllBooks()).toEqual(ROWS);
+    expect(urls).toContain(catalogUrl('4.4.0'));
+    expect(urls.some((u) => u.includes('evil'))).toBe(false);
   });
 
   it('falls back to /books when the file is absent for the version', async () => {

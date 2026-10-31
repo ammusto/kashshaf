@@ -217,8 +217,9 @@ curl -s http://127.0.0.1:3000/health | jq '{version, corpus_version, warm_cache}
 
 `warm_cache` takes several minutes after a corpus swap, as the index, the
 boundary index and corpus.db are read once. The web app follows on its own: it
-reads `corpus_version` from `/health` and fetches `catalog/V/books.json` from
-the CDN. Delete corpus directories older than the rollback one when the new
+fetches the catalogue `/health.catalog` names, `catalog/V/books.<key>.json`,
+from the CDN; the key is computed at startup from `metadata.db`, so a
+metadata-only update reaches browsers after the copy and the restart. Delete corpus directories older than the rollback one when the new
 version has run cleanly; each is about 11 GB.
 
 **Why the unit has no `ReadOnlyPaths=/opt/kashshaf/data`.** systemd's

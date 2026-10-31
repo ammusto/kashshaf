@@ -34,6 +34,8 @@ struct AppState {
     metadata_db_path: PathBuf,
     corpus_version: Option<String>,
     db_schema_version: Option<i64>,
+    /// `/health.catalog`, computed once at startup from `metadata.db`.
+    catalog: Option<String>,
     /// Page-cache warm-up: 0 disabled, 1 pending, 2 complete (`/health.warm_cache`).
     warm_cache: Arc<std::sync::atomic::AtomicU8>,
     /// Per-client caps for `GET /book/{id}/tokens` (Lab spec §5.1), which is
@@ -220,6 +222,12 @@ struct HealthResponse {
     reading_order: bool,
     corpus_version: Option<String>,
     db_schema_version: Option<i64>,
+    /// The web app's catalogue on the CDN, `catalog/<version>/books.<key>.json`,
+    /// where `key` is the first 12 hex digits of this server's `metadata.db`
+    /// sha256 (`publish_corpus.py` uploads it under that name). A metadata-only
+    /// re-publish changes the name, so browsers holding the old immutable file
+    /// fetch the new one. `None` when the corpus has no version or the hash failed.
+    catalog: Option<String>,
     max_supported_db_schema: i64,
     max_limit: usize,
     /// `glob` (compound index) or `legacy` (three-field index); the client
@@ -330,6 +338,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         reading_order: state.search_engine.reading_order(),
         corpus_version: state.corpus_version.clone(),
         db_schema_version: state.db_schema_version,
+        catalog: state.catalog.clone(),
         max_supported_db_schema: MAX_SUPPORTED_DB_SCHEMA,
         max_limit: MAX_LIMIT,
         wildcard_grammar: state.search_engine.wildcard_grammar(),
@@ -952,6 +961,16 @@ fn main() -> anyhow::Result<()> {
         .block_on(async_main(blocking))
 }
 
+/// `catalog/<version>/books.<key>.json`, `key` the first 12 hex digits of
+/// the file's sha256: the name `publish_corpus.py` (`catalog_key`) uploads.
+fn catalog_path(metadata_db: &Path, corpus_version: &str) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut std::fs::File::open(metadata_db)?, &mut hasher)?;
+    let key = hex::encode(hasher.finalize());
+    Ok(format!("catalog/{}/books.{}.json", corpus_version, &key[..12]))
+}
+
 /// Run an engine call off the runtime's workers, on the blocking pool.
 async fn blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, ApiError>
 where
@@ -1025,6 +1044,17 @@ async fn async_main(blocking_threads: usize) -> anyhow::Result<()> {
         db_schema_version
     );
 
+    let catalog = corpus_version.as_deref().and_then(|v| match catalog_path(&metadata_db_path, v) {
+        Ok(p) => {
+            tracing::info!("catalogue: {}", p);
+            Some(p)
+        }
+        Err(e) => {
+            tracing::warn!("no /health.catalog, the web app falls back to catalog/{}/books.json: {}", v, e);
+            None
+        }
+    });
+
     let warm_enabled = std::env::var("KASHSHAF_WARM_CACHE").map(|v| v == "1").unwrap_or(false);
     let warm_cache = Arc::new(std::sync::atomic::AtomicU8::new(if warm_enabled { WARM_PENDING } else { WARM_DISABLED }));
     let state = Arc::new(AppState {
@@ -1033,6 +1063,7 @@ async fn async_main(blocking_threads: usize) -> anyhow::Result<()> {
         metadata_db_path,
         corpus_version,
         db_schema_version,
+        catalog,
         warm_cache: warm_cache.clone(),
         bulk_limiter: Arc::new(bulk::BulkLimiter::default()),
         toc,
@@ -1232,6 +1263,21 @@ fn warm_page_cache(paths: &[PathBuf]) {
         paths.len(),
         start.elapsed().as_secs_f64()
     );
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    #[test]
+    fn the_catalogue_is_named_by_the_first_12_hex_digits_of_metadata_db_sha256() {
+        // publish_corpus.py's catalog_key: sha256("abc") = ba7816bf8f01cfea…
+        let path = std::env::temp_dir().join(format!("kashshaf-catalog-test-{}.db", std::process::id()));
+        std::fs::write(&path, b"abc").unwrap();
+        let got = catalog_path(&path, "4.4.0");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(got.unwrap(), "catalog/4.4.0/books.ba7816bf8f01.json");
+    }
 }
 
 #[cfg(test)]
