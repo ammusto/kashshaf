@@ -1,8 +1,14 @@
 # Changelog
 
-## [0.8.6] — unreleased
+## [0.8.7] — unreleased
 
-**Fixed.** The reader keeps every line break in a text. A break next to punctuation or a number was lost, which ran verse and lists together as prose: almost half the corpus's line breaks. Headings are set in the logo's dark green. A blank line in the text is drawn as a single break.
+**Fixed.** A wildcard in a Boolean search works with the other terms. A search with `*` in one term used to run that term alone and ignore every other AND or OR term. Proximity terms take a wildcard too.
+
+**Selected result.** The row of the page open in the reader, the one you clicked or the first of a new search, is marked in the results list.
+
+## [0.8.6] — 2026-10-23
+
+**Fixed.** The reader was not properly rendering line breaks
 
 ## [0.8.5] — 2026-10-22
 

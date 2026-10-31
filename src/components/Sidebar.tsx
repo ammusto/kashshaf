@@ -196,6 +196,7 @@ export function Sidebar({
                 onSearch={onProximitySearch}
                 onClearForm={() => {}}
                 loading={loading}
+                showToast={showToast}
               />
             )}
           </div>

@@ -4,11 +4,14 @@ import { ProximityInputRow, type ProximityInput } from './ProximityInputRow';
 import { AddRowButton } from './AddRowButton';
 import { useSearchForm } from '../../contexts/SearchFormContext';
 import { clampDistance } from '../../utils/proximityQuery';
+import { validateWildcard } from '../../utils/wildcardValidation';
+import { useOperatingMode } from '../../contexts/OperatingModeContext';
 
 interface ProximitySearchPanelProps {
   onSearch: (query: ProximitySearchQuery) => void;
   onClearForm: () => void;
   loading: boolean;
+  showToast: (message: string) => void;
 }
 
 const emptyInput = (): ProximityInput => ({ term: '', field: 'surface' });
@@ -18,7 +21,9 @@ const emptyInput = (): ProximityInput => ({ term: '', field: 'surface' });
  * link, an ordering switch, and, set apart below once there is one, up to
  * two AND terms that must be somewhere on the page.
  */
-export function ProximitySearchPanel({ onSearch, onClearForm, loading }: ProximitySearchPanelProps) {
+export function ProximitySearchPanel({ onSearch, onClearForm, loading, showToast }: ProximitySearchPanelProps) {
+  const { capabilities } = useOperatingMode();
+  const wildcardGrammar = capabilities?.wildcard_grammar ?? 'glob';
   // The form's state is the store's, so it survives the sidebar folding.
   const {
     proximityTerms,
@@ -64,6 +69,17 @@ export function ProximitySearchPanel({ onSearch, onClearForm, loading }: Proximi
 
   const handleSearch = () => {
     if (!hasValidQuery) return;
+    // A wildcard word is allowed in any slot; the engine expands it. The
+    // grammar's rules (two letters beside the star, one star on a legacy
+    // index) apply here as in the Boolean form.
+    for (const t of [...proximityTerms, ...proximityPageTerms]) {
+      if (!t.term.trim()) continue;
+      const v = validateWildcard(t.term, t.field, wildcardGrammar);
+      if (!v.valid) {
+        showToast(v.error || 'Invalid wildcard usage');
+        return;
+      }
+    }
     onSearch({
       terms: proximityTerms.map((t) => ({ query: t.term.trim(), mode: t.field })),
       distances: proximityDistances.map(clampDistance),

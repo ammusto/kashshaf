@@ -168,38 +168,10 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
     const label = generateQueryLabel(combined);
     const fullQuery = generateFullQuery(combined);
 
-    // Check if any query contains a wildcard
-    const allInputs = [...(combined.andInputs || []), ...(combined.orInputs || [])];
-    const wildcardInput = allInputs.find(inp => inp.query.includes('*'));
-
-    // If there's a wildcard query, use wildcard search
-    if (wildcardInput && wildcardInput.mode === 'surface') {
-      const searchContext: SearchContext = {
-        type: 'wildcard',
-        wildcardQuery: wildcardInput.query,
-      };
-
-      const tabId = createTab(label, fullQuery, 'terms', searchContext);
-
-      try {
-        const filters = getFilters();
-        const results = await api.wildcardSearch(wildcardInput.query, filters, PAGE_SIZE, 0);
-        updateTab(tabId, { searchResults: results, loading: false });
-        scheduleStatusPolls(tabId, results);
-
-        if (results.results.length > 0) {
-          loadResultIntoTab(tabId, results.results[0]);
-        }
-
-        addSearchToHistory('boolean', { type: 'boolean', andInputs: combined.andInputs, orInputs: combined.orInputs }, wildcardInput.query);
-      } catch (err) {
-        updateTab(tabId, { errorMessage: `Search failed: ${err}`, loading: false });
-        console.error('Wildcard search failed:', err);
-      }
-      return;
-    }
-
-    // Regular combined search
+    // A wildcard is just a word of the Boolean form: the engine expands it
+    // inside its own slot. (Until 0.8.6 an input with a `*` was sent to the
+    // single-term wildcard route alone, and every other AND or OR input was
+    // dropped on the floor.)
     const searchContext: SearchContext = {
       type: 'combined',
       combinedQuery: combined,
@@ -326,13 +298,6 @@ export function useSearch(options: UseSearchOptions): UseSearchReturn {
       } else if (searchContext.type === 'combined' && searchContext.combinedQuery) {
         moreResults = await api.combinedSearch(
           searchContext.combinedQuery, filters, PAGE_SIZE, currentCount
-        );
-      } else if (searchContext.type === 'wildcard' && searchContext.wildcardQuery) {
-        moreResults = await api.wildcardSearch(
-          searchContext.wildcardQuery,
-          filters,
-          PAGE_SIZE,
-          currentCount
         );
       } else {
         updateTab(activeTab.id, { loadingMore: false });

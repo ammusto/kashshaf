@@ -11,14 +11,19 @@ import { ProximitySearchPanel } from './ProximitySearchPanel';
  * What Search emits is the chain query, blank AND terms left out.
  */
 
+vi.mock('../../contexts/OperatingModeContext', () => ({
+  useOperatingMode: () => ({ capabilities: { wildcard_grammar: 'glob' }, refreshCapabilities: vi.fn() }),
+}));
+
 function renderPanel() {
   const onSearch = vi.fn();
+  const showToast = vi.fn();
   render(
     <SearchFormProvider>
-      <ProximitySearchPanel onSearch={onSearch} onClearForm={() => {}} loading={false} />
+      <ProximitySearchPanel onSearch={onSearch} onClearForm={() => {}} loading={false} showToast={showToast} />
     </SearchFormProvider>
   );
-  return { onSearch };
+  return { onSearch, showToast };
 }
 
 const rows = (kind: 'proximity' | 'page') => screen.queryAllByTestId(`${kind}-term-row`);
@@ -110,5 +115,20 @@ describe('ProximitySearchPanel', () => {
     expect(onSearch).toHaveBeenCalledWith(
       expect.objectContaining({ pageTerms: [{ query: 'النبي', mode: 'surface' }] })
     );
+  });
+
+  it('a wildcard term is sent as it is; one the grammar refuses stops the search with a toast', () => {
+    const { onSearch, showToast } = renderPanel();
+    typeInto('proximity', 0, 'كتاب*');
+    typeInto('proximity', 1, 'علم');
+    search();
+    expect(onSearch).toHaveBeenCalledWith(
+      expect.objectContaining({ terms: [{ query: 'كتاب*', mode: 'surface' }, { query: 'علم', mode: 'surface' }] })
+    );
+    onSearch.mockClear();
+    typeInto('proximity', 0, 'ك*');
+    search();
+    expect(onSearch).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledTimes(1);
   });
 });

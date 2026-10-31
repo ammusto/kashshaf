@@ -1497,7 +1497,24 @@ impl SearchEngine {
     }
 
     /// Phrase for 2+ words, term for 1, query-parser fallback for none.
+    /// A word's regex for the three-field index: literal pieces escaped,
+    /// each `*` a `.*`.
+    fn glob_regex(word: &str) -> String {
+        word.split('*').map(regex_escape).collect::<Vec<_>>().join(".*")
+    }
+
     fn text_query(&self, field: Field, words: &[String], raw: &str, slop: u32) -> Result<Box<dyn Query>> {
+        // A wildcard word (surface only; validated upstream): a regex term,
+        // or a regex phrase with one pattern per word.
+        if words.iter().any(|w| w.contains('*')) {
+            if words.len() == 1 {
+                return Ok(Box::new(RegexQuery::from_pattern(&Self::glob_regex(&words[0]), field)?));
+            }
+            let mut q = RegexPhraseQuery::new(field, words.iter().map(|w| Self::glob_regex(w)).collect());
+            q.set_max_expansions(WILDCARD_MAX_EXPANSIONS);
+            q.set_slop(slop);
+            return Ok(Box::new(q));
+        }
         match words.len() {
             0 => {
                 let qp = QueryParser::for_index(&self.index, vec![field]);
@@ -1535,6 +1552,30 @@ impl SearchEngine {
         out
     }
 
+    /// A surface word's slot: its exact surface triples, or, for a word with
+    /// a `*`, every triple whose surface matches the glob. A Boolean or
+    /// proximity term may carry a wildcard like the wildcard route does;
+    /// every path downstream is set-based, so a wide glob is a wide slot.
+    fn surface_slot(&self, w: &str) -> Vec<u32> {
+        if w.contains('*') {
+            (*self.triples_for_glob_cached(&GlobPattern::parse(w))).clone()
+        } else {
+            self.triples().triples_for_surface(w)
+        }
+    }
+
+    /// Refuse a term whose wildcard the grammar does not allow (a bare `*`,
+    /// one letter beside it): the slot would be most of the corpus. The
+    /// hosts validate too; this is the one check every route passes.
+    fn validate_terms<'a>(&self, terms: impl Iterator<Item = &'a SearchTerm>) -> Result<()> {
+        for t in terms {
+            if t.query.contains('*') {
+                validate_wildcard_query(&t.query, t.mode, self.wildcard_grammar()).map_err(|e| anyhow!("{}", e.message))?;
+            }
+        }
+        Ok(())
+    }
+
     fn term_sets(&self, term: &SearchTerm) -> Sets {
         let _t = crate::probe::timer("term_sets");
         let t = self.triples();
@@ -1545,12 +1586,12 @@ impl SearchEngine {
                 // Clitics on: the first word's slot is the union of its six
                 // forms, so an AND term stays one slot with alternatives.
                 SearchMode::Surface if term.clitics && i == 0 => {
-                    let mut v: Vec<u32> = Self::proclitic_forms(w).iter().flat_map(|f| t.triples_for_surface(f)).collect();
+                    let mut v: Vec<u32> = Self::proclitic_forms(w).iter().flat_map(|f| self.surface_slot(f)).collect();
                     v.sort_unstable();
                     v.dedup();
                     v
                 }
-                SearchMode::Surface => t.triples_for_surface(w),
+                SearchMode::Surface => self.surface_slot(w),
                 // A lemma slot is the lemma's triples and the typed word's
                 // own surface triples: a lemma search always matches the
                 // exact word typed, and a word the lemmatiser never produced
@@ -2240,6 +2281,7 @@ impl SearchEngine {
                 complete: None,
             });
         }
+        self.validate_terms(and_terms.iter().chain(or_terms.iter()))?;
         let searcher = self.reader.searcher();
 
         // A phrase, or a boolean with a phrase in it: the positional walk,
@@ -2484,6 +2526,7 @@ impl SearchEngine {
 
     fn proximity_chain_search_inner(&self, q: &ProximityQuery, filters: &SearchFilters, limit: usize, offset: usize) -> Result<(SearchResults, ProximityStats)> {
         q.validate()?;
+        self.validate_terms(q.terms.iter().chain(q.and_terms.iter()))?;
         let start = std::time::Instant::now();
         let searcher = self.reader.searcher();
         let distances: Vec<u32> = q.distances.iter().map(|&d| d as u32).collect();
