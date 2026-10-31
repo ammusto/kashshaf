@@ -90,6 +90,7 @@ export function ReaderTocPane({ toc, currentId, label, onJump, onClose, width, o
       title="Contents"
       closeTitle="Hide the contents (Ctrl+T)"
       className="relative shrink-0 border-l border-app-border-light bg-app-surface flex flex-col min-h-0"
+      titleClassName="text-lg"
       style={{ width }}
     >
       {/* The drag handle on the left border, as the search sidebar has on its right. */}

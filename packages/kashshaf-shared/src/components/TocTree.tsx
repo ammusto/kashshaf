@@ -66,6 +66,8 @@ export interface TocTreeProps<N extends TocEntry = TocEntry> {
   closeTitle?: string;
   /** Layout of the `<aside>` itself; the default is Lab's fixed width. */
   className?: string;
+  /** Type of an entry's title; the default is Lab's. Kashshaf reads it larger. */
+  titleClassName?: string;
   style?: React.CSSProperties;
   /** Drawn inside the aside before the header (a drag handle, say). */
   children?: ReactNode;
@@ -103,6 +105,7 @@ export function TocTree<N extends TocEntry = TocEntry>({
   title = 'Contents',
   closeTitle = 'Hide the contents (Ctrl+T)',
   className = 'w-72 shrink-0 border-l border-app-border-light bg-app-surface flex flex-col min-h-0',
+  titleClassName = 'text-sm',
   style,
   children,
 }: TocTreeProps<N>) {
@@ -212,6 +215,7 @@ export function TocTree<N extends TocEntry = TocEntry>({
                 isCurrent={row.node.id === currentId}
                 onJump={onJump as (n: TocEntry) => void}
                 toggle={toggle}
+                titleClassName={titleClassName}
               />
             );
           })}
@@ -230,8 +234,10 @@ function Row({
   isCurrent,
   onJump,
   toggle,
+  titleClassName,
 }: {
   row: VisibleRow;
+  titleClassName: string;
   top: number;
   label: (partIndex: number, pageId: number) => string;
   isCurrent: boolean;
@@ -279,7 +285,7 @@ function Row({
         aria-current={isCurrent ? 'true' : undefined}
         className="flex-1 min-w-0 h-full flex items-center gap-2 pl-3 text-right"
       >
-        <span className="flex-1 min-w-0 font-arabic text-sm leading-snug truncate" title={node.title}>
+        <span className={`flex-1 min-w-0 font-arabic leading-snug truncate ${titleClassName}`} title={node.title}>
           {node.title}
         </span>
         <span dir="ltr" className="text-[11px] text-app-text-secondary tabular-nums shrink-0">

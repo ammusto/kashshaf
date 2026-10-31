@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { SIDEBAR_MIN_WIDTH } from '../constants/search';
 
 /**
  * Whether the contents pane is open, and how wide.
@@ -18,10 +17,10 @@ export function resetTocPaneMemory() {
   openMemory = null;
 }
 
-/** As wide as the search sidebar may be, at the least. */
-export const TOC_MIN_WIDTH = SIDEBAR_MIN_WIDTH;
-export const TOC_MAX_WIDTH = 720;
-export const TOC_DEFAULT_WIDTH = SIDEBAR_MIN_WIDTH;
+/** The contents pane: dragged between these, and this wide until it is. */
+export const TOC_MIN_WIDTH = 250;
+export const TOC_MAX_WIDTH = 450;
+export const TOC_DEFAULT_WIDTH = 325;
 /** What the reader needs before the contents pane yields its width. */
 export const READER_MIN_WIDTH = 520;
 const WIDTH_KEY = 'tocWidth';
