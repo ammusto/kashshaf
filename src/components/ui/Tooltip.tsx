@@ -18,13 +18,13 @@ function isArabic(char: string): boolean {
 const ARABIC_RUN = /([\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF](?:[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\s]*[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF])?)/;
 
 // Parse content and wrap Arabic phrases in right-to-left spans
-export function parseContent(content: string): React.ReactNode[] {
+export function parseContent(content: string, arabicClass = 'font-arabic text-base'): React.ReactNode[] {
   return content
     .split(ARABIC_RUN)
     .filter((part) => part.length > 0)
     .map((part, key) =>
       isArabic(part[0]) ? (
-        <span key={key} className="font-arabic text-base" dir="rtl">
+        <span key={key} className={arabicClass} dir="rtl">
           {part}
         </span>
       ) : (
@@ -43,6 +43,12 @@ export interface TooltipRow {
 interface BaseTooltipProps {
   position: { x: number; y: number };
   width?: number;
+  /**
+   * The metadata card: the rows read right to left, the label at the start
+   * of the line (the right), the value to its left, both a size up and the
+   * Arabic a size above that.
+   */
+  large?: boolean;
 }
 
 interface SimpleTooltipProps extends BaseTooltipProps {
@@ -60,14 +66,15 @@ type TooltipContentProps = SimpleTooltipProps | RowsTooltipProps;
 /**
  * Tooltip content renderer - used internally by Tooltip and useTooltip
  */
-export function TooltipContent({ position, width = 200, ...props }: TooltipContentProps) {
+export function TooltipContent({ position, width = 200, large = false, ...props }: TooltipContentProps) {
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
   const [arrowPosition, setArrowPosition] = useState<'top' | 'bottom'>('bottom');
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const tooltipWidth = width;
-    const tooltipHeight = props.rows ? props.rows.length * 28 + 24 : 80;
+    const rowHeight = large ? 36 : 28;
+    const tooltipHeight = props.rows ? props.rows.length * rowHeight + (large ? 32 : 24) : 80;
     const padding = 8;
 
     // Calculate horizontal position (centered on trigger)
@@ -93,33 +100,37 @@ export function TooltipContent({ position, width = 200, ...props }: TooltipConte
     }
 
     setTooltipStyle({ left, top });
-  }, [position, width, props.rows]);
+  }, [position, width, large, props.rows]);
 
   const isSimple = 'content' in props && props.content !== undefined;
 
   return createPortal(
     <div
       ref={tooltipRef}
-      className={`fixed z-[9999] px-3 py-2 text-xs text-app-text-primary bg-white rounded-md shadow-lg border border-app-border-medium whitespace-normal text-left leading-relaxed pointer-events-none`}
+      data-testid="tooltip"
+      className={`fixed z-[9999] text-app-text-primary bg-white rounded-md shadow-lg border border-app-border-medium whitespace-normal leading-relaxed pointer-events-none ${
+        large ? 'px-4 py-3 text-sm' : 'px-3 py-2 text-xs text-left'
+      }`}
       style={{ ...tooltipStyle, width: `${width}px` }}
     >
       {isSimple ? (
         // Simple text content with Arabic parsing
         parseContent(props.content)
       ) : (
-        // Structured rows
-        <div className="space-y-1.5">
+        // Structured rows. The large card reads right to left: the label
+        // first, at the right edge, the value to its left.
+        <div className={large ? 'space-y-2' : 'space-y-1.5'} dir={large ? 'rtl' : 'ltr'}>
           {props.rows.map((row, idx) => (
-            <div key={idx} className="flex items-start gap-2">
-              <span className="text-xs text-app-text-secondary w-12 flex-shrink-0">
+            <div key={idx} className={`flex items-baseline ${large ? 'gap-4' : 'gap-2'}`}>
+              <span className={`text-app-text-secondary flex-shrink-0 ${large ? 'text-sm w-24 text-right' : 'text-xs w-12'}`} dir="ltr">
                 {row.label}:
               </span>
               <span
                 dir={row.parseArabic ? 'rtl' : 'ltr'}
-                className={`text-xs text-app-text-primary flex-1 ${row.parseArabic ? 'text-right' : ''}`}
+                className={`text-app-text-primary flex-1 min-w-0 ${large ? 'text-base text-right' : `text-xs ${row.parseArabic ? 'text-right' : ''}`}`}
               >
                 {row.value ? (
-                  row.parseArabic ? parseContent(row.value) : row.value
+                  row.parseArabic ? parseContent(row.value, large ? 'font-arabic text-xl' : undefined) : row.value
                 ) : (
                   '—'
                 )}
@@ -205,9 +216,23 @@ export function useTooltip() {
   return { isVisible, position, handlers };
 }
 
+/** The corpus a text was taken from, as the About page names the sources. */
+export const CORPUS_SOURCE_NAMES: Record<string, string> = {
+  shamela: 'Shamela',
+  openiti: 'OpenITI',
+  nusus: 'Nuṣūṣ',
+  maktaba: 'Maktaba',
+};
+
+export function corpusSourceName(corpus: string | undefined): string | undefined {
+  if (!corpus) return undefined;
+  return CORPUS_SOURCE_NAMES[corpus.toLowerCase()] ?? corpus;
+}
+
 /**
- * Metadata tooltip for search results
- * Shows title, author (looked up by ID), death, genre, corpus
+ * Metadata tooltip for search results: title, author (looked up by id),
+ * death year and the corpus the text came from. A large card, read right
+ * to left.
  */
 export function MetadataTooltip({
   book,
@@ -218,6 +243,7 @@ export function MetadataTooltip({
     title?: string;
     author_id?: number;
     death_ah?: number;
+    corpus?: string;
   };
   position: { x: number; y: number };
   authorsMap?: Map<number, string>;
@@ -230,7 +256,8 @@ export function MetadataTooltip({
     { label: 'Title', value: book.title, parseArabic: true },
     { label: 'Author', value: authorName, parseArabic: true },
     { label: 'Death', value: book.death_ah ? `${book.death_ah} AH` : undefined },
+    { label: 'Corpus Source', value: corpusSourceName(book.corpus) },
   ];
 
-  return <TooltipContent rows={rows} position={position} width={320} />;
+  return <TooltipContent rows={rows} position={position} width={420} large />;
 }

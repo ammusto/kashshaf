@@ -2,9 +2,13 @@
 
 ## [0.8.7] — unreleased
 
-**Fixed.** A wildcard in a Boolean search works with the other terms. A search with `*` in one term used to run that term alone and ignore every other AND or OR term. Proximity terms take a wildcard too.
+**Fixed.** A wildcard in a Boolean search was not working properly.
 
-**Selected result.** The row of the page open in the reader, the one you clicked or the first of a new search, is marked in the results list.
+**Selected result.** UI update to better show what search result you are looking at. Opening a result scrolls the reader to the highlighted match, not just to the top of its page.
+
+**Contents.** Larger entry titles; the pane is dragged between 250 and 450 pixels and opens at 325.
+
+**Result details.** The card over a result's title reads right to left, is larger, and names the corpus source.
 
 ## [0.8.6] — 2026-10-23
 
