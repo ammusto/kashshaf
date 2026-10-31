@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { Fragment, useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
 // Check if a character is Arabic
@@ -45,8 +45,9 @@ interface BaseTooltipProps {
   width?: number;
   /**
    * The metadata card: the rows read right to left, the label at the start
-   * of the line (the right), the value to its left, both a size up and the
-   * Arabic a size above that.
+   * of the line (the right) and the value to its left, meeting on one
+   * vertical line with " - " between; both a size up and the Arabic a size
+   * above that.
    */
   large?: boolean;
 }
@@ -117,27 +118,36 @@ export function TooltipContent({ position, width = 200, large = false, ...props 
         // Simple text content with Arabic parsing
         parseContent(props.content)
       ) : (
-        // Structured rows. The large card reads right to left: the label
-        // first, at the right edge, the value to its left.
-        <div className={large ? 'space-y-2' : 'space-y-1.5'} dir={large ? 'rtl' : 'ltr'}>
-          {props.rows.map((row, idx) => (
-            <div key={idx} className={`flex items-baseline ${large ? 'gap-4' : 'gap-2'}`}>
-              <span className={`text-app-text-secondary flex-shrink-0 ${large ? 'text-sm w-24 text-right' : 'text-xs w-12'}`} dir="ltr">
-                {row.label}:
-              </span>
-              <span
-                dir={row.parseArabic ? 'rtl' : 'ltr'}
-                className={`text-app-text-primary flex-1 min-w-0 ${large ? 'text-base text-right' : `text-xs ${row.parseArabic ? 'text-right' : ''}`}`}
-              >
-                {row.value ? (
-                  row.parseArabic ? parseContent(row.value, large ? 'font-arabic text-xl' : undefined) : row.value
-                ) : (
-                  '—'
-                )}
-              </span>
-            </div>
-          ))}
-        </div>
+        // Structured rows. The large card reads right to left: a label
+        // column on the right sized to its widest label, its text set
+        // against the column's left edge, and the values on the left set
+        // against the column's right edge, so every label ends and every
+        // value starts on the same line, "Title - كتاب".
+        large ? (
+          <div className="grid grid-cols-[auto_1fr] gap-x-1.5 gap-y-2 items-baseline" dir="rtl">
+            {props.rows.map((row) => (
+              <Fragment key={row.label}>
+                <span className="text-app-text-secondary text-sm text-left whitespace-nowrap" dir="ltr">
+                  {row.label} -
+                </span>
+                <span dir={row.parseArabic ? 'rtl' : 'ltr'} className="text-app-text-primary text-base text-right min-w-0">
+                  {row.value ? (row.parseArabic ? parseContent(row.value, 'font-arabic text-xl') : row.value) : '—'}
+                </span>
+              </Fragment>
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {props.rows.map((row, idx) => (
+              <div key={idx} className="flex items-baseline gap-2">
+                <span className="text-app-text-secondary flex-shrink-0 text-xs w-12">{row.label}:</span>
+                <span dir={row.parseArabic ? 'rtl' : 'ltr'} className={`text-app-text-primary flex-1 min-w-0 text-xs ${row.parseArabic ? 'text-right' : ''}`}>
+                  {row.value ? (row.parseArabic ? parseContent(row.value) : row.value) : '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )
       )}
       <div
         className={`absolute w-2 h-2 bg-white border-app-border-medium rotate-45 left-1/2 -translate-x-1/2 ${

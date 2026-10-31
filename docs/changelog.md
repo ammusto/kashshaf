@@ -4,11 +4,11 @@
 
 **Fixed.** A wildcard in a Boolean search was not working properly.
 
-**Selected result.** UI update to better show what search result you are looking at. Opening a result scrolls the reader to the highlighted match, not just to the top of its page.
+**Selected result.** UI update to better show what search result you are looking at. Opening a result scrolls the reader to the highlighted match.
 
 **Contents.** Larger entry titles; the pane is dragged between 250 and 450 pixels and opens at 325.
 
-**Result details.** The card over a result's title reads right to left, is larger, and names the corpus source.
+**Result details.** The card over a result's title reads right to left, is larger, and names the corpus source. Labels and values meet on one line.
 
 ## [0.8.6] — 2026-10-23
 

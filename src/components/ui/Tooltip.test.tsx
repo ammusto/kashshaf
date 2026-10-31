@@ -1,6 +1,37 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
-import { parseContent } from './Tooltip';
+import { MetadataTooltip, parseContent } from './Tooltip';
+
+/**
+ * The metadata card reads right to left. The labels on the right end on one
+ * vertical line and the values on the left start on it, " - " between: a
+ * label column sized to its widest label, labels set against its left edge,
+ * values against the right edge of theirs.
+ */
+describe('metadata card', () => {
+  it('sets labels and values against the line where they meet', () => {
+    render(
+      <MetadataTooltip
+        book={{ title: 'كتاب الأغاني', author_id: 1, death_ah: 356, corpus: 'shamela' }}
+        position={{ x: 100, y: 100 }}
+        authorsMap={new Map([[1, 'أبو الفرج الأصفهاني']])}
+      />
+    );
+    const grid = document.querySelector('[data-testid="tooltip"] [dir="rtl"]') as HTMLElement;
+    expect(grid.className).toContain('grid-cols-[auto_1fr]');
+    const cells = [...grid.children] as HTMLElement[];
+    const labels = cells.filter((_, i) => i % 2 === 0);
+    const values = cells.filter((_, i) => i % 2 === 1);
+    expect(labels.map((el) => el.textContent)).toEqual(['Title -', 'Author -', 'Death -', 'Corpus Source -']);
+    for (const el of labels) {
+      expect(el.getAttribute('dir')).toBe('ltr');
+      expect(el.className).toContain('text-left');
+    }
+    for (const el of values) expect(el.className).toContain('text-right');
+    expect(values.map((el) => el.textContent)).toEqual(['كتاب الأغاني', 'أبو الفرج الأصفهاني', '356 AH', 'Shamela']);
+    expect(grid.textContent).not.toContain(':');
+  });
+});
 
 /**
  * An Arabic phrase in a tooltip is one right-to-left span, spaces and all.
