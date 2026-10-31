@@ -9,12 +9,15 @@ interface SearchResultRowProps {
   result: SearchResult;
   onClick: () => void;
   style?: React.CSSProperties;
+  /** This row's page is the one open in the reader: the clicked row, or the first of a new search. */
+  selected?: boolean;
 }
 
 export function SearchResultRow({
   result,
   onClick,
   style,
+  selected = false,
 }: SearchResultRowProps) {
   const { booksMap, authorsMap, genresMap } = useBooks();
   const book = booksMap.get(result.id);
@@ -153,8 +156,10 @@ export function SearchResultRow({
       <div
         onClick={onClick}
         style={style}
-        className="h-12 px-6 flex items-center gap-6 cursor-pointer
-                 hover:bg-app-surface-variant transition-colors border-b border-app-border-light"
+        aria-selected={selected || undefined}
+        data-selected={selected ? 'true' : undefined}
+        className={`h-12 px-6 flex items-center gap-6 cursor-pointer transition-colors border-b border-app-border-light
+          ${selected ? 'bg-app-accent-light' : 'hover:bg-app-surface-variant'}`}
       >
         <div className="w-16 flex-shrink-0 flex items-center justify-center gap-1 rounded py-2 px-3">
           <span className="text-sm text-app-text-primary">

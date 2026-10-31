@@ -3,7 +3,7 @@ import type { SearchResults, SearchResult } from '../../types';
 import type { VariantsResponse } from '../../api';
 import { EXPORT_MAX_RESULTS, VARIANTS_MAX_HITS } from '../../constants/search';
 import type { ExportProgress } from '../../utils/exportResults';
-import { VirtualizedResultsList } from '../shared/VirtualizedResultsList';
+import { VirtualizedResultsList, type SelectedPage } from '../shared/VirtualizedResultsList';
 import { VariantsList } from './VariantsList';
 import { exportSearchResults, type ExportFormat } from '../../utils/exportData';
 import { useBooks } from '../../contexts/BooksContext';
@@ -25,6 +25,8 @@ interface ResultsPanelProps {
   onLoadVariants?: () => Promise<VariantsResponse>;
   /** Re-run the current search as a surface-mode phrase for the given tuple. */
   onVariantClick?: (tuple: string[]) => void;
+  /** The page open in the reader: its row is marked. */
+  selected?: SelectedPage | null;
 }
 
 export function ResultsPanel({
@@ -39,6 +41,7 @@ export function ResultsPanel({
   maxResults,
   onLoadVariants,
   onVariantClick,
+  selected = null,
 }: ResultsPanelProps) {
   const { booksMap, authorsMap, genresMap } = useBooks();
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
@@ -288,6 +291,7 @@ export function ResultsPanel({
           wasCapped={!!results.was_capped}
           loadedAll={!!results.loadedAll}
           maxResults={maxResults}
+          selected={selected}
         />
       )}
 

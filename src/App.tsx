@@ -776,6 +776,11 @@ function App() {
                       : undefined
                   }
                   onResultClick={handleResultClick}
+                  selected={
+                    activeTab?.clickedMatches && activeTab.currentBookId != null
+                      ? { id: activeTab.currentBookId, part_index: activeTab.clickedMatches.part_index, page_id: activeTab.clickedMatches.page_id }
+                      : null
+                  }
                   onLoadMore={handleLoadMore}
                   onExport={handleExportResults}
                   loading={activeTab?.loading ?? false}

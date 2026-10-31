@@ -15,6 +15,15 @@ interface VirtualizedResultsListProps {
   /** A load-more came back empty: nothing more to fetch. */
   loadedAll?: boolean;
   maxResults: number;
+  /** The page open in the reader, so its row can be marked. */
+  selected?: SelectedPage | null;
+}
+
+/** A result row's identity: a page of a book. */
+export interface SelectedPage {
+  id: number;
+  part_index: number;
+  page_id: number;
 }
 
 export function VirtualizedResultsList({
@@ -26,6 +35,7 @@ export function VirtualizedResultsList({
   wasCapped = false,
   loadedAll = false,
   maxResults,
+  selected = null,
 }: VirtualizedResultsListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -100,6 +110,12 @@ export function VirtualizedResultsList({
               <SearchResultRow
                 result={result}
                 onClick={() => onResultClick(result)}
+                selected={
+                  selected !== null &&
+                  selected.id === result.id &&
+                  selected.part_index === result.part_index &&
+                  selected.page_id === result.page_id
+                }
               />
             </div>
           );
