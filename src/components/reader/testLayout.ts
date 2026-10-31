@@ -50,6 +50,8 @@ export interface LayoutOptions {
   viewportHeight?: number;
   /** Height of the page at a spine index, in px. */
   pageHeight?: (index: number) => number;
+  /** Where a page's highlighted words sit, in px from the page's top; absent, highlights have no box. */
+  highlightTop?: (index: number) => number;
 }
 
 export interface FakeLayout {
@@ -111,6 +113,14 @@ export function installLayout(options: LayoutOptions = {}): FakeLayout {
       const height = pageHeight(index);
       const top = contentTop(index) - (c ? scrollTops.get(c) ?? 0 : 0);
       return { top, left: 0, bottom: top + height, right: 800, width: 800, height, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    }
+    if (options.highlightTop && (this as HTMLElement).dataset?.highlight === 'true') {
+      const page = this.closest<HTMLElement>('[data-page-index]');
+      if (page) {
+        const index = Number(page.dataset.pageIndex);
+        const top = contentTop(index) + options.highlightTop(index) - (c ? scrollTops.get(c) ?? 0 : 0);
+        return { top, left: 0, bottom: top + 28, right: 800, width: 800, height: 28, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+      }
     }
     return originalRect.call(this);
   };

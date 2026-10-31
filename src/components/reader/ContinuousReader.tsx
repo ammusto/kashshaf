@@ -332,13 +332,47 @@ export const ContinuousReader = forwardRef<ContinuousReaderHandle, ContinuousRea
 
   // --- a request from outside (opening at a page, a clicked result, a
   //     contents entry): goTo, like everything else
+  /** The page a request asked for, until its first highlight has been brought into view. */
+  const reveal = useRef<number | null>(null);
   useEffect(() => {
     if (!request) return;
+    reveal.current = request.index;
     goTo(request.index);
     // The request's sequence number identifies a new one; goTo is read at
     // that moment.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request?.seq]);
+
+  // --- the match on a requested page: a placement or a glide puts the
+  //     page's top at the top of the pane, which on a long page can leave
+  //     the highlighted words below the fold. Once the page has landed, is
+  //     loaded and measured, and its highlights are drawn, the pane is moved
+  //     down within the page so the first highlight sits a third of the way
+  //     down. Never above the page's top, so the page in view is unchanged.
+  useLayoutEffect(() => {
+    const target = reveal.current;
+    if (target === null) return;
+    if (placing || gliding.current) return;
+    const c = containerRef.current;
+    const el = elements.current.get(target);
+    if (!c || !el || !pages.has(target) || !heights.has(target)) return;
+    reveal.current = null;
+    const hl = el.querySelector<HTMLElement>('[data-highlight="true"]');
+    if (!hl) return;
+    const cTop = c.getBoundingClientRect().top;
+    const r = hl.getBoundingClientRect();
+    if (r.height === 0) return;
+    const hlTop = c.scrollTop + r.top - cTop;
+    const hlBottom = hlTop + r.height;
+    const viewBottom = c.scrollTop + c.clientHeight;
+    if (hlBottom <= viewBottom - CARD_GAP) return;
+    const pageTop = Math.max(0, topOf(el) - CARD_GAP);
+    const top = Math.max(pageTop, Math.round(hlTop - c.clientHeight / 3));
+    if (Math.abs(top - c.scrollTop) < 0.5) return;
+    holdFrame(top);
+    c.scrollTop = top;
+    pin(target);
+  });
 
   // --- a placement: the page at the top of the pane before paint, kept
   //     there until it has loaded and been measured
