@@ -23,12 +23,12 @@ export type SearchMode = 'surface' | 'lemma' | 'root';
 
 export type TokenField = 'surface' | 'lemma' | 'root';
 
+/**
+ * The only filter is the set of texts. Author, death year, century and
+ * genre are metadata (`BookMetadata`), not in the index: a selection by any
+ * of them is sent as the book ids it resolves to.
+ */
 export interface SearchFilters {
-  author_id?: number;
-  genre_id?: number;
-  death_ah_min?: number;
-  death_ah_max?: number;
-  century_ah?: number;
   book_ids?: number[];
 }
 

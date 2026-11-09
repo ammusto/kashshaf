@@ -34,10 +34,6 @@ export interface SearchResult {
   id: number;
   part_index: number;
   page_id: number;
-  author_id?: number;
-  genre_id?: number;
-  death_ah?: number;
-  century_ah?: number;
   part_label: string;
   page_number: string;
   /**

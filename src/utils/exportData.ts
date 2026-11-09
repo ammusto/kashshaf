@@ -100,9 +100,8 @@ export function generateSearchResultsCSV(
   const rows = results.map(result => {
     const book = booksMap?.get(result.id);
     const authorName = book?.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
-    // SearchResult.death_ah is often missing for non-relevance-sorted hits;
-    // fall back to the book metadata so the column is never silently empty.
-    const death = result.death_ah ?? book?.death_ah;
+    // Death year is metadata, not on the result row.
+    const death = book?.death_ah;
     return [
       escapeCSV(result.id),
       escapeCSV(book?.title),
@@ -204,9 +203,8 @@ export function generateSearchResultsXLSX(
   const data = results.map(result => {
     const book = booksMap?.get(result.id);
     const authorName = book?.author_id !== undefined && authorsMap ? authorsMap.get(book.author_id) : undefined;
-    // SearchResult.death_ah is often missing for non-relevance-sorted hits;
-    // fall back to the book metadata so the column is never silently empty.
-    const death = result.death_ah ?? book?.death_ah;
+    // Death year is metadata, not on the result row.
+    const death = book?.death_ah;
     return {
       'Book ID': result.id,
       'Title': book?.title ?? '',
