@@ -44,7 +44,6 @@ use crate::triples::{triple_term, TripleMaps};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use crate::deaths::Deaths;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
@@ -70,7 +69,7 @@ const STREAM_DEPTH: usize = 1024;
 /// Candidate boundary documents verified per forward-index batch (hybrid path).
 const HYBRID_CHUNK: usize = 2_000;
 
-/// The reading-order key the engine merges by: (death year or `NO_DEATH`, text_id, part_index, page_id).
+/// The reading-order key the engine merges by: (death_ah or MAX, text_id, part_index, page_id).
 pub type OrderKey = (u64, u64, u64, u64);
 
 /// `boundary.json`.
@@ -95,6 +94,7 @@ struct Fields {
     part_index_right: Field,
     page_id_right: Field,
     page_len_left: Field,
+    death_ah: Field,
     tokens: Field,
 }
 
@@ -108,6 +108,7 @@ impl Fields {
             part_index_right: f("part_index_right")?,
             page_id_right: f("page_id_right")?,
             page_len_left: f("page_len_left")?,
+            death_ah: f("death_ah")?,
             tokens: f("tokens")?,
         })
     }
@@ -121,8 +122,6 @@ pub struct BoundaryIndex {
     fields: Fields,
     meta: BoundaryMeta,
     path: PathBuf,
-    /// Death years by text, for the order key of a hit (metadata, not a column).
-    deaths: Arc<Deaths>,
 }
 
 /// Where a match falls in a boundary document, and which page owns it.
@@ -346,12 +345,12 @@ impl BoundaryIndex {
     /// `<parent of index_path>/boundary_index`, when it is there and readable.
     /// A directory that is there but broken is reported and treated as absent:
     /// the feature is off, the engine works.
-    pub fn open_beside(index_path: &Path, deaths: Arc<Deaths>) -> Option<Self> {
+    pub fn open_beside(index_path: &Path) -> Option<Self> {
         let dir = index_path.parent()?.join(DIR_NAME);
         if !dir.is_dir() {
             return None;
         }
-        match Self::open(&dir, deaths) {
+        match Self::open(&dir) {
             Ok(b) => {
                 eprintln!("[boundary] {} documents, corpus {} ({})", b.meta.documents, b.meta.corpus_version, dir.display());
                 Some(b)
@@ -363,7 +362,7 @@ impl BoundaryIndex {
         }
     }
 
-    pub fn open(dir: &Path, deaths: Arc<Deaths>) -> Result<Self> {
+    pub fn open(dir: &Path) -> Result<Self> {
         let meta_path = dir.join(META_FILE);
         let meta: BoundaryMeta = serde_json::from_str(&std::fs::read_to_string(&meta_path).with_context(|| format!("reading {}", meta_path.display()))?)
             .with_context(|| format!("parsing {}", meta_path.display()))?;
@@ -378,7 +377,7 @@ impl BoundaryIndex {
         if searcher.segment_readers().len() != 1 {
             anyhow::bail!("boundary index has {} segments; one is required", searcher.segment_readers().len());
         }
-        Ok(Self { index, reader, fields, meta, path: dir.to_path_buf(), deaths })
+        Ok(Self { index, reader, fields, meta, path: dir.to_path_buf() })
     }
 
     pub fn meta(&self) -> &BoundaryMeta {
@@ -452,7 +451,7 @@ impl BoundaryIndex {
             .spawn(move || {
                 let _t = crate::probe::timer("boundary.total");
                 let searcher = index.reader.searcher();
-                let Ok(columns) = Columns::open(&searcher, 0, index.fields, index.deaths.clone()) else { return };
+                let Ok(columns) = Columns::open(&searcher, 0, index.fields) else { return };
                 let tx = Gate { tx, and_check };
                 let result = match forward {
                     None => index.scan_positional(&searcher, kind, &sets, filter.as_deref(), columns, tx),
@@ -537,7 +536,7 @@ impl BoundaryIndex {
             let top = searcher.search(&q, &tantivy::collector::TopDocs::with_limit(1))?;
             Ok(top.into_iter().next().map(|(_, a)| a))
         };
-        let cols = Columns::open(&searcher, 0, f, self.deaths.clone())?;
+        let cols = Columns::open(&searcher, 0, f)?;
         // This page as the right page of a document: the left neighbour.
         let before = one(f.part_index_right, f.page_id_right)?.map(|a| (cols.left_key(a.doc_id), a));
         // This page as the left page: the right neighbour.
@@ -554,11 +553,11 @@ struct Columns {
     part_r: tantivy::columnar::Column<u64>,
     page_r: tantivy::columnar::Column<u64>,
     page_len_l: tantivy::columnar::Column<u64>,
-    deaths: Arc<Deaths>,
+    death: Option<tantivy::columnar::Column<u64>>,
 }
 
 impl Columns {
-    fn open(searcher: &Searcher, seg_ord: u32, f: Fields, deaths: Arc<Deaths>) -> Result<Self> {
+    fn open(searcher: &Searcher, seg_ord: u32, f: Fields) -> Result<Self> {
         let seg = searcher.segment_reader(seg_ord);
         let ff = seg.fast_fields();
         let schema = searcher.schema();
@@ -570,7 +569,7 @@ impl Columns {
             part_r: ff.u64(name(f.part_index_right))?,
             page_r: ff.u64(name(f.page_id_right))?,
             page_len_l: ff.u64(name(f.page_len_left))?,
-            deaths,
+            death: ff.u64(name(f.death_ah)).ok(),
         })
     }
     fn left_key(&self, doc: u32) -> PageKey {
@@ -585,10 +584,11 @@ impl Columns {
         let (left_pos, right_pos) = split_positions(positions, page_len_l);
         let left = self.left_key(doc);
         let right = self.right_key(doc);
+        let death = self.death.as_ref().and_then(|x| x.first(doc)).unwrap_or(u64::MAX);
         let (primary, primary_positions, secondary, secondary_positions) =
             if attr.primary_is_left { (left, left_pos, right, right_pos) } else { (right, right_pos, left, left_pos) };
         CrossHit {
-            order_key: (self.deaths.of(primary.id), primary.id, primary.part_index, primary.page_id),
+            order_key: (death, primary.id, primary.part_index, primary.page_id),
             primary,
             primary_positions,
             secondary,

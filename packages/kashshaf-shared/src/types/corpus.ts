@@ -34,6 +34,8 @@ export interface SearchResult {
   id: number;
   part_index: number;
   page_id: number;
+  /** From the index's reading-order column. Author, century and genre are metadata, not on the row. */
+  death_ah?: number;
   part_label: string;
   page_number: string;
   /**

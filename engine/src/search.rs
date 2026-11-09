@@ -34,7 +34,6 @@ use crate::walk::{
 };
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use crate::deaths::Deaths;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -257,10 +256,11 @@ impl ProximityQuery {
     }
 }
 
-/// Filters. `book_ids` is a term filter on `text_id`, and the only one:
-/// author, death year, century and genre are metadata, held in
-/// `metadata.db` and not in the index, and a selection by any of them is
-/// sent as the book ids it resolves to.
+/// Filters. `book_ids` is a term filter on `text_id`, and the only filter:
+/// author, death year, century and genre are metadata (`metadata.db`), and
+/// a selection by any of them resolves to book ids before it reaches the
+/// engine. The index keeps `death_ah` as a fast column only because the
+/// reading-order key sorts by it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchFilters {
     pub book_ids: Option<Vec<u64>>,
@@ -271,6 +271,9 @@ pub struct SearchResult {
     pub id: u64,
     pub part_index: u64,
     pub page_id: u64,
+    /// The text's death year from the index's reading-order column. Author,
+    /// century and genre are metadata and are not on the row.
+    pub death_ah: Option<u64>,
     pub part_label: String,
     pub page_number: String,
     /// A search row: the page's snippet around its first highlight
@@ -360,9 +363,6 @@ pub struct PageWithMatches {
 /// Per-host tuning. The desktop and the API server differ only here.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
-    /// `metadata.db`, for the death years the reading-order key needs.
-    /// Absent, the one beside `corpus.db` is used.
-    pub metadata_db: Option<std::path::PathBuf>,
     /// Highlight positions attached to each row of a search result page.
     pub result_highlight_cap: usize,
     /// Highlight positions returned for a single page (reader view).
@@ -471,7 +471,6 @@ pub struct EngineCapabilities {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            metadata_db: None,
             result_highlight_cap: 5,
             page_highlight_cap: 100,
             combined_result_cap: None,
@@ -592,6 +591,8 @@ struct Fields {
     text_id: Field,
     part_index: Field,
     page_id: Field,
+    /// The reading-order column: results page in (death year, text, part, page).
+    death_ah: Field,
     part_label: Field,
     page_number: Field,
     body: Field,
@@ -613,6 +614,7 @@ impl Fields {
             text_id: f("text_id")?,
             part_index: f("part_index")?,
             page_id: f("page_id")?,
+            death_ah: f("death_ah")?,
             part_label: f("part_label")?,
             page_number: f("page_number")?,
             body: f("body")?,
@@ -655,21 +657,18 @@ pub struct SearchEngine {
     paged_lists: std::sync::Mutex<lru::LruCache<String, Arc<PagedList>>>,
     /// Single segment whose doc ids are monotonic in reading order.
     reading_order: bool,
-    /// Death years by text (`metadata.db`), for the reading-order key.
-    deaths: Arc<Deaths>,
     triples: Option<Arc<TripleMaps>>,
     cache: Option<Arc<TokenCache>>,
     /// Matches across page breaks; `None` for a corpus without `boundary_index/`.
     boundary: Option<Arc<BoundaryIndex>>,
 }
 
-/// Reading-order key: (death year or `NO_DEATH`, text_id, part_index, page_id).
+/// Reading-order key: (death_ah or MAX, text_id, part_index, page_id).
 type OrderKey = (u64, u64, u64, u64);
 
-/// Opened fast-field columns of one segment, with the death years the
-/// order key needs (metadata, not a column).
+/// Opened fast-field columns of one segment.
 struct SegmentColumns {
-    deaths: Arc<Deaths>,
+    death: Option<tantivy::columnar::Column<u64>>,
     text: Option<tantivy::columnar::Column<u64>>,
     part: Option<tantivy::columnar::Column<u64>>,
     page: Option<tantivy::columnar::Column<u64>>,
@@ -681,10 +680,9 @@ impl SegmentColumns {
         col.as_ref().and_then(|c| c.first(doc)).unwrap_or(default)
     }
     fn order_key(&self, doc: DocId) -> OrderKey {
-        let text = Self::get(&self.text, doc, 0);
         (
-            self.deaths.of(text),
-            text,
+            Self::get(&self.death, doc, u64::MAX),
+            Self::get(&self.text, doc, 0),
             Self::get(&self.part, doc, 0),
             Self::get(&self.page, doc, 0),
         )
@@ -694,8 +692,8 @@ impl SegmentColumns {
     }
 }
 
-fn sort_results_by_reading_order(results: &mut [SearchResult], deaths: &Deaths) {
-    results.sort_by_key(|r| (deaths.of(r.id), r.id, r.part_index, r.page_id));
+fn sort_results_by_reading_order(results: &mut [SearchResult]) {
+    results.sort_by_key(|r| (r.death_ah.unwrap_or(u64::MAX), r.id, r.part_index, r.page_id));
 }
 
 fn u64_of(doc: &TantivyDocument, f: Field) -> Option<u64> {
@@ -793,7 +791,6 @@ impl SearchEngine {
 
         let searcher = reader.searcher();
         let single_segment = searcher.segment_readers().len() == 1;
-        let deaths = Arc::new(Self::load_deaths(&config, corpus_db, &schema, &searcher)?);
         let reading_order = if config.force_fallback_ordering {
             eprintln!("[index] reading-order pagination disabled by config (fallback ordering)");
             false
@@ -805,7 +802,7 @@ impl SearchEngine {
             false
         } else if config.verify_reading_order {
             let t0 = std::time::Instant::now();
-            let ok = verify_reading_order(&searcher, &deaths)?;
+            let ok = verify_reading_order(&searcher)?;
             eprintln!(
                 "[index] single segment, reading order {} ({} docs checked in {} ms)",
                 if ok { "verified" } else { "NOT monotonic — fallback ordering" },
@@ -839,7 +836,7 @@ impl SearchEngine {
         // triple sets on both indexes) and a main index in reading order
         // (the two are merged by reading-order key).
         let boundary = match (kind, reading_order) {
-            (IndexKind::Compound, true) => BoundaryIndex::open_beside(index_path, deaths.clone()).map(Arc::new),
+            (IndexKind::Compound, true) => BoundaryIndex::open_beside(index_path).map(Arc::new),
             (IndexKind::Compound, false) => {
                 if index_path.parent().map_or(false, |p| p.join(crate::boundary::DIR_NAME).is_dir()) {
                     eprintln!("[boundary] present but unused: the main index is not in reading order");
@@ -862,31 +859,10 @@ impl SearchEngine {
             paged_lists: std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(PAGED_LISTS_ENTRIES).unwrap())),
             config,
             reading_order,
-            deaths,
             triples,
             cache: None,
             boundary,
         })
-    }
-
-    /// The death years the reading-order key needs: from the `metadata.db`
-    /// the config names, else the one beside `corpus.db`. An index from
-    /// before metadata left the schema still carries `death_ah` and
-    /// supplies them itself when no `metadata.db` is found.
-    fn load_deaths(config: &EngineConfig, corpus_db: Option<&Path>, schema: &Schema, searcher: &Searcher) -> Result<Deaths> {
-        let beside = corpus_db.and_then(|p| p.parent()).map(|d| d.join("metadata.db")).filter(|p| p.is_file());
-        if let Some(path) = config.metadata_db.as_deref().or(beside.as_deref()) {
-            let d = Deaths::load(path).with_context(|| format!("loading death years from {}", path.display()))?;
-            eprintln!("[deaths] {} texts with a death year ({})", d.len(), path.display());
-            return Ok(d);
-        }
-        if schema.get_field("death_ah").is_ok() {
-            let d = Deaths::from_index(searcher)?;
-            eprintln!("[deaths] {} texts, from the index's death_ah column (no metadata.db beside corpus.db)", d.len());
-            return Ok(d);
-        }
-        eprintln!("[deaths] no metadata.db and no death_ah column: results are ordered by text id");
-        Ok(Deaths::empty())
     }
 
     /// The boundary index, when this corpus ships one.
@@ -930,7 +906,7 @@ impl SearchEngine {
     /// The main-index document of an order key, for the boundary scan's
     /// AND check (single segment, reading order).
     fn doc_of_order_key(&self, searcher: &Searcher) -> Arc<dyn Fn(CrossOrderKey) -> Option<u32> + Send + Sync> {
-        let cols = self.columns(searcher, 0);
+        let cols = segment_columns(searcher, 0);
         let max_doc = searcher.segment_reader(0).max_doc();
         Arc::new(move |k: CrossOrderKey| doc_by_order_key(&cols, max_doc, k))
     }
@@ -1325,7 +1301,7 @@ impl SearchEngine {
             }
         }
         if !self.reading_order {
-            sort_results_by_reading_order(&mut results, &self.deaths);
+            sort_results_by_reading_order(&mut results);
         }
         Ok(results)
     }
@@ -1346,8 +1322,7 @@ impl SearchEngine {
         let triples = self.triples.clone().expect("compound index has triple maps");
         let searcher = searcher.clone();
         let reading_order = self.reading_order;
-        let deaths = self.deaths.clone();
-        let mut merge = CrossMerge::new(&searcher, self.fields, deaths.clone(), cross);
+        let mut merge = CrossMerge::new(&searcher, self.fields, cross);
         Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
             let mut process_chunk = |chunk: &[DocAddress], sink: &mut Sink| -> Result<bool> {
                 let t = std::time::Instant::now();
@@ -1406,7 +1381,7 @@ impl SearchEngine {
                     }
                 }
             } else {
-                let (_, candidates) = candidates_sorted(&searcher, &*query, &deaths)?;
+                let (_, candidates) = candidates_sorted(&searcher, &*query)?;
                 for chunk in candidates.chunks(FORWARD_BATCH) {
                     if !process_chunk(chunk, sink)? {
                         return Ok(());
@@ -1761,6 +1736,7 @@ impl SearchEngine {
                 clauses.push((Occur::Must, Box::new(BooleanQuery::new(should))));
             }
         }
+
         if clauses.len() == 1 {
             clauses.pop().unwrap().1
         } else {
@@ -1834,10 +1810,17 @@ impl SearchEngine {
             crate::probe::stage("collect", t);
             return Ok((total, docs));
         }
-        // Multi-segment fallback: every match, sorted by the reading-order
-        // key (death years are metadata, so no column orders them).
-        let (total, docs) = candidates_sorted(searcher, query, &self.deaths)?;
-        Ok((total, docs.into_iter().skip(offset).take(limit).collect()))
+        let (total, top) = searcher.search(
+            query,
+            &(
+                Count,
+                TopDocs::with_limit((limit + offset).max(1)).order_by_u64_field("death_ah", tantivy::Order::Asc),
+            ),
+        )?;
+        let addrs: Vec<DocAddress> = top.into_iter().map(|(_, a): (u64, DocAddress)| a).collect();
+        let mut keyed: Vec<(OrderKey, DocAddress)> = self.order_keys(searcher, &addrs).into_iter().zip(addrs).collect();
+        keyed.sort_by_key(|(k, _)| *k);
+        Ok((total, keyed.into_iter().skip(offset).take(limit).map(|(_, a)| a).collect()))
     }
 
     /// Up to `cap` candidates in reading order, plus the total match count.
@@ -1846,20 +1829,25 @@ impl SearchEngine {
             let (total, docs) = searcher.search(query, &ReadingOrderCollector { offset: 0, limit: cap })?;
             return Ok((total, docs));
         }
-        let (total, mut docs) = candidates_sorted(searcher, query, &self.deaths)?;
-        docs.truncate(cap);
-        Ok((total, docs))
+        let (total, top) = searcher.search(
+            query,
+            &(Count, TopDocs::with_limit(cap.max(1)).order_by_u64_field("death_ah", tantivy::Order::Asc)),
+        )?;
+        let addrs: Vec<DocAddress> = top.into_iter().map(|(_, a): (u64, DocAddress)| a).collect();
+        let mut keyed: Vec<(OrderKey, DocAddress)> = self.order_keys(searcher, &addrs).into_iter().zip(addrs).collect();
+        keyed.sort_by_key(|(k, _)| *k);
+        Ok((total, keyed.into_iter().map(|(_, a)| a).collect()))
     }
 
     /// Fast-field columns of one segment, opened once and reused. Opening a
     /// column (`fast_fields().u64(name)`) is not free on a 5.7M-doc segment, so
     /// never do it per document.
     fn columns(&self, searcher: &Searcher, seg_ord: u32) -> SegmentColumns {
-        segment_columns(searcher, seg_ord, &self.deaths)
+        segment_columns(searcher, seg_ord)
     }
 
     /// Reading-order keys for many addresses (columns opened once per segment).
-    pub(crate) fn order_keys(&self, searcher: &Searcher, addrs: &[DocAddress]) -> Vec<OrderKey> {
+    fn order_keys(&self, searcher: &Searcher, addrs: &[DocAddress]) -> Vec<OrderKey> {
         let mut cols: HashMap<u32, SegmentColumns> = HashMap::new();
         addrs
             .iter()
@@ -1881,6 +1869,7 @@ impl SearchEngine {
             id: u64_of(doc, f.text_id).unwrap_or(0),
             part_index: u64_of(doc, f.part_index).unwrap_or(0),
             page_id: u64_of(doc, f.page_id).unwrap_or(0),
+            death_ah: u64_of(doc, f.death_ah),
             part_label: str_of(doc, f.part_label),
             page_number: str_of(doc, f.page_number),
             body: str_of(doc, f.body),
@@ -2449,7 +2438,7 @@ impl SearchEngine {
             }
         }
         if !self.reading_order {
-            sort_results_by_reading_order(&mut results, &self.deaths);
+            sort_results_by_reading_order(&mut results);
         }
 
         let join = |ts: &[SearchTerm], sep: &str| ts.iter().map(|t| t.query.as_str()).collect::<Vec<_>>().join(sep);
@@ -2641,7 +2630,7 @@ impl SearchEngine {
     /// Compound proximity, tier 2: positional intersection on the `tokens`
     /// postings (see `positional.rs`). Exact count unless the wall-clock
     /// budget runs out. Single-word sides only (the caller checks).
-    /// Filter-only query (book ids, fast-field ranges) or `None` when no filter is set.
+    /// Filter-only query (book ids) or `None` when no filter is set.
     fn filter_query(&self, filters: &SearchFilters) -> Option<Box<dyn Query>> {
         let has_filter = filters.book_ids.as_ref().map_or(false, |v| !v.is_empty());
         if has_filter {
@@ -2689,13 +2678,12 @@ impl SearchEngine {
         let filter_query = self.filter_query(filters);
         let pos_cap = self.config.result_highlight_cap.max(50);
         let fields = self.fields;
-        let deaths = self.deaths.clone();
         // The window is served once verified (plus the inline allowance);
         // the count keeps growing to its exact end behind `/search/status`.
         let limits = if self.exact_counts() { WalkLimits::exact() } else { WalkLimits::streaming(self.config.walk_budget_ms) };
         let w = self.walks.window(key, offset, limit, limits, || -> Result<Walker> {
             let searcher = searcher.clone();
-            let merge = CrossMerge::new(&searcher, fields, deaths.clone(), cross());
+            let merge = CrossMerge::new(&searcher, fields, cross());
             Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                 let co;
                 if groups.len() == 1 {
@@ -2742,10 +2730,9 @@ impl SearchEngine {
         let wide = sets.iter().any(|s| s.len() > threshold);
         let sizes: Vec<usize> = sets.iter().map(|s| s.len()).collect();
         let fields = self.fields;
-        let deaths = self.deaths.clone();
         let w = self.walks.window(key, offset, limit, self.walk_limits(), || -> Result<Walker> {
             let searcher = searcher.clone();
-            let merge = CrossMerge::new(&searcher, fields, deaths.clone(), cross());
+            let merge = CrossMerge::new(&searcher, fields, cross());
             if !wide {
                 Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                     let matcher = crate::positional::phrase_matcher();
@@ -2845,11 +2832,10 @@ impl SearchEngine {
         let tokens = self.fields.tokens.expect("compound index");
         let pos_cap = self.config.page_highlight_cap;
         let fields = self.fields;
-        let deaths = self.deaths.clone();
         let t0 = std::time::Instant::now();
         let w = self.walks.window(key, offset, limit, self.walk_limits(), || -> Result<Walker> {
             let searcher = searcher.clone();
-            let merge = CrossMerge::new(&searcher, fields, deaths.clone(), cross());
+            let merge = CrossMerge::new(&searcher, fields, cross());
             Ok(Box::new(move |sink: &mut Sink| -> Result<()> {
                 let matcher = crate::positional::chain_matcher(distances, ordered);
                 let sets = slots;
@@ -2936,7 +2922,7 @@ impl SearchEngine {
         }
         stats.verified_hits = total_matches;
         if !self.reading_order {
-            sort_results_by_reading_order(&mut results, &self.deaths);
+            sort_results_by_reading_order(&mut results);
         }
         // The postings path reports a lower bound whenever the over-fetch window
         // did not cover every candidate (this was undocumented before 0.5.0).
@@ -3213,7 +3199,7 @@ impl SearchEngine {
             }
         }
         if !self.reading_order {
-            sort_results_by_reading_order(&mut results, &self.deaths);
+            sort_results_by_reading_order(&mut results);
         }
 
         Ok(SearchResults {
@@ -3342,7 +3328,7 @@ impl SearchEngine {
         };
         let Walked { total, mut results, was_capped, walk_key, complete } = walked;
         if !self.reading_order {
-            sort_results_by_reading_order(&mut results, &self.deaths);
+            sort_results_by_reading_order(&mut results);
         }
         Ok(SearchResults {
             query: query.to_string(),
@@ -3663,10 +3649,10 @@ fn doc_by_order_key(cols: &SegmentColumns, max_doc: DocId, key: OrderKey) -> Opt
     (lo < max_doc && cols.order_key(lo) == key).then_some(lo)
 }
 
-fn segment_columns(searcher: &Searcher, seg_ord: u32, deaths: &Arc<Deaths>) -> SegmentColumns {
+fn segment_columns(searcher: &Searcher, seg_ord: u32) -> SegmentColumns {
     let ff = searcher.segment_reader(seg_ord).fast_fields();
     SegmentColumns {
-        deaths: deaths.clone(),
+        death: ff.u64("death_ah").ok(),
         text: ff.u64("text_id").ok(),
         part: ff.u64("part_index").ok(),
         page: ff.u64("page_id").ok(),
@@ -3676,12 +3662,10 @@ fn segment_columns(searcher: &Searcher, seg_ord: u32, deaths: &Arc<Deaths>) -> S
 /// Page keys of documents via fast fields (columns opened once per segment).
 fn page_keys(searcher: &Searcher, addrs: &[DocAddress]) -> Vec<PageKey> {
     let mut cols: HashMap<u32, SegmentColumns> = HashMap::new();
-    // Page keys only: no order key is taken, so no death years are needed.
-    let no_deaths = Arc::new(Deaths::empty());
     addrs
         .iter()
         .map(|a| {
-            let c = cols.entry(a.segment_ord).or_insert_with(|| segment_columns(searcher, a.segment_ord, &no_deaths));
+            let c = cols.entry(a.segment_ord).or_insert_with(|| segment_columns(searcher, a.segment_ord));
             c.page_key(a.doc_id)
         })
         .collect()
@@ -3699,13 +3683,17 @@ fn page_triples_with(cache: &TokenCache, t: &TripleMaps, keys: &[PageKey]) -> Re
 
 /// Every match of `query` in reading order (multi-segment fallback: collect
 /// and sort by the reading-order key).
-fn candidates_sorted(searcher: &Searcher, query: &dyn Query, deaths: &Arc<Deaths>) -> Result<(usize, Vec<DocAddress>)> {
-    let (total, docs) = searcher.search(query, &(Count, tantivy::collector::DocSetCollector))?;
+fn candidates_sorted(searcher: &Searcher, query: &dyn Query) -> Result<(usize, Vec<DocAddress>)> {
+    let (total, top) = searcher.search(
+        query,
+        &(Count, TopDocs::with_limit(usize::MAX.min(10_000_000)).order_by_u64_field("death_ah", tantivy::Order::Asc)),
+    )?;
+    let addrs: Vec<DocAddress> = top.into_iter().map(|(_, a): (u64, DocAddress)| a).collect();
     let mut cols: HashMap<u32, SegmentColumns> = HashMap::new();
-    let mut keyed: Vec<(OrderKey, DocAddress)> = docs
+    let mut keyed: Vec<(OrderKey, DocAddress)> = addrs
         .into_iter()
         .map(|a| {
-            let c = cols.entry(a.segment_ord).or_insert_with(|| segment_columns(searcher, a.segment_ord, deaths));
+            let c = cols.entry(a.segment_ord).or_insert_with(|| segment_columns(searcher, a.segment_ord));
             (c.order_key(a.doc_id), a)
         })
         .collect();
@@ -3763,20 +3751,18 @@ struct CrossMerge {
     inter: Interleave,
     searcher: Searcher,
     fields: Fields,
-    deaths: Arc<Deaths>,
     columns: HashMap<u32, SegmentColumns>,
     stopped: bool,
 }
 
 impl CrossMerge {
-    fn new(searcher: &Searcher, fields: Fields, deaths: Arc<Deaths>, cross: Option<CrossStream>) -> Self {
-        Self { inter: Interleave::new(cross), searcher: searcher.clone(), fields, deaths, columns: HashMap::new(), stopped: false }
+    fn new(searcher: &Searcher, fields: Fields, cross: Option<CrossStream>) -> Self {
+        Self { inter: Interleave::new(cross), searcher: searcher.clone(), fields, columns: HashMap::new(), stopped: false }
     }
 
     fn key_of(&mut self, addr: DocAddress) -> CrossOrderKey {
         let searcher = &self.searcher;
-        let deaths = &self.deaths;
-        let cols = self.columns.entry(addr.segment_ord).or_insert_with(|| segment_columns(searcher, addr.segment_ord, deaths));
+        let cols = self.columns.entry(addr.segment_ord).or_insert_with(|| segment_columns(searcher, addr.segment_ord));
         cols.order_key(addr.doc_id)
     }
 
@@ -3787,8 +3773,7 @@ impl CrossMerge {
     fn find_page(&mut self, c: &CrossHit) -> Result<Option<DocAddress>> {
         if self.searcher.segment_readers().len() == 1 {
             let searcher = &self.searcher;
-            let deaths = &self.deaths;
-            let cols = self.columns.entry(0).or_insert_with(|| segment_columns(searcher, 0, deaths));
+            let cols = self.columns.entry(0).or_insert_with(|| segment_columns(searcher, 0));
             if let Some(doc) = doc_by_order_key(cols, self.searcher.segment_reader(0).max_doc(), c.order_key) {
                 return Ok(Some(DocAddress::new(0, doc)));
             }
@@ -3894,9 +3879,10 @@ fn phrase_positions_from_starts(starts: &[u32], n: u32, cap: usize) -> Vec<u32> 
 }
 
 /// Walk the (single) segment's live docs and check the reading-order key never decreases.
-fn verify_reading_order(searcher: &Searcher, deaths: &Deaths) -> Result<bool> {
+fn verify_reading_order(searcher: &Searcher) -> Result<bool> {
     for seg in searcher.segment_readers() {
         let ff = seg.fast_fields();
+        let death = ff.u64("death_ah")?;
         let text = ff.u64("text_id")?;
         let part = ff.u64("part_index")?;
         let page = ff.u64("page_id")?;
@@ -3905,10 +3891,9 @@ fn verify_reading_order(searcher: &Searcher, deaths: &Deaths) -> Result<bool> {
             if seg.is_deleted(doc) {
                 continue;
             }
-            let text_id = text.first(doc).unwrap_or(0);
             let key: OrderKey = (
-                deaths.of(text_id),
-                text_id,
+                death.first(doc).unwrap_or(u64::MAX),
+                text.first(doc).unwrap_or(0),
                 part.first(doc).unwrap_or(0),
                 page.first(doc).unwrap_or(0),
             );

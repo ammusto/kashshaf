@@ -12,7 +12,6 @@ pub mod boundary;
 pub mod cache;
 pub mod collectors;
 pub mod corpus_db;
-pub mod deaths;
 pub mod forward;
 pub mod glob;
 pub mod memory;
@@ -34,7 +33,6 @@ pub use triples_image::{Image as TripleImage, ImageParts as TripleImageParts, SI
 
 pub use blob::{decode_blob, BlobCodec, ENCODING_RANK_VARINT_ZSTD, ENCODING_RAW_U32};
 pub use cache::TokenCache;
-pub use deaths::{Deaths, NO_DEATH};
 pub use boundary::{BoundaryIndex, BoundaryMeta, CrossHit, MAX_SPAN as BOUNDARY_MAX_SPAN};
 pub use corpus_db::{
     check_corpus_schema_supported, ensure_corpus_indexes, read_db_info, verify_corpus_versions_match, DbInfo,

@@ -12,7 +12,7 @@
 
 **Catalogue API update.** Updated API to fetch new books.json when metadata updated
 
-**Metadata.** Author, death year, century and genre are read from the metadata database only; the search index no longer carries them.
+**Metadata.** Author, century and genre are read from the metadata database only; the search index no longer carries them. The death year stays in the index as the reading-order column.
 
 ## [0.8.6] — 2026-10-23
 
