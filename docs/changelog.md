@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.8.8] — unreleased
+## [0.8.8] — 2026-11-9
 
-**Metadata.** Author, century and genre are read from the metadata database only; the search index no longer carries them. The death year stays in the index as the reading-order column. A corpus built without those fields needs this version or later.
+**Metadata.** Author, century and genre are read from the metadata database only; the search index no longer carries them
 
 ## [0.8.7] — 2026-10-31
 
