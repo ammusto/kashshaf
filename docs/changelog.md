@@ -1,6 +1,10 @@
 # Changelog
 
-## [0.8.7] — unreleased
+## [0.8.8] — unreleased
+
+**Metadata.** Author, century and genre are read from the metadata database only; the search index no longer carries them. The death year stays in the index as the reading-order column. A corpus built without those fields needs this version or later.
+
+## [0.8.7] — 2026-10-31
 
 **Fixed.** A wildcard in a Boolean search was not working properly.
 
@@ -11,8 +15,6 @@
 **Result details.** Result title tooltip cleaned.
 
 **Catalogue API update.** Updated API to fetch new books.json when metadata updated
-
-**Metadata.** Author, century and genre are read from the metadata database only; the search index no longer carries them. The death year stays in the index as the reading-order column.
 
 ## [0.8.6] — 2026-10-23
 
